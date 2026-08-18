@@ -1,0 +1,4184 @@
+/* ==========================================================================
+   BUX2112 — real vaqtda sinxronlanadigan buxgalteriya bazasi.
+   Ma'lumotlar Supabase (PostgreSQL) bulut bazasida saqlanadi va barcha
+   ulangan brauzerlarda real vaqtda (realtime) sinxronlanadi. Kirish uchun
+   umumiy parol (Supabase Auth) talab qilinadi.
+   Bo'limlar: Faktura kirim / Faktura chiqim / Bank / Ish haqi -> shulardan
+   F2, QQS, Foyda solig'i, Ish haqi hisoboti va F1 hisobotlari avtomatik hisoblanadi.
+   ========================================================================== */
+
+const THEME_KEY = "bux2112_theme";
+const FILTERS_KEY = "bux2112_filters";
+
+const STATUS_INVALID = ["Отказ", "Bekor qilingan", "Отменён", "Отменен", "Rad etilgan", "Не настоящий"];
+
+// Har bir "baza" (BAZALAR ro'yxati, index.html'da) mustaqil Supabase loyihasi.
+// Foydalanuvchi auth ekranida qaysi bazani tanlasa, shu loyihaga ulanadigan
+// client shu yerga o'rnatiladi — shu sabab "const" emas, "let".
+let sbClient = null;
+let ACTIVE_BAZA_ID = null;
+
+/* ---------------------------- DB <-> JS maydon moslashtirish ---------------------------- */
+
+const INVOICE_DB_MAP = {
+  sana: "sana", hujjatRaqami: "hujjat_raqami", status: "status",
+  kontragentInn: "kontragent_inn", kontragentNomi: "kontragent_nomi",
+  summaQQSsiz: "summa_qqssiz", qqsStavka: "qqs_stavka", qqsSumma: "qqs_summa",
+  jamiSumma: "jami_summa", tolandi: "tolandi", faylId: "fayl_id"
+};
+const BANK_DB_MAP = {
+  sana: "sana", hujjatRaqami: "hujjat_raqami", kontragent: "kontragent",
+  kontragentInn: "kontragent_inn", tavsif: "tavsif", kirim: "kirim", chiqim: "chiqim", faylId: "fayl_id"
+};
+const FAYL_DB_MAP = { bolim: "bolim", faylNomi: "fayl_nomi", hajmi: "hajmi", sana: "sana" };
+const ISHHAQI_DB_MAP = {
+  sana: "sana", fio: "fio", lavozimi: "lavozimi", pinfl: "pinfl",
+  turi: "turi", holati: "holati", oyliqSumma: "oyliq_summa", imtiyozSumma: "imtiyoz_summa", faylId: "fayl_id"
+};
+const OMBOR_DB_MAP = {
+  sana: "sana", hujjatRaqami: "hujjat_raqami",
+  kontragentInn: "kontragent_inn", kontragentNomi: "kontragent_nomi",
+  nomi: "nomi", birlik: "birlik", miqdor: "miqdor", narx: "narx",
+  yetkazibBerishNarxi: "yetkazib_berish_narxi", qqsSumma: "qqs_summa",
+  yetkazibBerishNarxiQQSBilan: "yetkazib_berish_narxi_qqs_bilan", turi: "turi", faylId: "fayl_id"
+};
+
+// Ombor kirimida turli polimer navlari (masalan "Полипропилен марки TPP D30S",
+// "Поливинилхлорид С-70") bitta umumiy zaxira nomi ostida yuritiladi — miqdorlar
+// BIRLASHTIRILMAYDI (har bir qator alohida qoladi), faqat "nomi" maydoni shu
+// umumiy nom bilan almashtiriladi. Nomida quyidagi kalit so'zlardan birortasi
+// uchrasa (katta-kichik harfga qaramasdan), canonicalizeOmborNomi shu umumiy
+// nomni qaytaradi. Ombor kirimi Excel importida (parseOmborLineItems) avtomat
+// qo'llanadi; mavjud (import qilib bo'lingan) yozuvlar uchun Ombor kirimi
+// sahifasidagi "Nomlarni birlashtirish" tugmasi orqali bir martalik yangilash
+// qilinadi (unifyOmborPolymerNames).
+const OMBOR_UNIFY_KEYWORDS = ["полиэтилен", "полипропилен", "поливинилхлорид", "пвх", "шпагат", "полиацетали"];
+const OMBOR_UNIFIED_NOMI = "Polietilen granula";
+
+function canonicalizeOmborNomi(nomi) {
+  const s = String(nomi || "").trim();
+  if (!s) return s;
+  const low = s.toLowerCase();
+  if (OMBOR_UNIFY_KEYWORDS.some((k) => low.includes(k))) return OMBOR_UNIFIED_NOMI;
+  return s;
+}
+const MAHSULOT_DB_MAP = { nomi: "nomi", birlik: "birlik", tarkib: "tarkib" };
+const ISHLAB_CHIQARISH_DB_MAP = {
+  sana: "sana", mahsulotId: "mahsulot_id", mahsulotNomi: "mahsulot_nomi",
+  miqdor: "miqdor", birlik: "birlik", tannarx: "tannarx", izoh: "izoh"
+};
+// Fayl yuklamalariga ulanish konvensiyasi: agar kelajakda yangi bo'lim ham
+// Excel/fayl import qilsa, uning DB_MAP'iga "faylId: \"fayl_id\"" qo'shing,
+// jadvalga "fayl_id uuid references public.fayllar(id) on delete cascade"
+// ustunini qo'shing va import handler'da har bir yangi qatorni bazaga
+// yozishdan OLDIN "await registerFaylUpload(<STORE kaliti>, file)" chaqirib,
+// natijadagi .id'ni qatorlarga "faylId" sifatida biriktiring (pastdagi
+// handleOmborImport/handleIshHaqiImport shu andozaga misol). STORE kaliti
+// "fayllar.bolim" qiymati bilan bir xil bo'lishi shart — shunda "Fayl
+// yuklamalari" sahifasi va faylni o'chirishda kaskadli tozalash hech qanday
+// qo'shimcha kod yozmasdan avtomat ishlab ketadi.
+const TABLE_MAPS = {
+  kirim: INVOICE_DB_MAP, chiqim: INVOICE_DB_MAP, bank: BANK_DB_MAP, ishHaqi: ISHHAQI_DB_MAP, ombor: OMBOR_DB_MAP,
+  mahsulotlar: MAHSULOT_DB_MAP, ishlabChiqarish: ISHLAB_CHIQARISH_DB_MAP, fayllar: FAYL_DB_MAP
+};
+const TABLE_NAMES = {
+  kirim: "kirim", chiqim: "chiqim", bank: "bank", ishHaqi: "ish_haqi", ombor: "ombor",
+  mahsulotlar: "mahsulotlar", ishlabChiqarish: "ishlab_chiqarish", fayllar: "fayllar"
+};
+
+const SETTINGS_DB_MAP = {
+  companyName: "company_name", inn: "inn", address: "address",
+  qqsStavka: "qqs_stavka", foydaStavka: "foyda_stavka", period: "period",
+  davrXarajati: "davr_xarajati", moliyaviyXarajat: "moliyaviy_xarajat",
+  boshqaDaromad: "boshqa_daromad", imtiyozlar: "imtiyozlar", tannarxManual: "tannarx_manual",
+  bankOpeningBalance: "bank_opening_balance",
+  f1AsosiyVositalar: "f1_asosiy_vositalar", f1TovarZaxira: "f1_tovar_zaxira", f1Kassa: "f1_kassa",
+  f1UstavKapitali: "f1_ustav_kapitali", f1OldingiFoyda: "f1_oldingi_foyda", f1UzoqMajburiyat: "f1_uzoq_majburiyat",
+  ijtimoiySoliqStavka: "ijtimoiy_soliq_stavka", ndflStavka: "ndfl_stavka", inpsStavka: "inps_stavka"
+};
+
+function toDbRow(map, obj) {
+  const out = {};
+  Object.keys(map).forEach((k) => { if (obj[k] !== undefined) out[map[k]] = obj[k]; });
+  return out;
+}
+
+function fromDbRow(map, row) {
+  const out = { id: row.id };
+  Object.keys(map).forEach((k) => { out[k] = row[map[k]]; });
+  return out;
+}
+
+function fromDbSettings(row) {
+  const out = {};
+  Object.keys(SETTINGS_DB_MAP).forEach((k) => { out[k] = row[SETTINGS_DB_MAP[k]]; });
+  return out;
+}
+
+async function saveSettingsToDb(partial) {
+  const dbPartial = {};
+  Object.keys(partial).forEach((k) => { if (SETTINGS_DB_MAP[k]) dbPartial[SETTINGS_DB_MAP[k]] = partial[k]; });
+  if (!Object.keys(dbPartial).length) return;
+  const { error } = await sbClient.from("settings").update(dbPartial).eq("id", 1);
+  if (error) { console.error(error); toast("Sozlamani saqlashda xatolik", "err"); }
+}
+
+// Bitta qatordagi bir yoki bir nechta maydonni bazaga yozadi (fire-and-forget).
+function pushFieldsUpdate(type, id, partial) {
+  const dbPartial = toDbRow(TABLE_MAPS[type], partial);
+  if (!Object.keys(dbPartial).length) return;
+  sbClient.from(TABLE_NAMES[type]).update(dbPartial).eq("id", id).then(({ error }) => {
+    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); }
+  });
+}
+
+/* ---------------------------- default data ---------------------------- */
+
+function defaultStore() {
+  return {
+    settings: {
+      companyName: "",
+      inn: "",
+      address: "",
+      qqsStavka: 12,
+      foydaStavka: 15,
+      period: "",
+      davrXarajati: 0,
+      moliyaviyXarajat: 0,
+      boshqaDaromad: 0,
+      imtiyozlar: 0,
+      tannarxManual: null,
+      bankOpeningBalance: 0,
+      filterFrom: "",
+      filterTo: "",
+      // F1 uchun qo'lda kiritiladigan ko'rsatkichlar
+      f1AsosiyVositalar: 0,
+      f1TovarZaxira: 0,
+      f1Kassa: 0,
+      f1UstavKapitali: 0,
+      f1OldingiFoyda: 0,
+      f1UzoqMajburiyat: 0,
+      // Ish haqi hisoboti uchun soliq stavkalari
+      ijtimoiySoliqStavka: 12,
+      ndflStavka: 12,
+      inpsStavka: 0.1
+    },
+    kirim: [],
+    chiqim: [],
+    bank: [],
+    ishHaqi: [],
+    ombor: [],
+    mahsulotlar: [],
+    ishlabChiqarish: [],
+    fayllar: []
+  };
+}
+
+let STORE = defaultStore();
+let THEME = localStorage.getItem(THEME_KEY) || "light";
+let CURRENT_PAGE = "dashboard";
+
+// Kirishdan keyingi birinchi "loadAllData" tugaguncha CRUD amallar (masalan,
+// Excel import'dagi takror tekshiruvi yoki Sozlamalarni saqlash) STORE hali
+// to'liq yuklanmagan (hali bo'sh) holatda ishlab, mavjud ma'lumotni bo'sh
+// qiymat bilan ustidan yozib qo'ymasligi uchun shu signaldan foydalanamiz.
+let DATA_LOADED = false;
+let markDataReady;
+const dataReady = new Promise((resolve) => { markDataReady = resolve; });
+
+function requireDataReady() {
+  if (!DATA_LOADED) {
+    toast("Ma'lumotlar hali to'liq yuklanmadi — bir necha soniyadan so'ng qayta urining", "err");
+    return false;
+  }
+  return true;
+}
+
+// Davr filtri (Sana oralig'i) — bu shaxsiy ko'rish sozlamasi, shu sabab umumiy
+// bazaga emas, faqat shu brauzerga (localStorage) saqlanadi.
+function loadLocalFilters() {
+  try {
+    const raw = localStorage.getItem(FILTERS_KEY);
+    return raw ? JSON.parse(raw) : { filterFrom: "", filterTo: "" };
+  } catch (e) {
+    return { filterFrom: "", filterTo: "" };
+  }
+}
+
+function saveLocalFilters() {
+  localStorage.setItem(FILTERS_KEY, JSON.stringify({ filterFrom: STORE.settings.filterFrom, filterTo: STORE.settings.filterTo }));
+}
+
+async function loadAllData() {
+  const [settingsRes, kirimRes, chiqimRes, bankRes, ishHaqiRes, omborRes, mahsulotlarRes, ishlabChiqarishRes, fayllarRes] = await Promise.all([
+    sbClient.from("settings").select("*").eq("id", 1).single(),
+    sbClient.from("kirim").select("*"),
+    sbClient.from("chiqim").select("*"),
+    sbClient.from("bank").select("*"),
+    sbClient.from("ish_haqi").select("*"),
+    sbClient.from("ombor").select("*"),
+    sbClient.from("mahsulotlar").select("*"),
+    sbClient.from("ishlab_chiqarish").select("*"),
+    sbClient.from("fayllar").select("*")
+  ]);
+  if (settingsRes.error) throw settingsRes.error;
+  STORE.settings = Object.assign(defaultStore().settings, fromDbSettings(settingsRes.data), loadLocalFilters());
+  STORE.kirim = (kirimRes.data || []).map((r) => fromDbRow(INVOICE_DB_MAP, r));
+  STORE.chiqim = (chiqimRes.data || []).map((r) => fromDbRow(INVOICE_DB_MAP, r));
+  STORE.bank = (bankRes.data || []).map((r) => fromDbRow(BANK_DB_MAP, r));
+  STORE.ishHaqi = (ishHaqiRes.data || []).map((r) => fromDbRow(ISHHAQI_DB_MAP, r));
+  STORE.ombor = (omborRes.data || []).map((r) => fromDbRow(OMBOR_DB_MAP, r));
+  STORE.mahsulotlar = (mahsulotlarRes.data || []).map((r) => fromDbRow(MAHSULOT_DB_MAP, r));
+  STORE.ishlabChiqarish = (ishlabChiqarishRes.data || []).map((r) => fromDbRow(ISHLAB_CHIQARISH_DB_MAP, r));
+  STORE.fayllar = (fayllarRes.data || []).map((r) => fromDbRow(FAYL_DB_MAP, r));
+  recomputeAllPaymentStatus();
+  DATA_LOADED = true;
+  if (markDataReady) { markDataReady(); markDataReady = null; }
+}
+
+// To'lov moslashtirish (recomputeAllPaymentStatus) natijasida BOSHQA qatorlarning
+// "tolandi" holati o'zgarishi mumkin (masalan, bank ma'lumoti yangilanganda) —
+// shu o'zgarishlarni bazaga qaytarib yozadi. To'g'ridan-to'g'ri kiritilgan
+// o'zgarishlar (masalan, foydalanuvchi checkbox bosishi) tegishli handler'ning
+// o'zida alohida bazaga yuboriladi.
+function saveStore() {
+  const prevTolandi = {};
+  ["kirim", "chiqim"].forEach((type) => STORE[type].forEach((r) => { prevTolandi[type + ":" + r.id] = r.tolandi; }));
+  recomputeAllPaymentStatus();
+  const pushes = [];
+  ["kirim", "chiqim"].forEach((type) => STORE[type].forEach((r) => {
+    if (prevTolandi[type + ":" + r.id] !== r.tolandi) {
+      pushes.push(sbClient.from(TABLE_NAMES[type]).update({ tolandi: r.tolandi }).eq("id", r.id));
+    }
+  }));
+  if (pushes.length) Promise.allSettled(pushes);
+  updateNavBadges();
+}
+
+// Chiqim faktura (mijozga sotuv) to'lovi bizning hisobimizga KIRIM sifatida tushadi,
+// Kirim faktura (ta'minotchidan xarid) to'lovi bizning hisobimizdan CHIQIM sifatida ketadi.
+function recomputePaymentStatusForType(type) {
+  const bankCol = type === "chiqim" ? "kirim" : "chiqim";
+  const availableByInn = {};
+  STORE.bank.forEach((b) => {
+    const inn = (b.kontragentInn || "").trim();
+    if (!inn) return;
+    availableByInn[inn] = (availableByInn[inn] || 0) + toNum(b[bankCol]);
+  });
+
+  const byInn = {};
+  STORE[type].forEach((r) => {
+    const inn = (r.kontragentInn || "").trim();
+    if (!inn) return; // INN yo'q qatorlar qo'lda boshqariladi
+    if (!isValidStatus(r.status)) { r.tolandi = false; return; }
+    (byInn[inn] = byInn[inn] || []).push(r);
+  });
+
+  Object.keys(byInn).forEach((inn) => {
+    let avail = availableByInn[inn] || 0;
+    const list = byInn[inn].slice().sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
+    list.forEach((r) => {
+      const amt = toNum(r.jamiSumma);
+      if (amt > 0 && avail >= amt - 1) {
+        r.tolandi = true;
+        avail -= amt;
+      } else {
+        r.tolandi = false;
+      }
+    });
+  });
+}
+
+function recomputeAllPaymentStatus() {
+  recomputePaymentStatusForType("kirim");
+  recomputePaymentStatusForType("chiqim");
+}
+
+/* ------------------------------ utilities ------------------------------ */
+
+function uid() {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+function toNum(v) {
+  if (v === "" || v === null || v === undefined) return 0;
+  if (typeof v === "number") return isFinite(v) ? v : 0;
+  const cleaned = String(v).replace(/[^\d.,-]/g, "").replace(/,/g, ".");
+  const n = parseFloat(cleaned);
+  return isFinite(n) ? n : 0;
+}
+
+function fmt(n, digits = 0) {
+  n = toNum(n);
+  const opts = { minimumFractionDigits: digits, maximumFractionDigits: digits };
+  return n.toLocaleString("ru-RU", opts);
+}
+
+function fmtSum(n) {
+  return fmt(n, 0) + " so'm";
+}
+
+function escapeHtml(s) {
+  return String(s === undefined || s === null ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isValidStatus(status) {
+  return !STATUS_INVALID.includes(status);
+}
+
+function inRange(sana, from, to) {
+  if (!sana) return false;
+  if (from && sana < from) return false;
+  if (to && sana > to) return false;
+  return true;
+}
+
+function getFilteredRows(rows) {
+  const { filterFrom, filterTo } = STORE.settings;
+  if (!filterFrom && !filterTo) return rows;
+  return rows.filter((r) => inRange(r.sana, filterFrom, filterTo));
+}
+
+function el(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html.trim();
+  return t.content.firstElementChild;
+}
+
+function toast(msg, type = "ok") {
+  const stack = document.getElementById("toastStack");
+  const node = el(`<div class="toast ${type}">${escapeHtml(msg)}</div>`);
+  stack.appendChild(node);
+  setTimeout(() => node.remove(), 3200);
+}
+
+function closeModal() {
+  document.getElementById("modalRoot").innerHTML = "";
+}
+
+function openModal(html) {
+  const root = document.getElementById("modalRoot");
+  root.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal">${html}</div></div>`;
+  document.getElementById("modalBackdrop").addEventListener("click", (e) => {
+    if (e.target.id === "modalBackdrop") closeModal();
+  });
+}
+
+/* ---------------------------- sana oralig'i filtri ---------------------------- */
+
+function dateRangeBarHtml(note) {
+  const s = STORE.settings;
+  const active = s.filterFrom || s.filterTo;
+  return `
+    <div class="toolbar section" style="margin-bottom:14px;">
+      <span class="faint" style="font-weight:600;">Davr:</span>
+      <input type="date" class="search-input" id="filterFrom" style="min-width:150px" value="${escapeHtml(s.filterFrom || "")}">
+      <span class="faint">—</span>
+      <input type="date" class="search-input" id="filterTo" style="min-width:150px" value="${escapeHtml(s.filterTo || "")}">
+      <button class="btn btn-sm" id="filterThisMonth">Joriy oy</button>
+      <button class="btn btn-sm" id="filterThisQuarter">Joriy chorak</button>
+      ${active ? `<button class="btn btn-sm" id="filterClear">Filtrni tozalash</button>` : ""}
+      ${note ? `<span class="faint" style="margin-left:auto;font-size:12px;">${note}</span>` : ""}
+    </div>
+  `;
+}
+
+function bindDateRangeBar(rerender) {
+  const from = document.getElementById("filterFrom");
+  const to = document.getElementById("filterTo");
+  const clearBtn = document.getElementById("filterClear");
+  const monthBtn = document.getElementById("filterThisMonth");
+  const quarterBtn = document.getElementById("filterThisQuarter");
+  const iso = (d) => d.toISOString().slice(0, 10);
+
+  if (from) from.addEventListener("change", () => { STORE.settings.filterFrom = from.value; saveLocalFilters(); rerender(); });
+  if (to) to.addEventListener("change", () => { STORE.settings.filterTo = to.value; saveLocalFilters(); rerender(); });
+  if (clearBtn) clearBtn.addEventListener("click", () => { STORE.settings.filterFrom = ""; STORE.settings.filterTo = ""; saveLocalFilters(); rerender(); });
+  if (monthBtn) monthBtn.addEventListener("click", () => {
+    const d = new Date();
+    STORE.settings.filterFrom = iso(new Date(d.getFullYear(), d.getMonth(), 1));
+    STORE.settings.filterTo = iso(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    saveLocalFilters(); rerender();
+  });
+  if (quarterBtn) quarterBtn.addEventListener("click", () => {
+    const d = new Date();
+    const q = Math.floor(d.getMonth() / 3);
+    STORE.settings.filterFrom = iso(new Date(d.getFullYear(), q * 3, 1));
+    STORE.settings.filterTo = iso(new Date(d.getFullYear(), q * 3 + 3, 0));
+    saveLocalFilters(); rerender();
+  });
+}
+
+/* ------------------------------ computations ---------------------------- */
+
+function sumRows(rows, field, onlyValid = true) {
+  return rows.reduce((acc, r) => {
+    if (onlyValid && !isValidStatus(r.status)) return acc;
+    return acc + toNum(r[field]);
+  }, 0);
+}
+
+function computeTotals() {
+  const s = STORE.settings;
+  const to = s.filterTo;
+
+  // Davr (from-to) bo'yicha — F2/QQS/Foyda solig'i uchun (davr natijasi)
+  const periodKirim = getFilteredRows(STORE.kirim);
+  const periodChiqim = getFilteredRows(STORE.chiqim);
+
+  const kirimBase = sumRows(periodKirim, "summaQQSsiz");
+  const kirimQQS = sumRows(periodKirim, "qqsSumma");
+  const kirimJami = sumRows(periodKirim, "jamiSumma");
+
+  const chiqimBase = sumRows(periodChiqim, "summaQQSsiz");
+  const chiqimQQS = sumRows(periodChiqim, "qqsSumma");
+  const chiqimJami = sumRows(periodChiqim, "jamiSumma");
+
+  // "to" sanasiga nisbatan (as-of) — F1 balans uchun (bir kunlik holat, davr emas)
+  const asOfKirim = STORE.kirim.filter((r) => !to || r.sana <= to);
+  const asOfChiqim = STORE.chiqim.filter((r) => !to || r.sana <= to);
+  const asOfBank = STORE.bank.filter((r) => !to || r.sana <= to);
+
+  const bankKirim = asOfBank.reduce((a, r) => a + toNum(r.kirim), 0);
+  const bankChiqim = asOfBank.reduce((a, r) => a + toNum(r.chiqim), 0);
+  const bankOpening = toNum(s.bankOpeningBalance);
+  const bankQoldiq = bankOpening + bankKirim - bankChiqim;
+
+  const kreditorlik = asOfKirim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi ? a + toNum(r.jamiSumma) : a), 0);
+  const debitorlik = asOfChiqim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi ? a + toNum(r.jamiSumma) : a), 0);
+
+  // ---- F2: Moliyaviy natijalar ----
+  const revenue = chiqimBase;
+  const tannarx = s.tannarxManual !== null && s.tannarxManual !== undefined && s.tannarxManual !== "" ? toNum(s.tannarxManual) : kirimBase;
+  const yalpiFoyda = revenue - tannarx;
+  const davrXarajati = toNum(s.davrXarajati);
+  const asosiyFaoliyatFoyda = yalpiFoyda - davrXarajati;
+  const moliyaviyXarajat = toNum(s.moliyaviyXarajat);
+  const soliqqachaFoyda = asosiyFaoliyatFoyda - moliyaviyXarajat;
+
+  // ---- Foyda solig'i (F2 va Foyda solig'i hisoboti bitta manbadan hisoblanadi) ----
+  const jamiDaromad = revenue + toNum(s.boshqaDaromad);
+  const chegiriladiXarajat = tannarx + davrXarajati + moliyaviyXarajat;
+  const soliqqaTortiladiganFoyda = jamiDaromad - chegiriladiXarajat;
+  const imtiyozlar = toNum(s.imtiyozlar);
+  const soliqBazasi = Math.max(soliqqaTortiladiganFoyda - imtiyozlar, 0);
+  const foydaStavka = toNum(s.foydaStavka);
+  const foydaSoligi = soliqBazasi * (foydaStavka / 100);
+
+  const sofFoyda = soliqqachaFoyda - foydaSoligi;
+
+  // ---- QQS ----
+  const qqsInput = kirimQQS;
+  const qqsOutput = chiqimQQS;
+  const qqsToPay = qqsOutput - qqsInput;
+
+  // ---- F1 ----
+  const pulMablaglari = bankQoldiq + toNum(s.f1Kassa);
+  const asosiyVositalar = toNum(s.f1AsosiyVositalar);
+  const tovarZaxira = toNum(s.f1TovarZaxira);
+  const aktivJami = asosiyVositalar + tovarZaxira + debitorlik + pulMablaglari;
+
+  const ustavKapitali = toNum(s.f1UstavKapitali);
+  const oldingiFoyda = toNum(s.f1OldingiFoyda);
+  const jamgarilganFoyda = oldingiFoyda + sofFoyda;
+  const uzoqMajburiyat = toNum(s.f1UzoqMajburiyat);
+  const passivJami = ustavKapitali + jamgarilganFoyda + uzoqMajburiyat + kreditorlik;
+
+  return {
+    kirimBase, kirimQQS, kirimJami,
+    chiqimBase, chiqimQQS, chiqimJami,
+    bankKirim, bankChiqim, bankOpening, bankQoldiq,
+    kreditorlik, debitorlik,
+    revenue, tannarx, yalpiFoyda, davrXarajati, asosiyFaoliyatFoyda,
+    moliyaviyXarajat, soliqqachaFoyda, foydaSoligi, sofFoyda,
+    jamiDaromad, chegiriladiXarajat, soliqqaTortiladiganFoyda, imtiyozlar, soliqBazasi, foydaStavka,
+    qqsInput, qqsOutput, qqsToPay,
+    pulMablaglari, asosiyVositalar, tovarZaxira, aktivJami,
+    ustavKapitali, oldingiFoyda, jamgarilganFoyda, uzoqMajburiyat, passivJami
+  };
+}
+
+/* -------------------------------- routing -------------------------------- */
+
+const PAGES = {
+  dashboard: { render: renderDashboard },
+  kirim: { render: () => renderInvoiceTable("kirim") },
+  chiqim: { render: () => renderInvoiceTable("chiqim") },
+  bank: { render: renderBank },
+  ombor: { render: renderOmbor },
+  ishlabchiqarish: { render: renderIshlabChiqarish },
+  fayllar: { render: renderFayllar },
+  ishhaqi: { render: renderIshHaqi },
+  f2: { render: renderF2 },
+  qqs: { render: renderQQS },
+  foyda: { render: renderFoyda },
+  ishhaqihisobot: { render: renderIshHaqiHisoboti },
+  f1: { render: renderF1 },
+  sverka: { render: renderSverka },
+  sverkaDetail: { render: renderSverkaDetail },
+  settings: { render: renderSettings }
+};
+
+function navigate(page) {
+  CURRENT_PAGE = page;
+  if (page === "sverka") SVERKA_STATUS_FILTER = null;
+  document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === page));
+  PAGES[page].render();
+}
+
+function updateNavBadges() {
+  document.getElementById("navKirimCount").textContent = STORE.kirim.length;
+  document.getElementById("navChiqimCount").textContent = STORE.chiqim.length;
+  document.getElementById("navBankCount").textContent = STORE.bank.length;
+  document.getElementById("navIshHaqiCount").textContent = STORE.ishHaqi.length;
+  document.getElementById("navOmborCount").textContent = STORE.ombor.length;
+  document.getElementById("navIshlabChiqarishCount").textContent = STORE.ishlabChiqarish.length;
+  document.getElementById("navFayllarCount").textContent = STORE.fayllar.length;
+  document.getElementById("brandCompany").textContent = STORE.settings.companyName.replace(/[“”"]/g, "");
+}
+
+/* ------------------------------- dashboard ------------------------------- */
+
+function renderDashboard() {
+  const t = computeTotals();
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Bosh sahifa</h1>
+        <p class="page-desc">${escapeHtml(STORE.settings.companyName)} · INN ${escapeHtml(STORE.settings.inn)} · ${escapeHtml(STORE.settings.period)}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" data-nav="kirim">+ Kirim faktura</button>
+        <button class="btn" data-nav="chiqim">+ Chiqim faktura</button>
+        <button class="btn btn-primary" data-nav="bank">+ Bank harakati</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml("Ko'rsatkichlar tanlangan davrga mos ravishda hisoblanadi.")}
+
+    <div class="grid grid-4 section">
+      <div class="card stat-card">
+        <div class="stat-label">Sof tushum (savdo)</div>
+        <div class="stat-value">${fmtSum(t.revenue)}</div>
+        <div class="stat-sub">${getFilteredRows(STORE.chiqim).length} ta chiqim faktura</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Xaridlar (tannarx)</div>
+        <div class="stat-value">${fmtSum(t.tannarx)}</div>
+        <div class="stat-sub">${getFilteredRows(STORE.kirim).length} ta kirim faktura</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Sof foyda</div>
+        <div class="stat-value">${fmtSum(t.sofFoyda)}</div>
+        <div class="stat-sub ${t.sofFoyda >= 0 ? "pos" : "neg"}">${t.sofFoyda >= 0 ? "Foyda" : "Zarar"}</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Bank qoldig'i</div>
+        <div class="stat-value">${fmtSum(t.bankQoldiq)}</div>
+        <div class="stat-sub">${STORE.bank.length} ta bank operatsiyasi</div>
+      </div>
+    </div>
+
+    <div class="grid grid-3 section">
+      <div class="card stat-card">
+        <div class="stat-label">QQS (byudjetga)</div>
+        <div class="stat-value">${fmtSum(t.qqsToPay)}</div>
+        <div class="stat-sub">Chiqim QQS ${fmtSum(t.qqsOutput)} − Kirim QQS ${fmtSum(t.qqsInput)}</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Foyda solig'i</div>
+        <div class="stat-value">${fmtSum(t.foydaSoligi)}</div>
+        <div class="stat-sub">Stavka ${t.foydaStavka}%</div>
+      </div>
+      <div class="card stat-card">
+        <div class="stat-label">Debitor / Kreditor</div>
+        <div class="stat-value" style="font-size:16px">${fmtSum(t.debitorlik)} / ${fmtSum(t.kreditorlik)}</div>
+        <div class="stat-sub">Mijozlar qarzi / bizning qarzimiz</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">Bo'limlar orasidagi bog'liqlik</h2>
+      <div class="card" style="padding:22px;">
+        <div class="note" style="margin-top:0;">
+          <b>Qanday ishlaydi:</b> Faktura kirim/chiqim va Bank bo'limlariga kiritilgan ma'lumotlar avtomatik ravishda
+          <b>QQS</b>, <b>F2 (moliyaviy natija)</b>, <b>Foyda solig'i</b> va <b>F1 (balans)</b> hisobotlariga integratsiya bo'ladi —
+          alohida qayta kiritish shart emas. Faqat har bir hujjatning holati (status) "Отказ/Bekor qilingan" bo'lmasa, hisobga olinadi.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">So'nggi hujjatlar</h2>
+      <div class="grid grid-2">
+        ${recentList("kirim")}
+        ${recentList("chiqim")}
+      </div>
+    </div>
+  `;
+  bindNavShortcuts(main);
+  bindDateRangeBar(renderDashboard);
+}
+
+function recentList(type) {
+  const rows = STORE[type].slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || "")).slice(0, 5);
+  const title = type === "kirim" ? "Oxirgi kirim fakturalar" : "Oxirgi chiqim fakturalar";
+  if (!rows.length) {
+    return `<div class="card"><div class="card-title">${title}</div><div class="empty-state" style="padding:20px 0;"><div class="d">Hozircha hujjat yo'q</div></div></div>`;
+  }
+  return `
+    <div class="card">
+      <div class="card-title">${title}</div>
+      ${rows.map((r) => `
+        <div class="report-line" style="grid-template-columns:70px 1fr 120px;">
+          <span class="faint mono">${escapeHtml(r.sana || "—")}</span>
+          <span>${escapeHtml(r.kontragentNomi || "—")}</span>
+          <span class="val">${fmtSum(r.jamiSumma)}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function bindNavShortcuts(scope) {
+  scope.querySelectorAll("[data-nav]").forEach((b) => b.addEventListener("click", () => navigate(b.dataset.nav)));
+}
+
+/* ---------------------------- Faktura kirim/chiqim ---------------------------- */
+
+const INVOICE_LABELS = {
+  kirim: { title: "Faktura kirim", desc: "Sotuvchidan olingan xarid fakturalari (didox.uz eksportidan import qilinadi yoki qo'lda kiritiladi).", party: "Sotuvchi" },
+  chiqim: { title: "Faktura chiqim", desc: "Xaridorlarga chiqarilgan savdo fakturalari (didox.uz eksportidan import qilinadi yoki qo'lda kiritiladi).", party: "Xaridor" }
+};
+
+function renderInvoiceTable(type) {
+  const info = INVOICE_LABELS[type];
+  const filtered = getFilteredRows(STORE[type]);
+  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const main = document.getElementById("main");
+
+  const totalBase = sumRows(filtered, "summaQQSsiz");
+  const totalQQS = sumRows(filtered, "qqsSumma");
+  const totalJami = sumRows(filtered, "jamiSumma");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">${info.title}</h1>
+        <p class="page-desc">${info.desc}</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImport">Excel'dan import</button>
+        <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml()}
+
+    <div class="grid grid-3 section">
+      <div class="card stat-card"><div class="stat-label">Summa (QQSsiz)</div><div class="stat-value" id="statBase">${fmtSum(totalBase)}</div></div>
+      <div class="card stat-card"><div class="stat-label">QQS summasi</div><div class="stat-value" id="statQQS">${fmtSum(totalQQS)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Jami (QQS bilan)</div><div class="stat-value" id="statJami">${fmtSum(totalJami)}</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input class="search-input" id="searchBox" placeholder="Qidirish: kontragent, hujjat raqami...">
+      <div class="spacer"></div>
+      <span class="faint">${rows.length} ta yozuv</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sana</th>
+            <th>Hujjat №</th>
+            <th>${info.party}</th>
+            <th>INN</th>
+            <th>Status</th>
+            <th>To'landi</th>
+            <th class="num">Summa (QQSsiz)</th>
+            <th class="num">QQS %</th>
+            <th class="num">QQS summa</th>
+            <th class="num">Jami</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="invoiceBody">
+          ${rows.length ? rows.map((r) => invoiceRowHtml(type, r)).join("") : ""}
+        </tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128196;</div><div class="t">Hujjatlar yo'q</div><div class="d">"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.</div></div>` : ""}
+  `;
+
+  document.getElementById("btnAddRow").addEventListener("click", () => addInvoiceRow(type));
+  document.getElementById("btnImport").addEventListener("click", () => openImportModal(type));
+  document.getElementById("searchBox").addEventListener("input", (e) => filterInvoiceRows(e.target.value));
+  bindDateRangeBar(() => renderInvoiceTable(type));
+
+  bindInvoiceRowEvents(type);
+}
+
+function invoiceRowHtml(type, r) {
+  const invalid = !isValidStatus(r.status);
+  const statusPill = invalid ? "pill-danger" : (r.status === "Ожидает" ? "pill-warn" : "pill-ok");
+  return `
+    <tr data-id="${r.id}" style="${invalid ? "opacity:.55" : ""}">
+      <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
+      <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
+      <td><input class="cell-input" data-f="kontragentNomi" value="${escapeHtml(r.kontragentNomi || "")}" style="min-width:170px"></td>
+      <td><input class="cell-input" data-f="kontragentInn" value="${escapeHtml(r.kontragentInn || "")}" style="min-width:90px"></td>
+      <td><span class="pill ${statusPill}">${escapeHtml(r.status || "Подписан")}</span></td>
+      <td style="text-align:center">${tolandiCellHtml(r)}</td>
+      <td class="num"><input class="cell-input num" data-f="summaQQSsiz" value="${fmt(r.summaQQSsiz)}"></td>
+      <td class="num"><input class="cell-input num" data-f="qqsStavka" value="${fmt(r.qqsStavka)}" style="width:50px"></td>
+      <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
+      <td class="num jami-cell" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish">&#10005;</button></td>
+    </tr>
+  `;
+}
+
+function refreshInvoiceSummary(type) {
+  const filtered = getFilteredRows(STORE[type]);
+  const totalBase = sumRows(filtered, "summaQQSsiz");
+  const totalQQS = sumRows(filtered, "qqsSumma");
+  const totalJami = sumRows(filtered, "jamiSumma");
+  const elBase = document.getElementById("statBase");
+  const elQQS = document.getElementById("statQQS");
+  const elJami = document.getElementById("statJami");
+  if (elBase) elBase.textContent = fmtSum(totalBase);
+  if (elQQS) elQQS.textContent = fmtSum(totalQQS);
+  if (elJami) elJami.textContent = fmtSum(totalJami);
+}
+
+function tolandiCellHtml(r) {
+  const hasInn = !!(r.kontragentInn && String(r.kontragentInn).trim());
+  return hasInn
+    ? `<span class="pill ${r.tolandi ? "pill-ok" : "pill-muted"}" title="Bank harakati bilan avtomatik solishtirildi (INN + summa)">${r.tolandi ? "To'landi" : "Ochiq"}</span>`
+    : `<input type="checkbox" data-f="tolandi" ${r.tolandi ? "checked" : ""} title="INN kiritilmagani uchun qo'lda belgilanadi">`;
+}
+
+function refreshTolandiCellsForInn(type, inn) {
+  if (!inn) return;
+  document.querySelectorAll(`#invoiceBody tr[data-id]`).forEach((tr) => {
+    const row = STORE[type].find((r) => r.id === tr.dataset.id);
+    if (!row || (row.kontragentInn || "").trim() !== inn) return;
+    const cell = tr.children[5];
+    if (cell) cell.innerHTML = tolandiCellHtml(row);
+  });
+}
+
+function bindInvoiceRowEvents(type) {
+  const body = document.getElementById("invoiceBody");
+  if (!body) return;
+  body.addEventListener("change", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const id = tr.dataset.id;
+    const row = STORE[type].find((r) => r.id === id);
+    if (!row) return;
+    const field = e.target.dataset.f;
+    if (!field) return;
+    if (field === "tolandi") {
+      row.tolandi = e.target.checked;
+      pushFieldsUpdate(type, id, { tolandi: row.tolandi });
+      saveStore();
+    } else if (["summaQQSsiz", "qqsStavka", "qqsSumma"].includes(field)) {
+      row[field] = toNum(e.target.value);
+      if (field === "summaQQSsiz" || field === "qqsStavka") {
+        row.qqsSumma = Math.round(row.summaQQSsiz * row.qqsStavka / 100);
+        const qqsCell = tr.querySelector('[data-f="qqsSumma"]');
+        if (qqsCell) qqsCell.value = fmt(row.qqsSumma);
+      }
+      row.jamiSumma = row.summaQQSsiz + row.qqsSumma;
+      pushFieldsUpdate(type, id, { summaQQSsiz: row.summaQQSsiz, qqsStavka: row.qqsStavka, qqsSumma: row.qqsSumma, jamiSumma: row.jamiSumma });
+      saveStore();
+      const jamiCell = tr.querySelector(".jami-cell");
+      if (jamiCell) jamiCell.textContent = fmtSum(row.jamiSumma);
+      refreshInvoiceSummary(type);
+      refreshTolandiCellsForInn(type, (row.kontragentInn || "").trim());
+    } else if (field === "kontragentInn") {
+      row.kontragentInn = e.target.value;
+      pushFieldsUpdate(type, id, { kontragentInn: row.kontragentInn });
+      saveStore();
+      renderInvoiceTable(type);
+      return;
+    } else {
+      row[field] = e.target.value;
+      pushFieldsUpdate(type, id, { [field]: row[field] });
+      saveStore();
+    }
+  });
+  body.addEventListener("click", (e) => {
+    const delId = e.target.dataset.del;
+    if (delId) {
+      RECENTLY_DELETED.add(delId);
+      STORE[type] = STORE[type].filter((r) => r.id !== delId);
+      sbClient.from(TABLE_NAMES[type]).delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
+      saveStore();
+      renderInvoiceTable(type);
+    }
+  });
+}
+
+function filterInvoiceRows(q) {
+  q = q.trim().toLowerCase();
+  document.querySelectorAll("#invoiceBody tr").forEach((tr) => {
+    const inputValues = Array.from(tr.querySelectorAll("input")).map((i) => i.value).join(" ");
+    const text = (tr.textContent + " " + inputValues).toLowerCase();
+    tr.style.display = !q || text.includes(q) ? "" : "none";
+  });
+}
+
+async function addInvoiceRow(type) {
+  const s = STORE.settings;
+  const newRow = {
+    sana: todayISO(), hujjatRaqami: "", status: "Подписан", kontragentInn: "", kontragentNomi: "",
+    summaQQSsiz: 0, qqsStavka: s.qqsStavka, qqsSumma: 0, jamiSumma: 0, tolandi: false
+  };
+  const { data, error } = await sbClient.from(TABLE_NAMES[type]).insert(toDbRow(TABLE_MAPS[type], newRow)).select().single();
+  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  const row = fromDbRow(TABLE_MAPS[type], data);
+  if (!STORE[type].some((r) => r.id === row.id)) STORE[type].push(row);
+  saveStore();
+  renderInvoiceTable(type);
+  toast("Yangi qator qo'shildi");
+}
+
+/* --------------------------------- Ombor --------------------------------- */
+// Ombor — "Faktura kirim" hujjatlaridagi har bir mahsulot qatorini alohida
+// saqlaydi (hujjat darajasida emas, mahsulot darajasida). didox.uz eksport
+// faylini to'g'ridan-to'g'ri shu bo'limga ham import qilish mumkin.
+
+// Ombor endi ikki turdagi qatorlarni saqlaydi: turi="kirim" (xarid qilingan
+// xomashyo/mahsulot — "Faktura kirim" fayllaridan import qilinadi yoki qo'lda
+// kiritiladi) va turi="chiqim" (Ishlab chiqarish bo'limida mahsulot
+// ishlab chiqarilganda/sotilganda kalkulyatsiya asosida avtomat yoziladigan
+// sarf qatori). Asosiy jurnalda faqat "kirim" qatorlari ko'rsatiladi, "Qoldiq"
+// jadvalida esa har ikkisi ham hisobga olinib joriy zaxira chiqariladi.
+function omborKirimRows() {
+  return STORE.ombor.filter((r) => r.turi !== "chiqim");
+}
+
+function omborQoldiqList() {
+  const map = {};
+  STORE.ombor.forEach((r) => {
+    if (!r.nomi) return;
+    const key = r.nomi + "||" + (r.birlik || "");
+    if (!map[key]) map[key] = { nomi: r.nomi, birlik: r.birlik, kirim: 0, chiqim: 0 };
+    if (r.turi === "chiqim") map[key].chiqim += toNum(r.miqdor);
+    else map[key].kirim += toNum(r.miqdor);
+  });
+  return Object.values(map)
+    .map((x) => Object.assign(x, { qoldiq: x.kirim - x.chiqim }))
+    .sort((a, b) => a.nomi.localeCompare(b.nomi));
+}
+
+// Xomashyoning o'rtacha xarid narxi (QQSsiz, 1 birlik uchun) — barcha "kirim"
+// qatorlaridagi shu nomdagi yozuvlar bo'yicha. Mahsulot kalkulyatsiyasi va
+// Ishlab chiqarish tannarxini hisoblashda ishlatiladi.
+function avgOmborNarx(nomi) {
+  const rows = omborKirimRows().filter((r) => r.nomi === nomi);
+  const totalMiqdor = rows.reduce((a, r) => a + toNum(r.miqdor), 0);
+  if (!totalMiqdor) return 0;
+  const totalBaza = rows.reduce((a, r) => a + toNum(r.yetkazibBerishNarxi), 0);
+  return totalBaza / totalMiqdor;
+}
+
+// Ombor sahifasi uch kichik bo'limga (tab) bo'lingan: "Ombor kirimi" (xarid
+// qilingan xomashyo jurnali), "Ombor chiqimi" (sarflangan/sotilgan
+// xomashyo-mahsulot jurnali) va "Ombor qoldig'i" (joriy zaxira). OMBOR_TAB
+// hozir qaysi tab ochiqligini eslab qoladi, realtime qayta chizishda ham
+// saqlanadi (rerenderCurrentPage -> PAGES.ombor.render -> renderOmbor).
+let OMBOR_TAB = "kirim";
+
+function omborTabBarHtml() {
+  const tabs = [
+    { key: "kirim", label: "Ombor kirimi" },
+    { key: "chiqim", label: "Ombor chiqimi" },
+    { key: "qoldiq", label: "Ombor qoldig'i" }
+  ];
+  return `
+    <div class="page-actions section" style="margin-bottom:6px;">
+      ${tabs.map((t) => `<button class="btn ${OMBOR_TAB === t.key ? "btn-primary" : ""}" data-ombor-tab="${t.key}">${t.label}</button>`).join("")}
+    </div>
+  `;
+}
+
+function bindOmborTabBar(main) {
+  main.querySelectorAll("[data-ombor-tab]").forEach((b) => b.addEventListener("click", () => {
+    OMBOR_TAB = b.dataset.omborTab;
+    renderOmbor();
+  }));
+}
+
+function renderOmbor() {
+  if (OMBOR_TAB === "chiqim") return renderOmborChiqim();
+  if (OMBOR_TAB === "qoldiq") return renderOmborQoldiq();
+  return renderOmborKirim();
+}
+
+function renderOmborKirim() {
+  const kirimAll = omborKirimRows();
+  const filtered = getFilteredRows(kirimAll);
+  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const main = document.getElementById("main");
+
+  const totalBaza = sumRows(filtered, "yetkazibBerishNarxi");
+  const totalQQS = sumRows(filtered, "qqsSumma");
+  const totalJami = sumRows(filtered, "yetkazibBerishNarxiQQSBilan");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Ombor</h1>
+        <p class="page-desc">Faktura kirim fayllaridan import qilingan mahsulotlar ro'yxati (kirim jurnali) — har bir qator bitta mahsulot yetkazib berilishini bildiradi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImport">Excel'dan import</button>
+        <button class="btn" id="btnUnifyNomi">Nomlarni birlashtirish</button>
+        <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
+      </div>
+    </div>
+
+    ${omborTabBarHtml()}
+    ${dateRangeBarHtml()}
+
+    <div class="grid grid-3 section">
+      <div class="card stat-card"><div class="stat-label">Yetkazib berish narxi (QQSsiz)</div><div class="stat-value" id="statBaza">${fmtSum(totalBaza)}</div></div>
+      <div class="card stat-card"><div class="stat-label">QQS summasi</div><div class="stat-value" id="statQQS">${fmtSum(totalQQS)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Yetkazib berish narxi (QQS bilan)</div><div class="stat-value" id="statJami">${fmtSum(totalJami)}</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input class="search-input" id="searchBox" placeholder="Qidirish: mahsulot nomi, hujjat raqami...">
+      <div class="spacer"></div>
+      <span class="faint">${rows.length} ta yozuv</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sana</th>
+            <th>Hujjat №</th>
+            <th>Maxsulot nomi</th>
+            <th>O'lchov birligi</th>
+            <th class="num">Miqdori</th>
+            <th class="num">Narxi</th>
+            <th class="num">Yetkazib berish narxi</th>
+            <th class="num">QQS summasi</th>
+            <th class="num">Yetkazib berish narxi (QQS bilan)</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="omborBody">
+          ${rows.length ? rows.map((r) => omborRowHtml(r)).join("") : ""}
+        </tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128230;</div><div class="t">Ombor bo'sh</div><div class="d">"Excel'dan import" tugmasi orqali didox.uz "faktura kirim" eksport faylini yuklang yoki qo'lda qo'shing.</div></div>` : ""}
+  `;
+
+  bindOmborTabBar(main);
+  document.getElementById("btnAddRow").addEventListener("click", () => addOmborRow());
+  document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
+  document.getElementById("btnUnifyNomi").addEventListener("click", () => unifyOmborPolymerNames());
+  document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
+  bindDateRangeBar(renderOmborKirim);
+
+  bindOmborRowEvents();
+}
+
+function omborChiqimRowHtml(r) {
+  const icId = (r.hujjatRaqami || "").startsWith("IC-") ? r.hujjatRaqami.slice(3) : "";
+  return `
+    <tr data-id="${r.id}">
+      <td class="mono">${escapeHtml(r.sana || "—")}</td>
+      <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+      <td>${escapeHtml(r.nomi || "")}</td>
+      <td>${escapeHtml(r.birlik || "")}</td>
+      <td class="num">${fmt(r.miqdor, 3)}</td>
+      <td class="num">${fmt(r.narx, 2)}</td>
+      <td class="num">${fmtSum(r.yetkazibBerishNarxi)}</td>
+      <td class="num">${fmtSum(r.qqsSumma)}</td>
+      <td class="num" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
+      <td>${escapeHtml(r.kontragentNomi || "")}</td>
+      <td class="row-actions"><button class="icon-btn" data-del-chiqim="${r.id}" data-ic="${icId}" title="O'chirish">&#10005;</button></td>
+    </tr>
+  `;
+}
+
+function renderOmborChiqim() {
+  const chiqimRows = STORE.ombor.filter((r) => r.turi === "chiqim");
+  const filtered = getFilteredRows(chiqimRows);
+  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const main = document.getElementById("main");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Ombor</h1>
+        <p class="page-desc">Ombordan chiqarilgan (sarflangan yoki sotilgan) xomashyo va mahsulotlar tarixi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImportChiqim">Excel'dan import</button>
+        <button class="btn btn-primary" id="btnAddChiqim">+ Chiqim qo'shish</button>
+      </div>
+    </div>
+
+    ${omborTabBarHtml()}
+    ${dateRangeBarHtml()}
+
+    <div class="toolbar">
+      <div class="spacer"></div>
+      <span class="faint">${rows.length} ta yozuv</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sana</th><th>Hujjat №</th><th>Nomi</th><th>O'lchov birligi</th>
+            <th class="num">Miqdor</th><th class="num">Narxi</th>
+            <th class="num">Yetkazib berish narxi</th><th class="num">QQS summasi</th>
+            <th class="num">Yetkazib berish narxi (QQS bilan)</th>
+            <th>Manba / izoh</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="omborChiqimBody">${rows.length ? rows.map(omborChiqimRowHtml).join("") : ""}</tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128230;</div><div class="t">Chiqim yo'q</div><div class="d">"+ Chiqim qo'shish" tugmasi yoki "Excel'dan import" orqali xomashyo yoki mahsulot chiqimini qayd eting.</div></div>` : ""}
+  `;
+
+  bindOmborTabBar(main);
+  bindDateRangeBar(renderOmborChiqim);
+  document.getElementById("btnAddChiqim").addEventListener("click", () => openOmborChiqimModal());
+  document.getElementById("btnImportChiqim").addEventListener("click", () => openOmborChiqimImportModal());
+  const body = document.getElementById("omborChiqimBody");
+  if (body) body.addEventListener("click", (e) => {
+    const delId = e.target.dataset.delChiqim;
+    if (!delId) return;
+    const icId = e.target.dataset.ic;
+    if (icId) deleteIshlabChiqarishEntry(icId);
+    else deleteOmborChiqimRow(delId);
+  });
+}
+
+async function deleteOmborChiqimRow(id) {
+  RECENTLY_DELETED.add(id);
+  STORE.ombor = STORE.ombor.filter((r) => r.id !== id);
+  await sbClient.from("ombor").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
+  updateNavBadges();
+  renderOmborChiqim();
+  toast("O'chirildi, ombor qoldig'i yangilandi");
+}
+
+function renderOmborQoldiq() {
+  const main = document.getElementById("main");
+  const qoldiq = omborQoldiqList();
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Ombor</h1>
+        <p class="page-desc">Har bir xomashyo/mahsulot bo'yicha joriy zaxira — jami kirim va sarflangan (chiqim) miqdor asosida, barcha davr uchun.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnPrintOmborQoldiq">PDF (chop etish)</button>
+        <button class="btn" id="btnExportOmborQoldiq">Excel'ga eksport</button>
+      </div>
+    </div>
+
+    ${omborTabBarHtml()}
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Maxsulot nomi</th><th>O'lchov birligi</th><th class="num">Kirim (jami)</th><th class="num">Sarflandi (chiqim)</th><th class="num">Qoldiq</th></tr>
+        </thead>
+        <tbody>
+          ${qoldiq.length ? qoldiq.map((q) => `
+            <tr>
+              <td>${escapeHtml(q.nomi)}</td>
+              <td>${escapeHtml(q.birlik || "")}</td>
+              <td class="num">${fmt(q.kirim, 3)}</td>
+              <td class="num">${fmt(q.chiqim, 3)}</td>
+              <td class="num" style="font-weight:700;${q.qoldiq < 0 ? "color:var(--danger,#e5484d)" : ""}">${fmt(q.qoldiq, 3)}</td>
+            </tr>
+          `).join("") : `<tr><td colspan="5" class="faint" style="text-align:center;padding:16px;">Hozircha ma'lumot yo'q</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  bindOmborTabBar(main);
+  document.getElementById("btnExportOmborQoldiq").addEventListener("click", () => exportOmborQoldiqXlsx(qoldiq));
+  document.getElementById("btnPrintOmborQoldiq").addEventListener("click", () => printOmborQoldiqPdf(qoldiq));
+}
+
+function exportOmborQoldiqXlsx(qoldiq) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Sana: ${todayISO()}`],
+    ["Ombor qoldig'i"],
+    [],
+    ["Maxsulot nomi", "O'lchov birligi", "Kirim (jami)", "Sarflandi (chiqim)", "Qoldiq"]
+  ];
+  qoldiq.forEach((q) => aoa.push([q.nomi, q.birlik || "", q.kirim, q.chiqim, q.qoldiq]));
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 34 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ombor qoldig'i");
+  XLSX.writeFile(wb, `BUX2112_ombor_qoldiq_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
+}
+
+function printOmborQoldiqPdf(qoldiq) {
+  const s = STORE.settings;
+  const bodyRows = qoldiq.map((q) => `
+    <tr>
+      <td>${escapeHtml(q.nomi)}</td>
+      <td>${escapeHtml(q.birlik || "")}</td>
+      <td class="num">${fmt(q.kirim, 3)}</td>
+      <td class="num">${fmt(q.chiqim, 3)}</td>
+      <td class="num"><b>${fmt(q.qoldiq, 3)}</b></td>
+    </tr>
+  `).join("");
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Ombor qoldig'i</title>
+      <style>
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:28px; color:#1c2530;}
+        h1{font-size:18px; margin:0 0 4px;}
+        .sub{font-size:12px; color:#5b6b7b; margin:0 0 4px;}
+        .period{font-size:12px; color:#5b6b7b; margin:0 0 18px;}
+        table{width:100%; border-collapse:collapse; font-size:11.5px;}
+        th, td{border:1px solid #ccd3da; padding:6px 8px; text-align:left;}
+        th{background:#eceff2;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <h1>${escapeHtml(s.companyName)}</h1>
+      <div class="sub">INN: ${escapeHtml(s.inn)}</div>
+      <div class="period">Ombor qoldig'i &middot; Sana: ${escapeHtml(todayISO())}</div>
+      <table>
+        <thead>
+          <tr><th>Maxsulot nomi</th><th>O'lchov birligi</th><th class="num">Kirim (jami)</th><th class="num">Sarflandi (chiqim)</th><th class="num">Qoldiq</th></tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+function omborRowHtml(r) {
+  return `
+    <tr data-id="${r.id}">
+      <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
+      <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
+      <td><input class="cell-input" data-f="nomi" value="${escapeHtml(r.nomi || "")}" style="min-width:220px"></td>
+      <td><input class="cell-input" data-f="birlik" value="${escapeHtml(r.birlik || "")}" style="width:90px"></td>
+      <td class="num"><input class="cell-input num" data-f="miqdor" value="${fmt(r.miqdor, 3)}" style="width:90px"></td>
+      <td class="num"><input class="cell-input num" data-f="narx" value="${fmt(r.narx, 2)}"></td>
+      <td class="num"><input class="cell-input num" data-f="yetkazibBerishNarxi" value="${fmt(r.yetkazibBerishNarxi)}"></td>
+      <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
+      <td class="num jami-cell" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish">&#10005;</button></td>
+    </tr>
+  `;
+}
+
+function refreshOmborSummary() {
+  const filtered = getFilteredRows(omborKirimRows());
+  const totalBaza = sumRows(filtered, "yetkazibBerishNarxi");
+  const totalQQS = sumRows(filtered, "qqsSumma");
+  const totalJami = sumRows(filtered, "yetkazibBerishNarxiQQSBilan");
+  const elBaza = document.getElementById("statBaza");
+  const elQQS = document.getElementById("statQQS");
+  const elJami = document.getElementById("statJami");
+  if (elBaza) elBaza.textContent = fmtSum(totalBaza);
+  if (elQQS) elQQS.textContent = fmtSum(totalQQS);
+  if (elJami) elJami.textContent = fmtSum(totalJami);
+}
+
+function bindOmborRowEvents() {
+  const body = document.getElementById("omborBody");
+  if (!body) return;
+  body.addEventListener("change", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const id = tr.dataset.id;
+    const row = STORE.ombor.find((r) => r.id === id);
+    if (!row) return;
+    const field = e.target.dataset.f;
+    if (!field) return;
+    if (["miqdor", "narx", "yetkazibBerishNarxi", "qqsSumma"].includes(field)) {
+      row[field] = toNum(e.target.value);
+      row.yetkazibBerishNarxiQQSBilan = row.yetkazibBerishNarxi + row.qqsSumma;
+      pushFieldsUpdate("ombor", id, { [field]: row[field], yetkazibBerishNarxiQQSBilan: row.yetkazibBerishNarxiQQSBilan });
+      const jamiCell = tr.querySelector(".jami-cell");
+      if (jamiCell) jamiCell.textContent = fmtSum(row.yetkazibBerishNarxiQQSBilan);
+      refreshOmborSummary();
+    } else {
+      row[field] = e.target.value;
+      pushFieldsUpdate("ombor", id, { [field]: row[field] });
+    }
+  });
+  body.addEventListener("click", (e) => {
+    const delId = e.target.dataset.del;
+    if (delId) {
+      RECENTLY_DELETED.add(delId);
+      STORE.ombor = STORE.ombor.filter((r) => r.id !== delId);
+      sbClient.from("ombor").delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
+      updateNavBadges();
+      renderOmbor();
+    }
+  });
+}
+
+function filterOmborRows(q) {
+  q = q.trim().toLowerCase();
+  document.querySelectorAll("#omborBody tr").forEach((tr) => {
+    const inputValues = Array.from(tr.querySelectorAll("input")).map((i) => i.value).join(" ");
+    const text = (tr.textContent + " " + inputValues).toLowerCase();
+    tr.style.display = !q || text.includes(q) ? "" : "none";
+  });
+}
+
+async function addOmborRow() {
+  const newRow = {
+    sana: todayISO(), hujjatRaqami: "", kontragentInn: "", kontragentNomi: "",
+    nomi: "", birlik: "", miqdor: 0, narx: 0, yetkazibBerishNarxi: 0, qqsSumma: 0, yetkazibBerishNarxiQQSBilan: 0, turi: "kirim"
+  };
+  const { data, error } = await sbClient.from("ombor").insert(toDbRow(OMBOR_DB_MAP, newRow)).select().single();
+  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  const row = fromDbRow(OMBOR_DB_MAP, data);
+  if (!STORE.ombor.some((r) => r.id === row.id)) STORE.ombor.push(row);
+  updateNavBadges();
+  renderOmbor();
+  toast("Yangi qator qo'shildi");
+}
+
+function openOmborImportModal() {
+  openModal(`
+    <h3>Ombor — Excel'dan import</h3>
+    <p class="modal-sub">didox.uz eksport qilgan "faktura kirim" .xlsx faylini yuklang (masalan: "kirim.xlsx"). Har bir hujjatdagi har bir mahsulot alohida qator sifatida qo'shiladi, takroriy qatorlar o'tkazib yuboriladi.</p>
+    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls</span></div>
+    <input type="file" id="impFile" accept=".xlsx,.xls" style="display:none">
+    <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  const dz = document.getElementById("dz");
+  const inp = document.getElementById("impFile");
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("drag");
+    if (e.dataTransfer.files[0]) handleOmborImport(e.dataTransfer.files[0]);
+  });
+  inp.addEventListener("change", (e) => {
+    if (e.target.files[0]) handleOmborImport(e.target.files[0]);
+  });
+}
+
+// Didox.uz "faktura kirim" faylida bitta hujjat bir yoki bir nechta qator
+// egallashi mumkin: agar hujjatda bitta mahsulot bo'lsa, mahsulot ma'lumoti
+// sarlavha qatorining o'zida keladi; bir nechta mahsulot bo'lsa, sarlavha
+// qatorida hujjat JAMI summasi, har bir mahsulot esa keyingi (hujjat
+// ma'lumotlarisiz) qatorlarda alohida-alohida keladi. Shu sabab "hujjat
+// konteksti" (sana/raqam/yetkazib beruvchi) oxirgi ko'rilgan sarlavha
+// qatoridan olib, joriy qatordagi mahsulot nomi bo'lgan har bir qatordan
+// bitta ombor yozuvi hosil qilamiz.
+function parseOmborLineItems(rows, col) {
+  let ctx = { sana: "", hujjatRaqami: "", status: "Подписан", kontragentInn: "", kontragentNomi: "" };
+  const items = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (row[col.id]) {
+      ctx = {
+        sana: normalizeDate(row[col.sana]),
+        hujjatRaqami: String(row[col.hujjat] || "").trim(),
+        status: String(row[col.status] || "Подписан").trim(),
+        kontragentInn: String(row[col.sellerInn] || "").trim(),
+        kontragentNomi: String(row[col.sellerNomi] || "").trim()
+      };
+    }
+    const rawNomi = String(row[col.nomi] || "").trim();
+    if (!rawNomi || !isValidStatus(ctx.status)) continue;
+    const nomi = canonicalizeOmborNomi(rawNomi);
+
+    const yetkazibBerishNarxi = toNum(row[col.base]);
+    const qqsSumma = toNum(row[col.qqsSumma]);
+    const yetkazibBerishNarxiQQSBilan = toNum(row[col.jami]) || (yetkazibBerishNarxi + qqsSumma);
+
+    items.push({
+      sana: ctx.sana, hujjatRaqami: ctx.hujjatRaqami,
+      kontragentInn: ctx.kontragentInn, kontragentNomi: ctx.kontragentNomi,
+      nomi, birlik: String(row[col.birlik] || "").trim(),
+      miqdor: toNum(row[col.miqdor]), narx: toNum(row[col.narx]),
+      yetkazibBerishNarxi, qqsSumma, yetkazibBerishNarxiQQSBilan
+    });
+  }
+  return items;
+}
+
+async function handleOmborImport(file) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+    const col = detectInvoiceColumns(rows[0]);
+    if (col.id === -1 || col.hujjat === -1 || col.nomi === -1) {
+      toast("Fayl tuzilishi tanilmadi — ustunlar mos kelmayapti", "err");
+      return;
+    }
+
+    const items = parseOmborLineItems(rows, col);
+    const candidates = [];
+    let skipped = 0;
+    for (const it of items) {
+      const dupExists = STORE.ombor.some((r) => r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana && r.nomi === it.nomi && Math.abs(r.miqdor - it.miqdor) < 0.001);
+      if (dupExists) { skipped++; continue; }
+      candidates.push(it);
+    }
+
+    if (candidates.length) {
+      const faylRow = await registerFaylUpload("ombor", file);
+      if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
+    }
+
+    let added = 0;
+    if (candidates.length) {
+      const { data, error } = await sbClient.from("ombor").insert(candidates.map((r) => toDbRow(OMBOR_DB_MAP, r))).select();
+      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      (data || []).forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+      added = (data || []).length;
+    }
+
+    updateNavBadges();
+    closeModal();
+    renderOmbor();
+    toast(`Import: ${added} ta mahsulot qo'shildi, ${skipped} ta takror o'tkazib yuborildi`);
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
+// Ilgari import qilingan "Ombor kirimi" yozuvlaridagi turli polimer nomlarini
+// (canonicalizeOmborNomi mos keladiganlarini) bir martalik ravishda umumiy
+// OMBOR_UNIFIED_NOMI nomiga o'tkazadi — faqat "nomi" maydoni o'zgaradi,
+// miqdorlar/qatorlar birlashtirilmaydi. Yangi importlar allaqachon
+// parseOmborLineItems orqali avtomat normallashtiriladi, bu tugma faqat
+// o'zgartirishdan OLDIN yuklab bo'lingan eski yozuvlarni tuzatish uchun.
+async function unifyOmborPolymerNames() {
+  const targets = omborKirimRows().filter((r) => canonicalizeOmborNomi(r.nomi) !== r.nomi);
+  if (!targets.length) { toast("Birlashtiriladigan yozuv topilmadi — barcha nomlar allaqachon mos"); return; }
+  const preview = [...new Set(targets.map((r) => r.nomi))].slice(0, 8);
+  openModal(`
+    <h3>Nomlarni birlashtirish</h3>
+    <p class="modal-sub">${targets.length} ta "Ombor kirimi" yozuvida mahsulot nomi <b>"${escapeHtml(OMBOR_UNIFIED_NOMI)}"</b> ga o'zgartiriladi. Miqdorlar birlashtirilmaydi — har bir qator alohida saqlanadi, faqat nomi bir xillashtiriladi:</p>
+    <ul class="faint" style="margin:0 0 8px 18px;">
+      ${preview.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}
+      ${targets.length > preview.length ? `<li>... va yana ${targets.length - preview.length} xil nom</li>` : ""}
+    </ul>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mConfirm">Ha, birlashtirish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mConfirm").addEventListener("click", () => {
+    targets.forEach((r) => {
+      r.nomi = OMBOR_UNIFIED_NOMI;
+      pushFieldsUpdate("ombor", r.id, { nomi: r.nomi });
+    });
+    closeModal();
+    renderOmbor();
+    toast(`${targets.length} ta yozuv "${OMBOR_UNIFIED_NOMI}" nomiga birlashtirildi`);
+  });
+}
+
+/* --------------------------------- Ishlab chiqarish --------------------------------- */
+// Har bir mahsulot uchun "kalkulyatsiya" (tarkib) belgilanadi — 1 birlik
+// tayyor mahsulot uchun qanday xomashyodan qancha miqdorda ketishi. Ishlab
+// chiqarish/sotuv jurnaliga yozuv qo'shilganda shu kalkulyatsiya asosida
+// tegishli xomashyo miqdori Ombordan avtomat ayiriladi (turi="chiqim" qatori
+// sifatida) va mahsulotning taxminiy tannarxi hisoblanadi.
+
+function mahsulotTannarx(m) {
+  return (m.tarkib || []).reduce((sum, item) => sum + toNum(item.norma) * avgOmborNarx(item.nomi), 0);
+}
+
+function mahsulotCardHtml(m) {
+  const tarkib = m.tarkib || [];
+  return `
+    <div class="card">
+      <div class="card-title">${escapeHtml(m.nomi || "(nomsiz)")} <span class="faint" style="font-weight:400;">/ ${escapeHtml(m.birlik || "")}</span></div>
+      <div class="report-line"><span class="label">Tannarx (1 ${escapeHtml(m.birlik || "birlik")})</span><span class="code"></span><span class="val">${fmtSum(mahsulotTannarx(m))}</span></div>
+      <div class="note" style="margin-top:10px;">
+        ${tarkib.length ? tarkib.map((t) => `<div>${escapeHtml(t.nomi)} — ${fmt(t.norma, 3)} ${escapeHtml(t.birlik || "")}</div>`).join("") : `<span class="faint">Tarkib kiritilmagan</span>`}
+      </div>
+      <div class="page-actions" style="margin-top:12px;">
+        <button class="btn btn-sm" data-edit-m="${m.id}">Tahrirlash</button>
+        <button class="btn btn-sm btn-danger" data-del-m="${m.id}">O'chirish</button>
+      </div>
+    </div>
+  `;
+}
+
+function icRowHtml(r) {
+  return `
+    <tr data-id="${r.id}">
+      <td class="mono">${escapeHtml(r.sana || "—")}</td>
+      <td>${escapeHtml(r.mahsulotNomi || "—")}</td>
+      <td class="num">${fmt(r.miqdor, 3)}</td>
+      <td>${escapeHtml(r.birlik || "")}</td>
+      <td class="num">${fmtSum(r.tannarx)}</td>
+      <td>${escapeHtml(r.izoh || "")}</td>
+      <td class="row-actions"><button class="icon-btn" data-del-ic="${r.id}" title="O'chirish">&#10005;</button></td>
+    </tr>
+  `;
+}
+
+function renderIshlabChiqarish() {
+  const main = document.getElementById("main");
+  const icRows = STORE.ishlabChiqarish.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Ishlab chiqarish</h1>
+        <p class="page-desc">Mahsulot kalkulyatsiyasi — 1 birlik tayyor mahsulot uchun qanday xomashyo va qancha miqdorda ketishi. Har safar sotuv/ishlab chiqarish yozuvi qo'shilganda ombordagi tegishli xomashyo avtomat kamaytiriladi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-primary" id="btnAddMahsulot">+ Mahsulot va kalkulyatsiya</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">Mahsulotlar</h2>
+      ${STORE.mahsulotlar.length ? `<div class="grid grid-3">${STORE.mahsulotlar.map((m) => mahsulotCardHtml(m)).join("")}</div>` : `<div class="empty-state"><div class="ic">&#127981;</div><div class="t">Mahsulot yo'q</div><div class="d">"+ Mahsulot va kalkulyatsiya" tugmasi orqali birinchi mahsulotingizni qo'shing.</div></div>`}
+    </div>
+
+    <div class="section">
+      <div class="page-header" style="margin-bottom:12px;">
+        <h2 class="section-title" style="margin:0;">Ishlab chiqarish / sotuv jurnali</h2>
+        <div class="page-actions"><button class="btn btn-primary" id="btnAddIC">+ Yozuv qo'shish</button></div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Sana</th><th>Mahsulot</th><th class="num">Miqdor</th><th>Birlik</th><th class="num">Tannarx</th><th>Izoh</th><th></th></tr></thead>
+          <tbody id="icBody">${icRows.length ? icRows.map((r) => icRowHtml(r)).join("") : ""}</tbody>
+        </table>
+      </div>
+      ${!icRows.length ? `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Hozircha yozuv yo'q</div><div class="d">"+ Yozuv qo'shish" orqali sotilgan/ishlab chiqarilgan mahsulotni qayd eting.</div></div>` : ""}
+    </div>
+  `;
+
+  document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
+  document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
+  main.querySelectorAll("[data-edit-m]").forEach((b) => b.addEventListener("click", () => openMahsulotModal(b.dataset.editM)));
+  main.querySelectorAll("[data-del-m]").forEach((b) => b.addEventListener("click", () => deleteMahsulot(b.dataset.delM)));
+  const icBody = document.getElementById("icBody");
+  if (icBody) icBody.addEventListener("click", (e) => {
+    const id = e.target.dataset.delIc;
+    if (id) deleteIshlabChiqarishEntry(id);
+  });
+}
+
+function omborNomiDatalistHtml() {
+  const names = [...new Set(omborKirimRows().map((r) => r.nomi).filter(Boolean))].sort();
+  return `<datalist id="omborNomiList">${names.map((n) => `<option value="${escapeHtml(n)}">`).join("")}</datalist>`;
+}
+
+function tarkibRowHtml(item) {
+  item = item || {};
+  return `
+    <div class="tarkib-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
+      <input class="search-input tarkib-nomi" list="omborNomiList" placeholder="Xomashyo nomi (Ombordagi nomi bilan bir xil bo'lishi kerak)" value="${escapeHtml(item.nomi || "")}" style="flex:2">
+      <input class="search-input tarkib-birlik" placeholder="Birlik" value="${escapeHtml(item.birlik || "")}" style="width:90px">
+      <input class="search-input tarkib-norma" placeholder="Norma" value="${item.norma ? fmt(item.norma, 4) : ""}" style="width:110px">
+      <button type="button" class="icon-btn tarkib-del" title="O'chirish">&#10005;</button>
+    </div>
+  `;
+}
+
+function openMahsulotModal(existingId) {
+  const existing = existingId ? STORE.mahsulotlar.find((m) => m.id === existingId) : null;
+  const tarkib = existing ? (existing.tarkib || []).slice() : [];
+  if (!tarkib.length) tarkib.push({});
+
+  openModal(`
+    <h3>${existing ? "Mahsulotni tahrirlash" : "Yangi mahsulot va kalkulyatsiya"}</h3>
+    <div class="field"><label>Mahsulot nomi</label><input id="mNomi" value="${escapeHtml(existing ? existing.nomi : "")}" placeholder="masalan: Polietilen truba 100mm"></div>
+    <div class="field"><label>O'lchov birligi</label><input id="mBirlik" value="${escapeHtml(existing ? existing.birlik : "")}" placeholder="masalan: metr, dona"></div>
+    <div class="card-title" style="margin-top:16px;">Tarkibi (1 birlik mahsulot uchun ketadigan xomashyo)</div>
+    <div id="tarkibRows">${tarkib.map((t) => tarkibRowHtml(t)).join("")}</div>
+    <button type="button" class="btn btn-sm" id="btnAddTarkibRow" style="margin-top:4px;">+ Xomashyo qo'shish</button>
+    ${omborNomiDatalistHtml()}
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mSave">Saqlash</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("btnAddTarkibRow").addEventListener("click", () => {
+    document.getElementById("tarkibRows").insertAdjacentHTML("beforeend", tarkibRowHtml({}));
+  });
+  document.getElementById("tarkibRows").addEventListener("click", (e) => {
+    if (e.target.classList.contains("tarkib-del")) e.target.closest(".tarkib-row").remove();
+  });
+  document.getElementById("mSave").addEventListener("click", () => saveMahsulotFromModal(existingId));
+}
+
+async function saveMahsulotFromModal(existingId) {
+  const nomi = document.getElementById("mNomi").value.trim();
+  const birlik = document.getElementById("mBirlik").value.trim();
+  if (!nomi) { toast("Mahsulot nomini kiriting", "err"); return; }
+  const tarkib = Array.from(document.querySelectorAll("#tarkibRows .tarkib-row")).map((row) => ({
+    nomi: row.querySelector(".tarkib-nomi").value.trim(),
+    birlik: row.querySelector(".tarkib-birlik").value.trim(),
+    norma: toNum(row.querySelector(".tarkib-norma").value)
+  })).filter((t) => t.nomi && t.norma > 0);
+
+  if (existingId) {
+    const { data, error } = await sbClient.from("mahsulotlar").update(toDbRow(MAHSULOT_DB_MAP, { nomi, birlik, tarkib })).eq("id", existingId).select().single();
+    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    const idx = STORE.mahsulotlar.findIndex((m) => m.id === existingId);
+    if (idx >= 0) STORE.mahsulotlar[idx] = fromDbRow(MAHSULOT_DB_MAP, data);
+  } else {
+    const { data, error } = await sbClient.from("mahsulotlar").insert(toDbRow(MAHSULOT_DB_MAP, { nomi, birlik, tarkib })).select().single();
+    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    STORE.mahsulotlar.push(fromDbRow(MAHSULOT_DB_MAP, data));
+  }
+  closeModal();
+  renderIshlabChiqarish();
+  toast("Saqlandi");
+}
+
+async function deleteMahsulot(id) {
+  RECENTLY_DELETED.add(id);
+  STORE.mahsulotlar = STORE.mahsulotlar.filter((m) => m.id !== id);
+  await sbClient.from("mahsulotlar").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
+  renderIshlabChiqarish();
+  toast("Mahsulot o'chirildi");
+}
+
+function openIshlabChiqarishModal() {
+  if (!STORE.mahsulotlar.length) { toast("Avval mahsulot va kalkulyatsiya qo'shing", "err"); return; }
+  openModal(`
+    <h3>Ishlab chiqarish / sotuv yozuvi</h3>
+    <div class="field"><label>Mahsulot</label>
+      <select id="icMahsulot">${STORE.mahsulotlar.map((m) => `<option value="${m.id}">${escapeHtml(m.nomi)}</option>`).join("")}</select>
+    </div>
+    <div class="field"><label>Sana</label><input type="date" id="icSana" value="${todayISO()}"></div>
+    <div class="field"><label>Miqdor</label><input id="icMiqdor" placeholder="masalan: 120"></div>
+    <div class="field"><label>Izoh (ixtiyoriy)</label><input id="icIzoh" placeholder=""></div>
+    <div class="note" id="icPreview"></div>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mSave">Saqlash</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("icMahsulot").addEventListener("change", updateIshlabChiqarishPreview);
+  document.getElementById("icMiqdor").addEventListener("input", updateIshlabChiqarishPreview);
+  updateIshlabChiqarishPreview();
+  document.getElementById("mSave").addEventListener("click", addIshlabChiqarishEntry);
+}
+
+function updateIshlabChiqarishPreview() {
+  const el = document.getElementById("icPreview");
+  if (!el) return;
+  const mahsulotId = document.getElementById("icMahsulot").value;
+  const miqdor = toNum(document.getElementById("icMiqdor").value);
+  const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
+  if (!m || !miqdor) { el.innerHTML = `<span class="faint">Mahsulot va miqdorni kiriting</span>`; return; }
+
+  const qoldiqMap = {};
+  omborQoldiqList().forEach((q) => { qoldiqMap[q.nomi] = q.qoldiq; });
+
+  let tannarx = 0;
+  const tarkib = m.tarkib || [];
+  const lines = tarkib.map((t) => {
+    const need = toNum(t.norma) * miqdor;
+    tannarx += need * avgOmborNarx(t.nomi);
+    const qoldiq = qoldiqMap[t.nomi] || 0;
+    const yetarli = qoldiq >= need - 0.0001;
+    return `<div style="${yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(t.nomi)}: ${fmt(need, 3)} ${escapeHtml(t.birlik || "")} sarflanadi (qoldiq: ${fmt(qoldiq, 3)})${yetarli ? "" : " — YETARLI EMAS"}</div>`;
+  });
+  el.innerHTML = `${lines.join("") || `<span class="faint">Bu mahsulotda tarkib belgilanmagan</span>`}<div style="margin-top:8px;"><b>Taxminiy tannarx: ${fmtSum(tannarx)}</b></div>`;
+}
+
+// Mahsulot kalkulyatsiyasi (tarkib) asosida bitta ishlab chiqarish/sotuv
+// yozuvini yaratadi: "ishlab_chiqarish" jadvaliga bitta qator + shu
+// mahsulotning har bir xomashyo tarkibiy qismi uchun "ombor" jadvaliga
+// turi="chiqim" qatorlari yoziladi (hujjatRaqami="IC-<yozuv id>" — shu orqali
+// keyinchalik birgalikda o'chirish/topish mumkin). "Ombor chiqimi" bo'limidan
+// mahsulot nomi kiritilganda ham, "Ishlab chiqarish" jurnalidan qo'shilganda
+// ham xuddi shu funksiya ishlatiladi — ikkala joyda bitta manba/mantiq.
+async function performMahsulotConsumption(m, miqdor, sana, izoh) {
+  let tannarx = 0;
+  const consumptions = (m.tarkib || []).map((t) => {
+    const need = toNum(t.norma) * miqdor;
+    tannarx += need * avgOmborNarx(t.nomi);
+    return { nomi: t.nomi, birlik: t.birlik, miqdor: need };
+  }).filter((c) => c.miqdor > 0);
+
+  const { data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, {
+    sana, mahsulotId: m.id, mahsulotNomi: m.nomi, miqdor, birlik: m.birlik, tannarx, izoh
+  })).select().single();
+  if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return false; }
+  const icRow = fromDbRow(ISHLAB_CHIQARISH_DB_MAP, data);
+  STORE.ishlabChiqarish.push(icRow);
+
+  if (consumptions.length) {
+    const omborRows = consumptions.map((c) => toDbRow(OMBOR_DB_MAP, {
+      sana, hujjatRaqami: `IC-${icRow.id}`, kontragentInn: "", kontragentNomi: `Ishlab chiqarish: ${m.nomi}`,
+      nomi: c.nomi, birlik: c.birlik, miqdor: c.miqdor, narx: 0, yetkazibBerishNarxi: 0, qqsSumma: 0, yetkazibBerishNarxiQQSBilan: 0, turi: "chiqim"
+    }));
+    const { data: omborData, error: omborErr } = await sbClient.from("ombor").insert(omborRows).select();
+    if (omborErr) { console.error(omborErr); toast("Yozildi, lekin ombordan ayirishda xatolik", "err"); }
+    else (omborData || []).forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+  }
+
+  updateNavBadges();
+  return true;
+}
+
+// To'g'ridan-to'g'ri xomashyo chiqimi — mahsulot kalkulyatsiyasisiz, bitta
+// nomdagi xomashyo Ombordan shu miqdorda to'g'ridan-to'g'ri ayiriladi
+// ("Ombor chiqimi"da kiritilgan nom Ombor kirimidagi xomashyo nomiga
+// to'g'ridan-to'g'ri mos kelganda ishlatiladi).
+async function performXomashyoChiqim(nomi, birlik, miqdor, sana, izoh) {
+  const row = {
+    sana, hujjatRaqami: "", kontragentInn: "", kontragentNomi: izoh || "Qo'lda kiritilgan chiqim",
+    nomi, birlik, miqdor, narx: 0, yetkazibBerishNarxi: 0, qqsSumma: 0, yetkazibBerishNarxiQQSBilan: 0, turi: "chiqim"
+  };
+  const { data, error } = await sbClient.from("ombor").insert(toDbRow(OMBOR_DB_MAP, row)).select().single();
+  if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return false; }
+  STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, data));
+  updateNavBadges();
+  return true;
+}
+
+async function addIshlabChiqarishEntry() {
+  const mahsulotId = document.getElementById("icMahsulot").value;
+  const sana = document.getElementById("icSana").value || todayISO();
+  const miqdor = toNum(document.getElementById("icMiqdor").value);
+  const izoh = document.getElementById("icIzoh").value.trim();
+  const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
+  if (!m) { toast("Mahsulot tanlanmadi", "err"); return; }
+  if (!miqdor || miqdor <= 0) { toast("Miqdorni kiriting", "err"); return; }
+
+  const ok = await performMahsulotConsumption(m, miqdor, sana, izoh);
+  if (!ok) return;
+
+  closeModal();
+  renderIshlabChiqarish();
+  toast("Yozildi, ombordagi xomashyo avtomat kamaytirildi");
+}
+
+async function deleteIshlabChiqarishEntry(id) {
+  RECENTLY_DELETED.add(id);
+  const linked = STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `IC-${id}`);
+  STORE.ishlabChiqarish = STORE.ishlabChiqarish.filter((r) => r.id !== id);
+  STORE.ombor = STORE.ombor.filter((r) => !(r.turi === "chiqim" && r.hujjatRaqami === `IC-${id}`));
+  await sbClient.from("ishlab_chiqarish").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
+  if (linked.length) {
+    linked.forEach((r) => RECENTLY_DELETED.add(r.id));
+    await sbClient.from("ombor").delete().in("id", linked.map((r) => r.id)).then(({ error }) => { if (error) console.error(error); });
+  }
+  updateNavBadges();
+  // Ombor chiqimi tabidan chaqirilganda ham to'g'ri sahifa qayta chizilishi
+  // uchun "Ishlab chiqarish"ga majburan o'tkazib yubormay, joriy sahifani
+  // (qaysi bo'lsa ham) qayta render qilamiz.
+  PAGES[CURRENT_PAGE].render();
+  toast("O'chirildi, hom ashyo qoldig'i tiklandi");
+}
+
+function omborChiqimNomiDatalistHtml() {
+  const rawNames = omborKirimRows().map((r) => r.nomi).filter(Boolean);
+  const mahsulotNames = STORE.mahsulotlar.map((m) => m.nomi).filter(Boolean);
+  const names = [...new Set([...rawNames, ...mahsulotNames])].sort();
+  return `<datalist id="omborChiqimNomiList">${names.map((n) => `<option value="${escapeHtml(n)}">`).join("")}</datalist>`;
+}
+
+// Kiritilgan nom Ombor kirimidagi biror xomashyo nomiga to'g'ridan-to'g'ri
+// mos kelsa — "xomashyo" (birga-bir ayiriladi). Aks holda Ishlab
+// chiqarishdagi biror mahsulot nomiga mos kelsa — "mahsulot" (kalkulyatsiya
+// bo'yicha hisoblab ayiriladi). Hech biriga mos kelmasa — "none".
+function resolveOmborChiqimTarget(nomi) {
+  if (omborKirimRows().some((r) => r.nomi === nomi)) return { kind: "xomashyo" };
+  const mahsulot = STORE.mahsulotlar.find((m) => m.nomi === nomi);
+  if (mahsulot) return { kind: "mahsulot", mahsulot };
+  return { kind: "none" };
+}
+
+function openOmborChiqimModal() {
+  openModal(`
+    <h3>Ombor chiqimi</h3>
+    <p class="modal-sub">Nom kiriting: agar u Ombor kirimidagi xomashyo nomi bilan bir xil bo'lsa, kiritilgan miqdor to'g'ridan-to'g'ri o'sha xomashyodan ayiriladi. Agar u Ishlab chiqarishdagi mahsulot nomi bo'lsa, kalkulyatsiya (tarkib) asosida mos xomashyolar miqdori sotilgan mahsulot miqdoriga ko'paytirilib ayiriladi.</p>
+    <div class="field"><label>Nomi</label><input id="ocNomi" list="omborChiqimNomiList" placeholder="Xomashyo yoki mahsulot nomi"></div>
+    <div class="field"><label>Sana</label><input type="date" id="ocSana" value="${todayISO()}"></div>
+    <div class="field"><label>Miqdor</label><input id="ocMiqdor" placeholder="masalan: 50"></div>
+    <div class="field"><label>Izoh (ixtiyoriy)</label><input id="ocIzoh" placeholder=""></div>
+    <div class="note" id="ocPreview"></div>
+    ${omborChiqimNomiDatalistHtml()}
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mSave">Saqlash</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  const update = () => updateOmborChiqimPreview();
+  document.getElementById("ocNomi").addEventListener("input", update);
+  document.getElementById("ocMiqdor").addEventListener("input", update);
+  update();
+  document.getElementById("mSave").addEventListener("click", saveOmborChiqim);
+}
+
+function updateOmborChiqimPreview() {
+  const el = document.getElementById("ocPreview");
+  if (!el) return;
+  const nomi = document.getElementById("ocNomi").value.trim();
+  const miqdor = toNum(document.getElementById("ocMiqdor").value);
+  if (!nomi || !miqdor) { el.innerHTML = `<span class="faint">Nom va miqdorni kiriting</span>`; return; }
+
+  const qoldiqMap = {};
+  omborQoldiqList().forEach((q) => { qoldiqMap[q.nomi] = q.qoldiq; });
+  const target = resolveOmborChiqimTarget(nomi);
+
+  if (target.kind === "xomashyo") {
+    const qoldiq = qoldiqMap[nomi] || 0;
+    const yetarli = qoldiq >= miqdor - 0.0001;
+    el.innerHTML = `<div class="faint" style="margin-bottom:4px;">Xomashyo sifatida aniqlandi — to'g'ridan-to'g'ri ayiriladi:</div><div style="${yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(nomi)}: ${fmt(miqdor, 3)} (qoldiq: ${fmt(qoldiq, 3)})${yetarli ? "" : " — YETARLI EMAS"}</div>`;
+  } else if (target.kind === "mahsulot") {
+    const m = target.mahsulot;
+    let tannarx = 0;
+    const lines = (m.tarkib || []).map((t) => {
+      const need = toNum(t.norma) * miqdor;
+      tannarx += need * avgOmborNarx(t.nomi);
+      const qoldiq = qoldiqMap[t.nomi] || 0;
+      const yetarli = qoldiq >= need - 0.0001;
+      return `<div style="${yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(t.nomi)}: ${fmt(need, 3)} ${escapeHtml(t.birlik || "")} sarflanadi (qoldiq: ${fmt(qoldiq, 3)})${yetarli ? "" : " — YETARLI EMAS"}</div>`;
+    });
+    el.innerHTML = `<div class="faint" style="margin-bottom:4px;">Mahsulot sifatida aniqlandi — kalkulyatsiya bo'yicha:</div>${lines.join("") || `<span class="faint">Bu mahsulotda tarkib belgilanmagan</span>`}<div style="margin-top:8px;"><b>Taxminiy tannarx: ${fmtSum(tannarx)}</b></div>`;
+  } else {
+    el.innerHTML = `<span style="color:var(--danger,#e5484d);font-weight:600;">Bu nom na Ombor kirimidagi xomashyo, na Ishlab chiqarishdagi mahsulot sifatida topilmadi.</span>`;
+  }
+}
+
+async function saveOmborChiqim() {
+  const nomi = document.getElementById("ocNomi").value.trim();
+  const sana = document.getElementById("ocSana").value || todayISO();
+  const miqdor = toNum(document.getElementById("ocMiqdor").value);
+  const izoh = document.getElementById("ocIzoh").value.trim();
+  if (!nomi) { toast("Nomni kiriting", "err"); return; }
+  if (!miqdor || miqdor <= 0) { toast("Miqdorni kiriting", "err"); return; }
+
+  const target = resolveOmborChiqimTarget(nomi);
+  if (target.kind === "none") { toast("Bu nom xomashyo yoki mahsulot sifatida topilmadi", "err"); return; }
+
+  const ref = target.kind === "xomashyo" ? omborKirimRows().find((r) => r.nomi === nomi) : null;
+  const ok = target.kind === "xomashyo"
+    ? await performXomashyoChiqim(nomi, ref ? ref.birlik : "", miqdor, sana, izoh)
+    : await performMahsulotConsumption(target.mahsulot, miqdor, sana, izoh);
+  if (!ok) return;
+
+  closeModal();
+  renderOmborChiqim();
+  toast("Chiqim qo'shildi, ombor qoldig'i yangilandi");
+}
+
+// Ombor chiqimi — Excel'dan import. Ombor kirimi bilan AYNAN BIR XIL didox.uz
+// "faktura" eksport formatini kutadi (detectInvoiceColumns — Sana/Hujjat №/
+// Nomi/Birlik/Miqdor/Narxi/Yetkazib berish narxi/QQS summasi/Yetkazib berish
+// narxi QQS bilan ustunlari o'sha fayldan xuddi shunday o'qiladi). Yagona
+// farq: manba/izoh maydoni SOTUVCHI emas XARIDOR (Покупатель) nomidan
+// olinadi — chiqim uchun mazmunli kontragent shu, chunki mahsulot xaridorga
+// jo'natiladi — va har bir qator turi="chiqim" bilan yoziladi. Ombor kirimiga
+// xos polimer nomlarini birlashtirish qoidasi (canonicalizeOmborNomi) bu
+// yerda QO'LLANILMAYDI.
+function parseOmborChiqimLineItems(rows, col) {
+  let ctx = { sana: "", hujjatRaqami: "", status: "Подписан", kontragentInn: "", kontragentNomi: "" };
+  const items = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (row[col.id]) {
+      ctx = {
+        sana: normalizeDate(row[col.sana]),
+        hujjatRaqami: String(row[col.hujjat] || "").trim(),
+        status: String(row[col.status] || "Подписан").trim(),
+        kontragentInn: String(row[col.buyerInn] || "").trim(),
+        kontragentNomi: String(row[col.buyerNomi] || "").trim()
+      };
+    }
+    const nomi = String(row[col.nomi] || "").trim();
+    if (!nomi || !isValidStatus(ctx.status)) continue;
+
+    const yetkazibBerishNarxi = toNum(row[col.base]);
+    const qqsSumma = toNum(row[col.qqsSumma]);
+    const yetkazibBerishNarxiQQSBilan = toNum(row[col.jami]) || (yetkazibBerishNarxi + qqsSumma);
+
+    items.push({
+      sana: ctx.sana, hujjatRaqami: ctx.hujjatRaqami,
+      kontragentInn: ctx.kontragentInn, kontragentNomi: ctx.kontragentNomi,
+      nomi, birlik: String(row[col.birlik] || "").trim(),
+      miqdor: toNum(row[col.miqdor]), narx: toNum(row[col.narx]),
+      yetkazibBerishNarxi, qqsSumma, yetkazibBerishNarxiQQSBilan,
+      turi: "chiqim"
+    });
+  }
+  return items;
+}
+
+async function handleOmborChiqimImport(file) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+    const col = detectInvoiceColumns(rows[0]);
+    if (col.id === -1 || col.hujjat === -1 || col.nomi === -1) {
+      toast("Fayl tuzilishi tanilmadi — ustunlar mos kelmayapti", "err");
+      return;
+    }
+
+    const items = parseOmborChiqimLineItems(rows, col);
+    if (!items.length) { toast("Import qilinadigan qator topilmadi", "err"); return; }
+
+    const candidates = [];
+    let skipped = 0;
+    for (const it of items) {
+      const dupExists = STORE.ombor.some((r) => r.turi === "chiqim" && r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana && r.nomi === it.nomi && Math.abs(r.miqdor - it.miqdor) < 0.001);
+      if (dupExists) { skipped++; continue; }
+      candidates.push(it);
+    }
+
+    if (candidates.length) {
+      const faylRow = await registerFaylUpload("ombor", file);
+      if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
+    }
+
+    let added = 0;
+    if (candidates.length) {
+      const { data, error } = await sbClient.from("ombor").insert(candidates.map((r) => toDbRow(OMBOR_DB_MAP, r))).select();
+      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      (data || []).forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+      added = (data || []).length;
+    }
+
+    updateNavBadges();
+    closeModal();
+    renderOmborChiqim();
+    toast(`Import: ${added} ta chiqim qo'shildi, ${skipped} ta takror o'tkazib yuborildi`);
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
+function openOmborChiqimImportModal() {
+  openModal(`
+    <h3>Ombor chiqimi — Excel'dan import</h3>
+    <p class="modal-sub">didox.uz eksport qilgan "faktura chiqim" (sotuv) .xlsx faylini yuklang — Ombor kirimidagi bilan bir xil format. Har bir hujjatdagi har bir mahsulot alohida "chiqim" qatori sifatida qo'shiladi (Manba/izoh — xaridor nomi), takroriy qatorlar o'tkazib yuboriladi.</p>
+    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls</span></div>
+    <input type="file" id="impFile" accept=".xlsx,.xls" style="display:none">
+    <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  const dz = document.getElementById("dz");
+  const inp = document.getElementById("impFile");
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("drag");
+    if (e.dataTransfer.files[0]) handleOmborChiqimImport(e.dataTransfer.files[0]);
+  });
+  inp.addEventListener("change", (e) => {
+    if (e.target.files[0]) handleOmborChiqimImport(e.target.files[0]);
+  });
+}
+
+/* --------------------------------- Bank --------------------------------- */
+
+function renderBank() {
+  const filtered = getFilteredRows(STORE.bank);
+  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const main = document.getElementById("main");
+  const t = computeTotals();
+  const periodKirim = filtered.reduce((a, r) => a + toNum(r.kirim), 0);
+  const periodChiqim = filtered.reduce((a, r) => a + toNum(r.chiqim), 0);
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Bank harakati</h1>
+        <p class="page-desc">Hisob raqami bo'yicha kirim/chiqim operatsiyalari. Qoldiq F1 hisobotidagi "Pul mablag'lari"ga avtomatik qo'shiladi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImport">Fayldan import</button>
+        <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml('"Joriy qoldiq" har doim "Davr"ning oxirgi sanasiga nisbatan hisoblanadi.')}
+
+    <div class="grid grid-4 section">
+      <div class="card stat-card">
+        <div class="stat-label">Boshlang'ich qoldiq</div>
+        <input class="cell-input num" id="inOpening" style="font-size:19px;font-weight:700;padding:2px 4px;" value="${fmt(STORE.settings.bankOpeningBalance)}">
+      </div>
+      <div class="card stat-card"><div class="stat-label">Davr kirimi</div><div class="stat-value" id="statBankKirim">${fmtSum(periodKirim)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Davr chiqimi</div><div class="stat-value" id="statBankChiqim">${fmtSum(periodChiqim)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Joriy qoldiq</div><div class="stat-value" id="statBankQoldiq">${fmtSum(t.bankQoldiq)}</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sana</th><th>Hujjat №</th><th>Kontragent</th><th>INN</th><th>Tavsif</th>
+            <th class="num">Kirim</th><th class="num">Chiqim</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="bankBody">
+          ${rows.map(bankRowHtml).join("")}
+        </tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#8862;</div><div class="t">Bank operatsiyalari yo'q</div><div class="d">"Fayldan import" tugmasi orqali bank ko'chirmasini (masalan, Bank.xlsx) yuklang yoki qo'lda kiriting.</div></div>` : ""}
+    <div class="note">Bank.xlsx (ABS/Klient-Bank ko'chirmasi) formati avtomatik tanib olinadi — sana, kontragent/INN, hujjat №, "Оборот Дебет" (chiqim) va "Оборот Кредит" (kirim) ustunlari, shuningdek davr boshidagi qoldiq faylning o'zidan olinadi. Boshqa formatdagi fayl uchun ustunlar tartibi: <b>sana, hujjat №, kontragent, tavsif, kirim, chiqim</b> bo'lishi kerak.</div>
+  `;
+
+  document.getElementById("btnAddRow").addEventListener("click", addBankRow);
+  document.getElementById("btnImport").addEventListener("click", openBankImportModal);
+  document.getElementById("inOpening").addEventListener("change", (e) => {
+    STORE.settings.bankOpeningBalance = toNum(e.target.value);
+    saveSettingsToDb({ bankOpeningBalance: STORE.settings.bankOpeningBalance });
+    saveStore();
+    refreshBankSummary();
+  });
+  bindDateRangeBar(renderBank);
+  bindBankRowEvents();
+}
+
+function bankRowHtml(r) {
+  return `
+    <tr data-id="${r.id}">
+      <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
+      <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
+      <td><input class="cell-input" data-f="kontragent" value="${escapeHtml(r.kontragent || "")}" style="min-width:170px"></td>
+      <td><input class="cell-input" data-f="kontragentInn" value="${escapeHtml(r.kontragentInn || "")}" style="min-width:90px"></td>
+      <td><input class="cell-input" data-f="tavsif" value="${escapeHtml(r.tavsif || "")}" style="min-width:220px" title="${escapeHtml(r.tavsif || "")}"></td>
+      <td class="num"><input class="cell-input num" data-f="kirim" value="${fmt(r.kirim)}"></td>
+      <td class="num"><input class="cell-input num" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}">&#10005;</button></td>
+    </tr>
+  `;
+}
+
+function refreshBankSummary() {
+  const t = computeTotals();
+  const filtered = getFilteredRows(STORE.bank);
+  const periodKirim = filtered.reduce((a, r) => a + toNum(r.kirim), 0);
+  const periodChiqim = filtered.reduce((a, r) => a + toNum(r.chiqim), 0);
+  const elK = document.getElementById("statBankKirim");
+  const elC = document.getElementById("statBankChiqim");
+  const elQ = document.getElementById("statBankQoldiq");
+  if (elK) elK.textContent = fmtSum(periodKirim);
+  if (elC) elC.textContent = fmtSum(periodChiqim);
+  if (elQ) elQ.textContent = fmtSum(t.bankQoldiq);
+}
+
+function bindBankRowEvents() {
+  const body = document.getElementById("bankBody");
+  if (!body) return;
+  body.addEventListener("change", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const row = STORE.bank.find((r) => r.id === tr.dataset.id);
+    if (!row) return;
+    const field = e.target.dataset.f;
+    if (!field) return;
+    row[field] = field === "kirim" || field === "chiqim" ? toNum(e.target.value) : e.target.value;
+    pushFieldsUpdate("bank", row.id, { [field]: row[field] });
+    saveStore();
+    if (field === "kirim" || field === "chiqim") {
+      refreshBankSummary();
+    }
+  });
+  body.addEventListener("click", (e) => {
+    const delId = e.target.dataset.del;
+    if (delId) {
+      RECENTLY_DELETED.add(delId);
+      STORE.bank = STORE.bank.filter((r) => r.id !== delId);
+      sbClient.from("bank").delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
+      saveStore();
+      renderBank();
+    }
+  });
+}
+
+async function addBankRow() {
+  const newRow = { sana: todayISO(), hujjatRaqami: "", kontragent: "", kontragentInn: "", tavsif: "", kirim: 0, chiqim: 0 };
+  const { data, error } = await sbClient.from("bank").insert(toDbRow(BANK_DB_MAP, newRow)).select().single();
+  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  const row = fromDbRow(BANK_DB_MAP, data);
+  if (!STORE.bank.some((r) => r.id === row.id)) STORE.bank.push(row);
+  saveStore();
+  renderBank();
+}
+
+/* ------------------------------- Ish haqi ------------------------------- */
+// I.X. yuklama.xltx (Ilova №4 — xodimlar bo'yicha tafsilot) andazasi asosida.
+// Ijtimoiy soliq — hisoblangan ish haqidan ish beruvchi tomonidan qo'shimcha to'lanadi (xodim ish haqidan ushlanmaydi).
+// NDFL va INPS — soliq bazasidan (ish haqi minus imtiyoz) xodim ish haqidan ushlab qolinadi;
+// byudjetga to'lanadigan NDFL = hisoblangan NDFL − INPS badali (INPS shaxsiy jamg'arma hisobiga yo'naltiriladi).
+
+function computeIshHaqiRow(r, s) {
+  const oylik = toNum(r.oyliqSumma);
+  const imtiyoz = toNum(r.imtiyozSumma);
+  const soliqBazasi = Math.max(oylik - imtiyoz, 0);
+  const ijtimoiySoliq = oylik * (toNum(s.ijtimoiySoliqStavka) / 100);
+  const ndfl = soliqBazasi * (toNum(s.ndflStavka) / 100);
+  const inps = soliqBazasi * (toNum(s.inpsStavka) / 100);
+  const ndflByudjetga = ndfl - inps;
+  const sofIshHaqi = oylik - ndfl - inps;
+  return { oylik, imtiyoz, soliqBazasi, ijtimoiySoliq, ndfl, inps, ndflByudjetga, sofIshHaqi };
+}
+
+function computeIshHaqiTotals() {
+  const s = STORE.settings;
+  const rows = getFilteredRows(STORE.ishHaqi);
+  const totals = { count: rows.length, oylikJami: 0, imtiyozJami: 0, soliqBazasiJami: 0, ijtimoiySoliqJami: 0, ndflJami: 0, inpsJami: 0, ndflByudjetgaJami: 0, sofIshHaqiJami: 0 };
+  rows.forEach((r) => {
+    const c = computeIshHaqiRow(r, s);
+    totals.oylikJami += c.oylik;
+    totals.imtiyozJami += c.imtiyoz;
+    totals.soliqBazasiJami += c.soliqBazasi;
+    totals.ijtimoiySoliqJami += c.ijtimoiySoliq;
+    totals.ndflJami += c.ndfl;
+    totals.inpsJami += c.inps;
+    totals.ndflByudjetgaJami += c.ndflByudjetga;
+    totals.sofIshHaqiJami += c.sofIshHaqi;
+  });
+  totals.ishBeruvchiXarajati = totals.oylikJami + totals.ijtimoiySoliqJami;
+  return totals;
+}
+
+function renderIshHaqi() {
+  const filtered = getFilteredRows(STORE.ishHaqi);
+  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const main = document.getElementById("main");
+  const t = computeIshHaqiTotals();
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Ish haqi</h1>
+        <p class="page-desc">Xodimlarga hisoblangan ish haqi — "Ish haqi hisoboti"ga avtomatik integratsiya bo'ladi, alohida qayta kiritish shart emas.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImportIshHaqi">Excel'dan import</button>
+        <button class="btn" id="btnExportIshHaqi">Excel'ga eksport</button>
+        <button class="btn btn-primary" id="btnAddRow">+ Xodim yozuvi qo'shish</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml()}
+
+    <div class="grid grid-4 section">
+      <div class="card stat-card"><div class="stat-label">Hisoblangan ish haqi (jami)</div><div class="stat-value" id="statOylik">${fmtSum(t.oylikJami)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Ijtimoiy soliq</div><div class="stat-value" id="statIjtimoiy">${fmtSum(t.ijtimoiySoliqJami)}</div></div>
+      <div class="card stat-card"><div class="stat-label">NDFL + INPS</div><div class="stat-value" id="statSoliqlar">${fmtSum(t.ndflJami + t.inpsJami)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Sof ish haqi (jami)</div><div class="stat-value" id="statSof">${fmtSum(t.sofIshHaqiJami)}</div></div>
+    </div>
+
+    <div class="toolbar">
+      <input class="search-input" id="searchBox" placeholder="Qidirish: F.I.O, lavozim, PINFL...">
+      <div class="spacer"></div>
+      <span class="faint">${rows.length} ta yozuv</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Sana</th>
+            <th>F.I.O.</th>
+            <th>Lavozimi</th>
+            <th>PINFL</th>
+            <th>Turi</th>
+            <th>Holati</th>
+            <th class="num">Hisoblangan ish haqi</th>
+            <th class="num">Imtiyoz</th>
+            <th class="num">Ijtimoiy soliq</th>
+            <th class="num">NDFL</th>
+            <th class="num">INPS</th>
+            <th class="num">Sof ish haqi</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="ishHaqiBody">
+          ${rows.length ? rows.map(ishHaqiRowHtml).join("") : ""}
+        </tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128101;</div><div class="t">Xodimlar yo'q</div><div class="d">"+ Xodim yozuvi qo'shish" tugmasi orqali har oy uchun har bir xodimning hisoblangan ish haqini kiriting.</div></div>` : ""}
+    <div class="note">Ijtimoiy soliq (${fmt(STORE.settings.ijtimoiySoliqStavka)}%) — ish beruvchi xarajati, ish haqidan ushlanmaydi. NDFL (${fmt(STORE.settings.ndflStavka)}%) va INPS (${fmt(STORE.settings.inpsStavka, 1)}%) — xodim ish haqidan ushlab qolinadi. Stavkalarni "Sozlamalar" bo'limida o'zgartirish mumkin.</div>
+  `;
+
+  document.getElementById("btnAddRow").addEventListener("click", addIshHaqiRow);
+  document.getElementById("searchBox").addEventListener("input", (e) => filterIshHaqiRows(e.target.value));
+  document.getElementById("btnExportIshHaqi").addEventListener("click", exportIshHaqiXlsx);
+  document.getElementById("btnImportIshHaqi").addEventListener("click", openIshHaqiImportModal);
+  bindDateRangeBar(renderIshHaqi);
+  bindIshHaqiRowEvents();
+}
+
+function exportIshHaqiXlsx() {
+  const rows = STORE.ishHaqi.slice().sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
+  const aoa = [["Sana", "F.I.O.", "Lavozimi", "PINFL", "Turi", "Holati", "Hisoblangan ish haqi", "Imtiyoz summasi"]];
+  rows.forEach((r) => aoa.push([r.sana, r.fio, r.lavozimi, r.pinfl, r.turi, r.holati, toNum(r.oyliqSumma), toNum(r.imtiyozSumma)]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 12 }, { wch: 28 }, { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ish haqi");
+  XLSX.writeFile(wb, `BUX2112_ish_haqi_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
+}
+
+function openIshHaqiImportModal() {
+  openGenericImportModal(
+    "Ish haqi — Excel'dan import",
+    `Ustunlar tartibi: <b>sana, F.I.O., lavozimi, PINFL, turi, holati, hisoblangan ish haqi, imtiyoz summasi</b>. Bu bo'limdan avval eksport qilingan fayl to'g'ridan-to'g'ri qayta import qilinishi mumkin, takroriy yozuvlar o'tkazib yuboriladi.`,
+    ".xlsx,.xls",
+    handleIshHaqiImport
+  );
+}
+
+async function handleIshHaqiImport(file) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+    let start = 0;
+    const first = rows[0].map((c) => String(c).toLowerCase());
+    const looksLikeHeader = first.some((c) => /f\.?i\.?o|ф\.и\.о|pinfl|пинфл|sana|дата/.test(c));
+    if (looksLikeHeader) start = 1;
+
+    const candidates = [];
+    let skipped = 0;
+    for (let i = start; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row.length || row.every((c) => c === "")) continue;
+      const sana = normalizeDate(row[0]);
+      const fio = String(row[1] || "").trim();
+      const lavozimi = String(row[2] || "").trim();
+      const pinfl = String(row[3] || "").trim();
+      const turi = String(row[4] || "").trim() === "Norezident" ? "Norezident" : "Rezident";
+      const holati = String(row[5] || "").trim() === "Tugatilgan" ? "Tugatilgan" : "Ishlayapti";
+      const oyliqSumma = toNum(row[6]);
+      const imtiyozSumma = toNum(row[7]);
+      if (!fio && !oyliqSumma) continue;
+
+      const dup = STORE.ishHaqi.some((r) => r.pinfl === pinfl && r.sana === sana && r.fio === fio && Math.abs(toNum(r.oyliqSumma) - oyliqSumma) < 1);
+      if (dup) { skipped++; continue; }
+
+      candidates.push({ sana, fio, lavozimi, pinfl, turi, holati, oyliqSumma, imtiyozSumma });
+    }
+
+    if (candidates.length) {
+      const faylRow = await registerFaylUpload("ishHaqi", file);
+      if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
+    }
+
+    let added = 0;
+    if (candidates.length) {
+      const { data, error } = await sbClient.from("ish_haqi").insert(candidates.map((r) => toDbRow(ISHHAQI_DB_MAP, r))).select();
+      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      (data || []).forEach((row) => STORE.ishHaqi.push(fromDbRow(ISHHAQI_DB_MAP, row)));
+      added = (data || []).length;
+    }
+
+    saveStore();
+    closeModal();
+    renderIshHaqi();
+    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}`);
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
+function ishHaqiRowHtml(r) {
+  const c = computeIshHaqiRow(r, STORE.settings);
+  return `
+    <tr data-id="${r.id}">
+      <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
+      <td><input class="cell-input" data-f="fio" value="${escapeHtml(r.fio || "")}" style="min-width:170px"></td>
+      <td><input class="cell-input" data-f="lavozimi" value="${escapeHtml(r.lavozimi || "")}" style="min-width:120px"></td>
+      <td><input class="cell-input" data-f="pinfl" value="${escapeHtml(r.pinfl || "")}" style="min-width:110px"></td>
+      <td>
+        <select class="cell-input" data-f="turi">
+          <option value="Rezident" ${r.turi !== "Norezident" ? "selected" : ""}>Rezident</option>
+          <option value="Norezident" ${r.turi === "Norezident" ? "selected" : ""}>Norezident</option>
+        </select>
+      </td>
+      <td>
+        <select class="cell-input" data-f="holati">
+          <option value="Ishlayapti" ${r.holati !== "Tugatilgan" ? "selected" : ""}>Ishlayapti</option>
+          <option value="Tugatilgan" ${r.holati === "Tugatilgan" ? "selected" : ""}>Tugatilgan</option>
+        </select>
+      </td>
+      <td class="num"><input class="cell-input num" data-f="oyliqSumma" value="${fmt(r.oyliqSumma)}"></td>
+      <td class="num"><input class="cell-input num" data-f="imtiyozSumma" value="${fmt(r.imtiyozSumma)}"></td>
+      <td class="num ihq-ijtimoiy">${fmt(c.ijtimoiySoliq)}</td>
+      <td class="num ihq-ndfl">${fmt(c.ndfl)}</td>
+      <td class="num ihq-inps">${fmt(c.inps)}</td>
+      <td class="num ihq-sof" style="font-weight:700">${fmtSum(c.sofIshHaqi)}</td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish">&#10005;</button></td>
+    </tr>
+  `;
+}
+
+function refreshIshHaqiSummary() {
+  const t = computeIshHaqiTotals();
+  const elOylik = document.getElementById("statOylik");
+  const elIjtimoiy = document.getElementById("statIjtimoiy");
+  const elSoliqlar = document.getElementById("statSoliqlar");
+  const elSof = document.getElementById("statSof");
+  if (elOylik) elOylik.textContent = fmtSum(t.oylikJami);
+  if (elIjtimoiy) elIjtimoiy.textContent = fmtSum(t.ijtimoiySoliqJami);
+  if (elSoliqlar) elSoliqlar.textContent = fmtSum(t.ndflJami + t.inpsJami);
+  if (elSof) elSof.textContent = fmtSum(t.sofIshHaqiJami);
+}
+
+function filterIshHaqiRows(q) {
+  q = q.trim().toLowerCase();
+  document.querySelectorAll("#ishHaqiBody tr").forEach((tr) => {
+    const fieldValues = Array.from(tr.querySelectorAll("input,select")).map((i) => i.value).join(" ");
+    const text = (tr.textContent + " " + fieldValues).toLowerCase();
+    tr.style.display = !q || text.includes(q) ? "" : "none";
+  });
+}
+
+function bindIshHaqiRowEvents() {
+  const body = document.getElementById("ishHaqiBody");
+  if (!body) return;
+  body.addEventListener("change", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const row = STORE.ishHaqi.find((r) => r.id === tr.dataset.id);
+    if (!row) return;
+    const field = e.target.dataset.f;
+    if (!field) return;
+    row[field] = field === "oyliqSumma" || field === "imtiyozSumma" ? toNum(e.target.value) : e.target.value;
+    pushFieldsUpdate("ishHaqi", row.id, { [field]: row[field] });
+    saveStore();
+
+    const c = computeIshHaqiRow(row, STORE.settings);
+    const ijtimoiyCell = tr.querySelector(".ihq-ijtimoiy");
+    const ndflCell = tr.querySelector(".ihq-ndfl");
+    const inpsCell = tr.querySelector(".ihq-inps");
+    const sofCell = tr.querySelector(".ihq-sof");
+    if (ijtimoiyCell) ijtimoiyCell.textContent = fmt(c.ijtimoiySoliq);
+    if (ndflCell) ndflCell.textContent = fmt(c.ndfl);
+    if (inpsCell) inpsCell.textContent = fmt(c.inps);
+    if (sofCell) sofCell.textContent = fmtSum(c.sofIshHaqi);
+    refreshIshHaqiSummary();
+  });
+  body.addEventListener("click", (e) => {
+    const delId = e.target.dataset.del;
+    if (delId) {
+      RECENTLY_DELETED.add(delId);
+      STORE.ishHaqi = STORE.ishHaqi.filter((r) => r.id !== delId);
+      sbClient.from("ish_haqi").delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
+      saveStore();
+      renderIshHaqi();
+    }
+  });
+}
+
+async function addIshHaqiRow() {
+  const newRow = { sana: todayISO(), fio: "", lavozimi: "", pinfl: "", turi: "Rezident", holati: "Ishlayapti", oyliqSumma: 0, imtiyozSumma: 0 };
+  const { data, error } = await sbClient.from("ish_haqi").insert(toDbRow(ISHHAQI_DB_MAP, newRow)).select().single();
+  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  const row = fromDbRow(ISHHAQI_DB_MAP, data);
+  if (!STORE.ishHaqi.some((r) => r.id === row.id)) STORE.ishHaqi.push(row);
+  saveStore();
+  renderIshHaqi();
+  toast("Yangi xodim yozuvi qo'shildi");
+}
+
+function renderIshHaqiHisoboti() {
+  const s = STORE.settings;
+  const t = computeIshHaqiTotals();
+  const rows = getFilteredRows(STORE.ishHaqi).slice().sort((a, b) => (a.fio || "").localeCompare(b.fio || ""));
+  const main = document.getElementById("main");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Ish haqi hisoboti</h1>
+        <p class="page-desc">Jismoniy shaxslardan olinadigan daromad solig'i va ijtimoiy soliq hisob-kitobi — "Ish haqi" bo'limi ma'lumotlaridan avtomatik hisoblanadi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnExportIshHaqiHisobot">Excel'ga eksport</button>
+        <button class="btn" data-nav="settings">Stavkalarni sozlash</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Hisob-kitob</div>
+        ${reportLine("010", "Hisoblangan ish haqi jamg'armasi", t.oylikJami, { code: "010" })}
+        ${reportLine("030", "Soliqdan ozod qilingan summalar (imtiyozlar)", t.imtiyozJami, { code: "030" })}
+        ${reportLine("040", "Soliq bazasi", t.soliqBazasiJami, { code: "040", total: true })}
+        <div class="report-line"><span class="label">Ijtimoiy soliq / NDFL / INPS stavkalari</span><span class="code">050</span><span class="val">${fmt(s.ijtimoiySoliqStavka)}% / ${fmt(s.ndflStavka)}% / ${fmt(s.inpsStavka, 1)}%</span></div>
+        ${reportLine("060", "Hisoblangan ijtimoiy soliq (ish beruvchi xarajati)", t.ijtimoiySoliqJami, { code: "060" })}
+        ${reportLine("060", "Hisoblangan NDFL", t.ndflJami, { code: "060" })}
+        ${reportLine("080", "INPS ixtiyoriy jamg'arma badali", t.inpsJami, { code: "080" })}
+        ${reportLine("090", "Byudjetga to'lanadigan NDFL (NDFL − INPS)", t.ndflByudjetgaJami, { code: "090", total: true })}
+      </div>
+      <div class="card">
+        <div class="card-title">Xulosa</div>
+        <div class="report-line"><span class="label">Xodimlar soni (tanlangan davrda)</span><span class="code"></span><span class="val">${t.count}</span></div>
+        ${reportLine("", "Xodimlarga to'lanadigan sof ish haqi", t.sofIshHaqiJami, { total: true })}
+        ${reportLine("", "Ish beruvchi uchun jami xarajat (ish haqi + ijtimoiy soliq)", t.ishBeruvchiXarajati, { total: true })}
+        <div class="note" style="margin-top:14px;">
+          <b>Hisoblash mantig'i:</b><br>
+          Ijtimoiy soliq — hisoblangan ish haqidan (imtiyozsiz) ish beruvchi tomonidan to'lanadi, xodim ish haqidan ushlanmaydi.<br>
+          NDFL va INPS — soliq bazasidan (ish haqi minus imtiyoz) xodim ish haqidan ushlab qolinadi.<br>
+          Byudjetga to'lanadigan NDFL = hisoblangan NDFL − INPS badali (INPS shaxsiy jamg'arma hisobiga yo'naltiriladi).<br>
+          Manba: <b>i.x.xltx</b> (asosiy hisob-kitob, 010–090 qatorlari) va <b>I.X. yuklama.xltx</b> (Ilova №4, xodimlar bo'yicha tafsilot) andazalari asosida soddalashtirilgan.
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">Xodimlar bo'yicha tafsilot (Ilova №4 andazasi)</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>№</th><th>F.I.O.</th><th>Lavozimi</th><th>PINFL</th><th>Turi</th><th>Holati</th>
+              <th class="num">Hisoblangan ish haqi</th>
+              <th class="num">Ijtimoiy soliq</th>
+              <th class="num">NDFL</th>
+              <th class="num">INPS</th>
+              <th class="num">Sof ish haqi</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.length ? rows.map((r, i) => ishHaqiReportRowHtml(r, i + 1)).join("") : ""}
+          </tbody>
+        </table>
+      </div>
+      ${!rows.length ? `<div class="empty-state"><div class="ic">&#128101;</div><div class="t">Ma'lumot yo'q</div><div class="d">"Ish haqi" bo'limida xodim yozuvlarini kiriting.</div></div>` : ""}
+    </div>
+  `;
+  document.getElementById("btnExportIshHaqiHisobot").addEventListener("click", exportIshHaqiHisobotXlsx);
+  bindNavShortcuts(main);
+  bindDateRangeBar(renderIshHaqiHisoboti);
+}
+
+function exportIshHaqiHisobotXlsx() {
+  const s = STORE.settings;
+  const t = computeIshHaqiTotals();
+  const rows = getFilteredRows(STORE.ishHaqi).slice().sort((a, b) => (a.fio || "").localeCompare(b.fio || ""));
+  buildAndDownloadReportXlsx("BUX2112_ish_haqi_hisoboti", "Ish haqi hisoboti", [
+    { code: "010", label: "Hisoblangan ish haqi jamg'armasi", value: t.oylikJami },
+    { code: "030", label: "Soliqdan ozod qilingan summalar (imtiyozlar)", value: t.imtiyozJami },
+    { code: "040", label: "Soliq bazasi", value: t.soliqBazasiJami },
+    { code: "060", label: "Hisoblangan ijtimoiy soliq", value: t.ijtimoiySoliqJami },
+    { code: "060", label: "Hisoblangan NDFL", value: t.ndflJami },
+    { code: "080", label: "INPS ixtiyoriy jamg'arma badali", value: t.inpsJami },
+    { code: "090", label: "Byudjetga to'lanadigan NDFL", value: t.ndflByudjetgaJami }
+  ], {
+    sheetName: "Xodimlar",
+    headers: ["№", "F.I.O.", "Lavozimi", "PINFL", "Turi", "Holati", "Hisoblangan ish haqi", "Ijtimoiy soliq", "NDFL", "INPS", "Sof ish haqi"],
+    rows: rows.map((r, i) => {
+      const c = computeIshHaqiRow(r, s);
+      return [i + 1, r.fio, r.lavozimi, r.pinfl, r.turi, r.holati, c.oylik, c.ijtimoiySoliq, c.ndfl, c.inps, c.sofIshHaqi];
+    })
+  });
+}
+
+function ishHaqiReportRowHtml(r, n) {
+  const c = computeIshHaqiRow(r, STORE.settings);
+  return `
+    <tr>
+      <td>${n}</td>
+      <td>${escapeHtml(r.fio || "—")}</td>
+      <td>${escapeHtml(r.lavozimi || "—")}</td>
+      <td class="tag-inn">${escapeHtml(r.pinfl || "—")}</td>
+      <td>${escapeHtml(r.turi || "Rezident")}</td>
+      <td>${escapeHtml(r.holati || "Ishlayapti")}</td>
+      <td class="num">${fmtSum(c.oylik)}</td>
+      <td class="num">${fmtSum(c.ijtimoiySoliq)}</td>
+      <td class="num">${fmtSum(c.ndfl)}</td>
+      <td class="num">${fmtSum(c.inps)}</td>
+      <td class="num" style="font-weight:700">${fmtSum(c.sofIshHaqi)}</td>
+    </tr>
+  `;
+}
+
+/* ------------------------------- F2 hisobot ------------------------------- */
+
+function reportLine(codeOrLabel, label, value, opts = {}) {
+  const isTotal = opts.total;
+  const neg = toNum(value) < 0;
+  return `
+    <div class="report-line ${isTotal ? "total" : ""}">
+      <span class="label">${label}</span>
+      <span class="code">${opts.code || ""}</span>
+      <span class="val ${neg ? "neg" : ""}">${fmtSum(value)}</span>
+    </div>
+  `;
+}
+
+function renderF2() {
+  const t = computeTotals();
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">F2 — Moliyaviy natijalar to'g'risida hisobot</h1>
+        <p class="page-desc">Vazirlar Mahkamasi shakli asosida, Faktura kirim/chiqim ma'lumotlaridan avtomatik hisoblanadi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImportF2">Excel'dan import</button>
+        <button class="btn" id="btnExportF2">Excel'ga eksport</button>
+        <button class="btn" data-nav="settings">Xarajatlarni sozlash</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Daromad va xarajatlar</div>
+        <div class="report-block-title">Asosiy faoliyat</div>
+        ${reportLine("010", "Sof tushum (sotuvdan)", t.revenue, { code: "010" })}
+        ${reportLine("020", "Sotilgan mahsulot tannarxi", t.tannarx, { code: "020" })}
+        ${reportLine("030", "Yalpi foyda", t.yalpiFoyda, { code: "030", total: true })}
+        ${reportLine("040", "Davr xarajatlari", t.davrXarajati, { code: "040" })}
+        ${reportLine("100", "Asosiy faoliyatdan foyda", t.asosiyFaoliyatFoyda, { code: "100", total: true })}
+
+        <div class="report-block-title">Moliyaviy faoliyat</div>
+        ${reportLine("170", "Moliyaviy faoliyat xarajatlari", t.moliyaviyXarajat, { code: "170" })}
+        ${reportLine("240", "Soliqqacha foyda", t.soliqqachaFoyda, { code: "240", total: true })}
+
+        <div class="report-block-title">Soliq</div>
+        ${reportLine("250", "Foyda solig'i", t.foydaSoligi, { code: "250" })}
+        ${reportLine("270", "Sof foyda (davr natijasi)", t.sofFoyda, { code: "270", total: true })}
+      </div>
+
+      <div class="card">
+        <div class="card-title">Manba ma'lumotlari</div>
+        <div class="report-line"><span class="label">Chiqim fakturalar (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(t.chiqimBase)}</span></div>
+        <div class="report-line"><span class="label">Kirim fakturalar (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(t.kirimBase)}</span></div>
+        <div class="note" style="margin-top:14px;">
+          <b>Hisoblash mantig'i:</b><br>
+          Sof tushum = tasdiqlangan <b>chiqim fakturalar</b> summasi (QQSsiz).<br>
+          Tannarx = tasdiqlangan <b>kirim fakturalar</b> summasi (QQSsiz) — taxminiy, "Sozlamalar"da qo'lda tuzatish mumkin.<br>
+          Davr va moliyaviy xarajatlar — "Sozlamalar" bo'limida qo'lda kiritiladi.<br>
+          Foyda solig'i shu yerda va "Foyda solig'i" hisobotida bitta manbadan (bir xil) hisoblanadi.
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("btnExportF2").addEventListener("click", () => exportF2Xlsx());
+  document.getElementById("btnImportF2").addEventListener("click", () => {
+    openGenericImportModal(
+      "F2 — Excel'dan import",
+      `Ilgari eksport qilingan F2 faylidan "Davr xarajatlari" va "Moliyaviy faoliyat xarajatlari" ko'rsatkichlari o'qib olinadi.`,
+      ".xlsx,.xls",
+      (file) => handleReportSettingsImport(file, {
+        "Davr xarajatlari": "davrXarajati",
+        "Moliyaviy faoliyat xarajatlari": "moliyaviyXarajat"
+      }, renderF2)
+    );
+  });
+  bindNavShortcuts(main);
+  bindDateRangeBar(renderF2);
+}
+
+function exportF2Xlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("BUX2112_F2", "F2 — Moliyaviy natijalar to'g'risida hisobot", [
+    { code: "010", label: "Sof tushum (sotuvdan)", value: t.revenue },
+    { code: "020", label: "Sotilgan mahsulot tannarxi", value: t.tannarx },
+    { code: "030", label: "Yalpi foyda", value: t.yalpiFoyda },
+    { code: "040", label: "Davr xarajatlari", value: t.davrXarajati },
+    { code: "100", label: "Asosiy faoliyatdan foyda", value: t.asosiyFaoliyatFoyda },
+    { code: "170", label: "Moliyaviy faoliyat xarajatlari", value: t.moliyaviyXarajat },
+    { code: "240", label: "Soliqqacha foyda", value: t.soliqqachaFoyda },
+    { code: "250", label: "Foyda solig'i", value: t.foydaSoligi },
+    { code: "270", label: "Sof foyda (davr natijasi)", value: t.sofFoyda }
+  ]);
+}
+
+/* ------------------------------- QQS hisobot ------------------------------- */
+
+function renderQQS() {
+  const t = computeTotals();
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Qo'shilgan qiymat solig'i (QQS) hisob-kitobi</h1>
+        <p class="page-desc">Kirim va chiqim fakturalardagi QQS summalaridan avtomatik hisoblanadi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImportQQS">Excel'dan import</button>
+        <button class="btn" id="btnExportQQS">Excel'ga eksport</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Hisob-kitob</div>
+        ${reportLine("010", "Zachyotga qabul qilinadigan QQS (xariddan)", t.qqsInput, { code: "010" })}
+        ${reportLine("020", "Sotuvdan QQS", t.qqsOutput, { code: "020" })}
+        ${reportLine("030", "Byudjetga to'lanadigan QQS (020−010)", t.qqsToPay, { code: "030", total: true })}
+      </div>
+      <div class="card">
+        <div class="card-title">Tafsilot</div>
+        <div class="report-line"><span class="label">Chiqim fakturalar soni</span><span class="code"></span><span class="val">${getFilteredRows(STORE.chiqim).filter((r) => isValidStatus(r.status)).length}</span></div>
+        <div class="report-line"><span class="label">Kirim fakturalar soni</span><span class="code"></span><span class="val">${getFilteredRows(STORE.kirim).filter((r) => isValidStatus(r.status)).length}</span></div>
+        <div class="report-line"><span class="label">Standart QQS stavkasi</span><span class="code"></span><span class="val">${STORE.settings.qqsStavka}%</span></div>
+        <div class="note" style="margin-top:14px;">
+          Manba: <b>QQS.xltx</b> andazasidagi "Hisob-kitob" bo'limi (010 — zachyotga qabul qilinadigan QQS, 020 — sotuvdan QQS, 030 — byudjetga to'lanadigan QQS) tuzilishi asosida.
+          Faqat holati "Отказ/Bekor qilingan" bo'lmagan fakturalar hisoblanadi.
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("btnExportQQS").addEventListener("click", () => exportQQSXlsx());
+  document.getElementById("btnImportQQS").addEventListener("click", () => {
+    openGenericImportModal(
+      "QQS — Excel'dan import",
+      `Ilgari eksport qilingan QQS faylidan "Standart QQS stavkasi" ko'rsatkichi o'qib olinadi.`,
+      ".xlsx,.xls",
+      (file) => handleReportSettingsImport(file, { "Standart QQS stavkasi (%)": "qqsStavka" }, renderQQS)
+    );
+  });
+  bindDateRangeBar(renderQQS);
+}
+
+function exportQQSXlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("BUX2112_QQS", "QQS hisob-kitobi", [
+    { code: "010", label: "Zachyotga qabul qilinadigan QQS (xariddan)", value: t.qqsInput },
+    { code: "020", label: "Sotuvdan QQS", value: t.qqsOutput },
+    { code: "030", label: "Byudjetga to'lanadigan QQS", value: t.qqsToPay },
+    { code: "", label: "Standart QQS stavkasi (%)", value: STORE.settings.qqsStavka }
+  ]);
+}
+
+/* ------------------------------- Foyda solig'i ------------------------------- */
+
+function renderFoyda() {
+  const t = computeTotals();
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Foyda solig'i hisob-kitobi</h1>
+        <p class="page-desc">Yuridik shaxslardan olinadigan foyda solig'i, F2 bilan bir xil manbadan hisoblanadi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImportFoyda">Excel'dan import</button>
+        <button class="btn" id="btnExportFoyda">Excel'ga eksport</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Hisob-kitob</div>
+        ${reportLine("010", "Jami daromad", t.jamiDaromad, { code: "010" })}
+        ${reportLine("020", "Chegiriladigan xarajatlar", t.chegiriladiXarajat, { code: "020" })}
+        ${reportLine("030", "Soliqqa tortiladigan foyda", t.soliqqaTortiladiganFoyda, { code: "030", total: true })}
+        ${reportLine("040", "Imtiyozlar", t.imtiyozlar, { code: "040" })}
+        ${reportLine("060", "Soliq bazasi", t.soliqBazasi, { code: "060", total: true })}
+        <div class="report-line"><span class="label">Soliq stavkasi</span><span class="code">070</span><span class="val">${t.foydaStavka}%</span></div>
+        ${reportLine("080", "Foyda solig'i summasi", t.foydaSoligi, { code: "080", total: true })}
+      </div>
+      <div class="card">
+        <div class="card-title">Sozlash</div>
+        <div class="field"><label>Boshqa daromadlar (qo'lda)</label><input type="text" id="inBoshqaDaromad" value="${fmt(STORE.settings.boshqaDaromad)}"></div>
+        <div class="field"><label>Imtiyozlar summasi (qo'lda)</label><input type="text" id="inImtiyozlar" value="${fmt(STORE.settings.imtiyozlar)}"></div>
+        <div class="field"><label>Foyda solig'i stavkasi (%)</label><input type="text" id="inFoydaStavka" value="${fmt(STORE.settings.foydaStavka)}"></div>
+        <button class="btn btn-primary" id="btnSaveFoyda">Saqlash</button>
+        <div class="note">Manba: <b>foyda soligi.xltx</b> andazasidagi asosiy hisob-kitob (010–080 qatorlari) tuzilishi asosida soddalashtirilgan.</div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById("btnSaveFoyda").addEventListener("click", () => {
+    if (!requireDataReady()) return;
+    STORE.settings.boshqaDaromad = toNum(document.getElementById("inBoshqaDaromad").value);
+    STORE.settings.imtiyozlar = toNum(document.getElementById("inImtiyozlar").value);
+    STORE.settings.foydaStavka = toNum(document.getElementById("inFoydaStavka").value);
+    saveSettingsToDb({ boshqaDaromad: STORE.settings.boshqaDaromad, imtiyozlar: STORE.settings.imtiyozlar, foydaStavka: STORE.settings.foydaStavka });
+    saveStore();
+    renderFoyda();
+    toast("Saqlandi");
+  });
+  document.getElementById("btnExportFoyda").addEventListener("click", () => exportFoydaXlsx());
+  document.getElementById("btnImportFoyda").addEventListener("click", () => {
+    openGenericImportModal(
+      "Foyda solig'i — Excel'dan import",
+      `Ilgari eksport qilingan fayldan "Boshqa daromadlar", "Imtiyozlar summasi" va "Foyda solig'i stavkasi" ko'rsatkichlari o'qib olinadi.`,
+      ".xlsx,.xls",
+      (file) => handleReportSettingsImport(file, {
+        "Boshqa daromadlar (qo'lda)": "boshqaDaromad",
+        "Imtiyozlar summasi (qo'lda)": "imtiyozlar",
+        "Foyda solig'i stavkasi (%)": "foydaStavka"
+      }, renderFoyda)
+    );
+  });
+  bindDateRangeBar(renderFoyda);
+}
+
+function exportFoydaXlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("BUX2112_foyda_soligi", "Foyda solig'i hisob-kitobi", [
+    { code: "010", label: "Jami daromad", value: t.jamiDaromad },
+    { code: "020", label: "Chegiriladigan xarajatlar", value: t.chegiriladiXarajat },
+    { code: "030", label: "Soliqqa tortiladigan foyda", value: t.soliqqaTortiladiganFoyda },
+    { code: "040", label: "Imtiyozlar", value: t.imtiyozlar },
+    { code: "060", label: "Soliq bazasi", value: t.soliqBazasi },
+    { code: "080", label: "Foyda solig'i summasi", value: t.foydaSoligi },
+    { code: "", label: "Boshqa daromadlar (qo'lda)", value: STORE.settings.boshqaDaromad },
+    { code: "", label: "Imtiyozlar summasi (qo'lda)", value: STORE.settings.imtiyozlar },
+    { code: "070", label: "Foyda solig'i stavkasi (%)", value: t.foydaStavka }
+  ]);
+}
+
+/* ------------------------------- F1 balans ------------------------------- */
+
+function renderF1() {
+  const t = computeTotals();
+  const main = document.getElementById("main");
+  const diff = t.aktivJami - t.passivJami;
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">F1 — Buxgalteriya balansi (qisqartirilgan)</h1>
+        <p class="page-desc">Asosiy ko'rsatkichlar avtomatik (bank, debitor/kreditor), qolganlari qo'lda kiritiladi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnImportF1">Excel'dan import</button>
+        <button class="btn" id="btnExportF1">Excel'ga eksport</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml("Balans har doim \"Davr\"ning oxirgi sanasiga (\"gacha\") nisbatan hisoblanadi — u kunlik holatni ko'rsatadi.")}
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Aktiv</div>
+        <div class="report-line"><span class="label">Asosiy vositalar</span><span class="code"></span><input class="val editable" id="f1Osv" value="${fmt(STORE.settings.f1AsosiyVositalar)}"></div>
+        <div class="report-line"><span class="label">Tovar-moddiy zaxiralar</span><span class="code"></span><input class="val editable" id="f1Tmz" value="${fmt(STORE.settings.f1TovarZaxira)}"></div>
+        <div class="report-line"><span class="label">Debitorlik qarzdorligi <span class="faint">(to'lanmagan chiqim f.)</span></span><span class="code"></span><span class="val">${fmtSum(t.debitorlik)}</span></div>
+        <div class="report-line"><span class="label">Kassa</span><span class="code"></span><input class="val editable" id="f1Kassa" value="${fmt(STORE.settings.f1Kassa)}"></div>
+        <div class="report-line"><span class="label">Hisob raqamidagi pul <span class="faint">(bank qoldig'i)</span></span><span class="code"></span><span class="val">${fmtSum(t.bankQoldiq)}</span></div>
+        ${reportLine("400", "Jami aktiv", t.aktivJami, { total: true })}
+      </div>
+      <div class="card">
+        <div class="card-title">Passiv</div>
+        <div class="report-line"><span class="label">Ustav kapitali</span><span class="code"></span><input class="val editable" id="f1Uk" value="${fmt(STORE.settings.f1UstavKapitali)}"></div>
+        <div class="report-line"><span class="label">O'tgan davr jamg'argan foydasi</span><span class="code"></span><input class="val editable" id="f1Of" value="${fmt(STORE.settings.f1OldingiFoyda)}"></div>
+        <div class="report-line"><span class="label">Joriy davr sof foydasi <span class="faint">(F2'dan)</span></span><span class="code"></span><span class="val">${fmtSum(t.sofFoyda)}</span></div>
+        <div class="report-line"><span class="label">Uzoq muddatli majburiyatlar</span><span class="code"></span><input class="val editable" id="f1Um" value="${fmt(STORE.settings.f1UzoqMajburiyat)}"></div>
+        <div class="report-line"><span class="label">Kreditorlik qarzdorligi <span class="faint">(to'lanmagan kirim f.)</span></span><span class="code"></span><span class="val">${fmtSum(t.kreditorlik)}</span></div>
+        ${reportLine("780", "Jami passiv", t.passivJami, { total: true })}
+      </div>
+    </div>
+
+    <div class="card section" style="margin-top:16px;">
+      <div class="card-title">Balans tekshiruvi</div>
+      <div class="report-line total">
+        <span class="label">Aktiv − Passiv farqi</span><span class="code"></span>
+        <span class="val ${Math.abs(diff) < 1 ? "" : "neg"}">${fmtSum(diff)}</span>
+      </div>
+      <div class="note">${Math.abs(diff) < 1 ? "Balans teng — aktiv va passiv mos keladi." : "Farq bor: qo'lda kiritiladigan maydonlarni (asosiy vositalar, ustav kapitali, zaxiralar va h.k.) haqiqiy holatga moslang."}</div>
+      <button class="btn btn-primary" id="btnSaveF1" style="margin-top:10px;">Saqlash</button>
+    </div>
+  `;
+
+  document.getElementById("btnSaveF1").addEventListener("click", () => {
+    if (!requireDataReady()) return;
+    STORE.settings.f1AsosiyVositalar = toNum(document.getElementById("f1Osv").value);
+    STORE.settings.f1TovarZaxira = toNum(document.getElementById("f1Tmz").value);
+    STORE.settings.f1Kassa = toNum(document.getElementById("f1Kassa").value);
+    STORE.settings.f1UstavKapitali = toNum(document.getElementById("f1Uk").value);
+    STORE.settings.f1OldingiFoyda = toNum(document.getElementById("f1Of").value);
+    STORE.settings.f1UzoqMajburiyat = toNum(document.getElementById("f1Um").value);
+    saveSettingsToDb({
+      f1AsosiyVositalar: STORE.settings.f1AsosiyVositalar,
+      f1TovarZaxira: STORE.settings.f1TovarZaxira,
+      f1Kassa: STORE.settings.f1Kassa,
+      f1UstavKapitali: STORE.settings.f1UstavKapitali,
+      f1OldingiFoyda: STORE.settings.f1OldingiFoyda,
+      f1UzoqMajburiyat: STORE.settings.f1UzoqMajburiyat
+    });
+    saveStore();
+    renderF1();
+    toast("Saqlandi");
+  });
+  document.getElementById("btnExportF1").addEventListener("click", () => exportF1Xlsx());
+  document.getElementById("btnImportF1").addEventListener("click", () => {
+    openGenericImportModal(
+      "F1 — Excel'dan import",
+      `Ilgari eksport qilingan F1 faylidan qo'lda kiritiladigan barcha ko'rsatkichlar (asosiy vositalar, zaxiralar, kassa, ustav kapitali va h.k.) o'qib olinadi.`,
+      ".xlsx,.xls",
+      (file) => handleReportSettingsImport(file, {
+        "Asosiy vositalar": "f1AsosiyVositalar",
+        "Tovar-moddiy zaxiralar": "f1TovarZaxira",
+        "Kassa": "f1Kassa",
+        "Ustav kapitali": "f1UstavKapitali",
+        "O'tgan davr jamg'argan foydasi": "f1OldingiFoyda",
+        "Uzoq muddatli majburiyatlar": "f1UzoqMajburiyat"
+      }, renderF1)
+    );
+  });
+  bindDateRangeBar(renderF1);
+}
+
+function exportF1Xlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("BUX2112_F1", "F1 — Buxgalteriya balansi", [
+    { code: "", label: "Asosiy vositalar", value: t.asosiyVositalar },
+    { code: "", label: "Tovar-moddiy zaxiralar", value: t.tovarZaxira },
+    { code: "", label: "Debitorlik qarzdorligi", value: t.debitorlik },
+    { code: "", label: "Kassa", value: STORE.settings.f1Kassa },
+    { code: "", label: "Hisob raqamidagi pul (bank qoldig'i)", value: t.bankQoldiq },
+    { code: "400", label: "Jami aktiv", value: t.aktivJami },
+    { code: "", label: "Ustav kapitali", value: t.ustavKapitali },
+    { code: "", label: "O'tgan davr jamg'argan foydasi", value: t.oldingiFoyda },
+    { code: "", label: "Joriy davr sof foydasi", value: t.sofFoyda },
+    { code: "", label: "Uzoq muddatli majburiyatlar", value: t.uzoqMajburiyat },
+    { code: "", label: "Kreditorlik qarzdorligi", value: t.kreditorlik },
+    { code: "780", label: "Jami passiv", value: t.passivJami }
+  ]);
+}
+
+/* ------------------------------- Solishtirma dalolatnoma ------------------------------- */
+
+// Har bir kontragent (INN) uchun: "Kirim" ustuni = qarzdorlikni OSHIRUVCHI hodisalar
+// (chiqim-faktura chiqarildi + kontragentga bank orqali to'lov qilindi),
+// "Chiqim" ustuni = qarzdorlikni KAMAYTIRUVCHI hodisalar (kirim-faktura qabul qilindi +
+// kontragentdan bank orqali to'lov olindi). Musbat balans = kontragent bizga qarzdor.
+function computeReconciliationRows() {
+  const s = STORE.settings;
+  const from = s.filterFrom;
+  const to = s.filterTo;
+
+  const innInfo = {};
+  function note(inn, name) {
+    inn = (inn || "").trim();
+    if (!inn) return;
+    if (!(inn in innInfo)) innInfo[inn] = "";
+    if (name && String(name).trim()) innInfo[inn] = String(name).trim();
+  }
+  STORE.chiqim.forEach((r) => note(r.kontragentInn, r.kontragentNomi));
+  STORE.kirim.forEach((r) => note(r.kontragentInn, r.kontragentNomi));
+  STORE.bank.forEach((r) => note(r.kontragentInn, r.kontragent));
+
+  function periodTotals(inn, matchFn) {
+    const chiqimAmt = STORE.chiqim.filter((r) => (r.kontragentInn || "").trim() === inn && isValidStatus(r.status) && matchFn(r.sana)).reduce((a, r) => a + toNum(r.jamiSumma), 0);
+    const kirimAmt = STORE.kirim.filter((r) => (r.kontragentInn || "").trim() === inn && isValidStatus(r.status) && matchFn(r.sana)).reduce((a, r) => a + toNum(r.jamiSumma), 0);
+    const bankKirimAmt = STORE.bank.filter((r) => (r.kontragentInn || "").trim() === inn && matchFn(r.sana)).reduce((a, r) => a + toNum(r.kirim), 0);
+    const bankChiqimAmt = STORE.bank.filter((r) => (r.kontragentInn || "").trim() === inn && matchFn(r.sana)).reduce((a, r) => a + toNum(r.chiqim), 0);
+    return { kirimCol: chiqimAmt + bankChiqimAmt, chiqimCol: kirimAmt + bankKirimAmt };
+  }
+
+  return Object.keys(innInfo).map((inn) => {
+    const boshigaTotals = from ? periodTotals(inn, (sana) => !!sana && sana < from) : { kirimCol: 0, chiqimCol: 0 };
+    const boshiga = boshigaTotals.kirimCol - boshigaTotals.chiqimCol;
+    const period = periodTotals(inn, (sana) => inRange(sana, from, to));
+    const oxiriga = boshiga + period.kirimCol - period.chiqimCol;
+    return { inn, nomi: innInfo[inn] || "(nomsiz)", boshiga, kirim: period.kirimCol, chiqim: period.chiqimCol, oxiriga };
+  })
+    .filter((r) => r.boshiga !== 0 || r.kirim !== 0 || r.chiqim !== 0)
+    .sort((a, b) => Math.abs(b.oxiriga) - Math.abs(a.oxiriga));
+}
+
+// Har bir kontragent qatori uch holatdan biriga tegishli: bizga qarzdor (debtor),
+// biz qarzdormiz (creditor) yoki qarz yo'q (zero). Sverka sahifasidagi filtr
+// tugmalari, "Holat" ustunidagi belgi va eksport/chop etish shu bitta manbadan
+// (SVERKA_STATUS_META) foydalanadi — matn bir joyda o'zgartirilsa, hammasi mos keladi.
+let SVERKA_STATUS_FILTER = null;
+
+const SVERKA_STATUS_META = {
+  debtor: { text: "Bizga qarzdor", pillClass: "pill-ok", tabLabel: "Bizga qarzdor" },
+  creditor: { text: "Biz qarzdormiz", pillClass: "pill-danger", tabLabel: "Biz qarzdor" },
+  zero: { text: "Kvitansiya", pillClass: "pill-muted", tabLabel: "Qarz haqi yo'q" }
+};
+
+function sverkaStatusKey(r) {
+  return r.oxiriga > 0.5 ? "debtor" : r.oxiriga < -0.5 ? "creditor" : "zero";
+}
+
+function sverkaRowHtml(r) {
+  const meta = SVERKA_STATUS_META[sverkaStatusKey(r)];
+  const statusPill = `<span class="pill ${meta.pillClass}">${meta.text}</span>`;
+  return `
+    <tr>
+      <td>${escapeHtml(r.nomi)}</td>
+      <td class="tag-inn">${escapeHtml(r.inn)}</td>
+      <td class="num">${fmtSum(r.boshiga)}</td>
+      <td class="num">${fmtSum(r.kirim)}</td>
+      <td class="num">${fmtSum(r.chiqim)}</td>
+      <td class="num" style="font-weight:700">${fmtSum(r.oxiriga)}</td>
+      <td>${statusPill}</td>
+      <td class="row-actions"><button class="btn btn-sm" data-detail-inn="${escapeHtml(r.inn)}">Tarix</button></td>
+    </tr>
+  `;
+}
+
+function renderSverka() {
+  const rows = computeReconciliationRows();
+  const totalDebitor = rows.reduce((a, r) => a + Math.max(r.oxiriga, 0), 0);
+  const totalKreditor = rows.reduce((a, r) => a + Math.max(-r.oxiriga, 0), 0);
+
+  const counts = { debtor: 0, creditor: 0, zero: 0 };
+  rows.forEach((r) => { counts[sverkaStatusKey(r)]++; });
+
+  const filteredRows = SVERKA_STATUS_FILTER ? rows.filter((r) => sverkaStatusKey(r) === SVERKA_STATUS_FILTER) : rows;
+
+  const main = document.getElementById("main");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Solishtirma dalolatnoma</h1>
+        <p class="page-desc">Har bir kontragent (INN) bo'yicha davr boshi/oxiri qarzdorlik holati — Faktura kirim, Faktura chiqim va Bank ma'lumotlaridan avtomatik.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnPrintSverka">PDF (chop etish)</button>
+        <button class="btn" id="btnExportSverka">Excel'ga eksport</button>
+      </div>
+    </div>
+
+    <div class="tabs" id="sverkaStatusTabs">
+      ${["creditor", "debtor", "zero"].map((key) => `
+        <button type="button" class="tab-btn${SVERKA_STATUS_FILTER === key ? " active" : ""}" data-status-filter="${key}">${SVERKA_STATUS_META[key].tabLabel} (${counts[key]})</button>
+      `).join("")}
+    </div>
+
+    ${dateRangeBarHtml('"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.')}
+
+    <div class="grid grid-2 section">
+      <div class="card stat-card"><div class="stat-label">Jami debitorlik (bizga qarzdor)</div><div class="stat-value">${fmtSum(totalDebitor)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Jami kreditorlik (biz qarzdormiz)</div><div class="stat-value">${fmtSum(totalKreditor)}</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Kontragent</th><th>INN</th>
+            <th class="num">Davr boshiga</th>
+            <th class="num">Kirim</th>
+            <th class="num">Chiqim</th>
+            <th class="num">Davr oxiriga</th>
+            <th>Holat</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${filteredRows.length ? filteredRows.map(sverkaRowHtml).join("") : ""}
+        </tbody>
+      </table>
+    </div>
+    ${!filteredRows.length ? (rows.length
+      ? `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Bu holatga mos kontragent yo'q</div><div class="d">Filterni bekor qilish uchun tanlangan tugmani qayta bosing.</div></div>`
+      : `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Ma'lumot yo'q</div><div class="d">Faktura yoki bank yozuvlarida INN kiritilgan kontragentlar shu yerda ko'rinadi.</div></div>`) : ""}
+    <div class="note">
+      <b>Hisoblash mantig'i:</b> "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
+    </div>
+  `;
+  document.getElementById("btnExportSverka").addEventListener("click", () => exportSverkaXlsx(filteredRows, totalDebitor, totalKreditor));
+  document.getElementById("btnPrintSverka").addEventListener("click", () => printSverkaPdf(filteredRows, totalDebitor, totalKreditor));
+  main.querySelectorAll("[data-detail-inn]").forEach((b) => b.addEventListener("click", () => openSverkaDetail(b.dataset.detailInn)));
+  main.querySelectorAll("[data-status-filter]").forEach((b) => b.addEventListener("click", () => {
+    const key = b.dataset.statusFilter;
+    SVERKA_STATUS_FILTER = SVERKA_STATUS_FILTER === key ? null : key;
+    renderSverka();
+  }));
+  bindDateRangeBar(renderSverka);
+}
+
+function sverkaHolatText(r) {
+  return SVERKA_STATUS_META[sverkaStatusKey(r)].text;
+}
+
+function exportSverkaXlsx(rows, totalDebitor, totalKreditor) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`],
+    ["Solishtirma dalolatnoma"],
+    [],
+    ["Kontragent", "INN", "Davr boshiga", "Kirim", "Chiqim", "Davr oxiriga", "Holat"]
+  ];
+  rows.forEach((r) => aoa.push([r.nomi, r.inn, r.boshiga, r.kirim, r.chiqim, r.oxiriga, sverkaHolatText(r)]));
+  aoa.push([]);
+  aoa.push(["Jami debitorlik (bizga qarzdor)", "", "", "", "", totalDebitor]);
+  aoa.push(["Jami kreditorlik (biz qarzdormiz)", "", "", "", "", totalKreditor]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 32 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sverka");
+  XLSX.writeFile(wb, `BUX2112_sverka_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
+}
+
+function printSverkaPdf(rows, totalDebitor, totalKreditor) {
+  const s = STORE.settings;
+  const period = `${s.filterFrom || "davr boshidan"} — ${s.filterTo || "hozirgacha"}`;
+  const bodyRows = rows.map((r) => `
+    <tr>
+      <td>${escapeHtml(r.nomi)}</td>
+      <td>${escapeHtml(r.inn)}</td>
+      <td class="num">${fmtSum(r.boshiga)}</td>
+      <td class="num">${fmtSum(r.kirim)}</td>
+      <td class="num">${fmtSum(r.chiqim)}</td>
+      <td class="num"><b>${fmtSum(r.oxiriga)}</b></td>
+      <td>${sverkaHolatText(r)}</td>
+    </tr>
+  `).join("");
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Solishtirma dalolatnoma</title>
+      <style>
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:28px; color:#1c2530;}
+        h1{font-size:18px; margin:0 0 4px;}
+        .sub{font-size:12px; color:#5b6b7b; margin:0 0 4px;}
+        .period{font-size:12px; color:#5b6b7b; margin:0 0 18px;}
+        table{width:100%; border-collapse:collapse; font-size:11.5px;}
+        th, td{border:1px solid #ccd3da; padding:6px 8px; text-align:left;}
+        th{background:#eceff2;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        tfoot td{font-weight:700; border-top:2px solid #1c2530;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <h1>${escapeHtml(s.companyName)}</h1>
+      <div class="sub">INN: ${escapeHtml(s.inn)}</div>
+      <div class="period">Solishtirma dalolatnoma &middot; Davr: ${escapeHtml(period)}</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Kontragent</th><th>INN</th>
+            <th class="num">Davr boshiga</th><th class="num">Kirim</th>
+            <th class="num">Chiqim</th><th class="num">Davr oxiriga</th><th>Holat</th>
+          </tr>
+        </thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot>
+          <tr><td colspan="5">Jami debitorlik (bizga qarzdor)</td><td class="num">${fmtSum(totalDebitor)}</td><td></td></tr>
+          <tr><td colspan="5">Jami kreditorlik (biz qarzdormiz)</td><td class="num">${fmtSum(totalKreditor)}</td><td></td></tr>
+        </tfoot>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+/* --------------------------- Solishtirma dalolatnoma: kontragent tarixi --------------------------- */
+// "Tarix" tugmasi orqali ochiladigan alohida sahifa — bitta kontragent bo'yicha
+// barcha kirim-faktura, chiqim-faktura va bank kirim/chiqim harakatlarini
+// xronologik tartibda, "Акт сверка" andazasidagi Debet/Kredit/Saldo ko'rinishida
+// ko'rsatadi. Debet — kontragentga chiqarilgan chiqim-faktura va unga to'langan
+// bank chiqimi (bizning foydamizga qarzni oshiradi). Kredit — kontragentdan
+// qabul qilingan kirim-faktura va undan olingan bank kirimi (qarzni kamaytiradi).
+// Bu xuddi computeReconciliationRows'dagi "Kirim"/"Chiqim" ustunlari bilan bir xil
+// mantiq — faqat hujjat darajasida yoyilgan holda.
+
+let SVERKA_DETAIL_INN = null;
+
+function openSverkaDetail(inn) {
+  SVERKA_DETAIL_INN = inn;
+  CURRENT_PAGE = "sverkaDetail";
+  document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === "sverka"));
+  renderSverkaDetail();
+}
+
+function computeKontragentLedger(inn) {
+  const s = STORE.settings;
+  const from = s.filterFrom;
+  const to = s.filterTo;
+
+  function txList(matchFn) {
+    const list = [];
+    STORE.chiqim.forEach((r) => {
+      if ((r.kontragentInn || "").trim() !== inn || !isValidStatus(r.status) || !matchFn(r.sana)) return;
+      list.push({ sana: r.sana, hujjat: `Chiqim faktura № ${r.hujjatRaqami || "—"}`, debet: toNum(r.jamiSumma), kredit: 0 });
+    });
+    STORE.kirim.forEach((r) => {
+      if ((r.kontragentInn || "").trim() !== inn || !isValidStatus(r.status) || !matchFn(r.sana)) return;
+      list.push({ sana: r.sana, hujjat: `Kirim faktura № ${r.hujjatRaqami || "—"}`, debet: 0, kredit: toNum(r.jamiSumma) });
+    });
+    STORE.bank.forEach((r) => {
+      if ((r.kontragentInn || "").trim() !== inn || !matchFn(r.sana)) return;
+      const izoh = r.tavsif ? `: ${r.tavsif}` : "";
+      const hujjatNo = r.hujjatRaqami ? ` (${r.hujjatRaqami})` : "";
+      if (toNum(r.chiqim) > 0) list.push({ sana: r.sana, hujjat: `Bank chiqim${izoh}${hujjatNo}`, debet: toNum(r.chiqim), kredit: 0 });
+      if (toNum(r.kirim) > 0) list.push({ sana: r.sana, hujjat: `Bank kirim${izoh}${hujjatNo}`, debet: 0, kredit: toNum(r.kirim) });
+    });
+    return list;
+  }
+
+  const before = from ? txList((sana) => !!sana && sana < from) : [];
+  const boshlangichSaldo = before.reduce((a, t) => a + t.debet - t.kredit, 0);
+
+  const period = txList((sana) => inRange(sana, from, to)).sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
+  let running = boshlangichSaldo;
+  const rows = period.map((t) => {
+    running += t.debet - t.kredit;
+    return Object.assign({}, t, { saldo: running });
+  });
+
+  return {
+    boshlangichSaldo, rows, oxirgiSaldo: running,
+    jamiDebet: period.reduce((a, t) => a + t.debet, 0),
+    jamiKredit: period.reduce((a, t) => a + t.kredit, 0)
+  };
+}
+
+function renderSverkaDetail() {
+  const inn = SVERKA_DETAIL_INN;
+  const main = document.getElementById("main");
+  if (!inn) { navigate("sverka"); return; }
+
+  const summaryRows = computeReconciliationRows();
+  const info = summaryRows.find((r) => r.inn === inn);
+  const nomi = info ? info.nomi : inn;
+  const ledger = computeKontragentLedger(inn);
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">${escapeHtml(nomi)}</h1>
+        <p class="page-desc">INN ${escapeHtml(inn)} — o'zaro hisob-kitoblar tarixi (Акт сверка andazasi bo'yicha): kirim faktura, chiqim faktura va bank kirim-chiqim harakatlari.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnBackSverka">&larr; Ro'yxatga qaytish</button>
+        <button class="btn" id="btnPrintDetail">PDF (chop etish)</button>
+        <button class="btn" id="btnExportDetail">Excel'ga eksport</button>
+      </div>
+    </div>
+
+    ${dateRangeBarHtml('"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.')}
+
+    <div class="grid grid-3 section">
+      <div class="card stat-card"><div class="stat-label">Saldo boshlang'ich</div><div class="stat-value">${fmtSum(ledger.boshlangichSaldo)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Davr aylanmasi (Debet / Kredit)</div><div class="stat-value" style="font-size:16px">${fmtSum(ledger.jamiDebet)} / ${fmtSum(ledger.jamiKredit)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Saldo oxirigi</div><div class="stat-value">${fmtSum(ledger.oxirgiSaldo)}</div></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Sana</th><th>Hujjat</th><th class="num">Debet</th><th class="num">Kredit</th><th class="num">Saldo</th></tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="4" class="faint">Saldo boshlang'ich</td><td class="num" style="font-weight:700">${fmtSum(ledger.boshlangichSaldo)}</td></tr>
+          ${ledger.rows.length ? ledger.rows.map((t) => `
+            <tr>
+              <td class="mono">${escapeHtml(t.sana || "—")}</td>
+              <td>${escapeHtml(t.hujjat)}</td>
+              <td class="num">${t.debet ? fmtSum(t.debet) : ""}</td>
+              <td class="num">${t.kredit ? fmtSum(t.kredit) : ""}</td>
+              <td class="num">${fmtSum(t.saldo)}</td>
+            </tr>
+          `).join("") : `<tr><td colspan="5" class="faint" style="text-align:center;padding:16px;">Tanlangan davrda harakat yo'q</td></tr>`}
+          <tr><td colspan="4" style="font-weight:700">Saldo oxirigi</td><td class="num" style="font-weight:700">${fmtSum(ledger.oxirgiSaldo)}</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note">
+      <b>Debet</b> — kontragentga chiqarilgan chiqim-fakturalar va unga to'langan bank chiqimlari (bizning foydamizga qarzni oshiradi). <b>Kredit</b> — kontragentdan qabul qilingan kirim-fakturalar va undan olingan bank kirimlari (qarzni kamaytiradi). Musbat saldo — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz.
+    </div>
+  `;
+
+  document.getElementById("btnBackSverka").addEventListener("click", () => navigate("sverka"));
+  document.getElementById("btnExportDetail").addEventListener("click", () => exportSverkaDetailXlsx(nomi, inn, ledger));
+  document.getElementById("btnPrintDetail").addEventListener("click", () => printSverkaDetailPdf(nomi, inn, ledger));
+  bindDateRangeBar(renderSverkaDetail);
+}
+
+function exportSverkaDetailXlsx(nomi, inn, ledger) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`],
+    [`Akt sverka — ${nomi} (INN ${inn})`],
+    [],
+    ["Sana", "Hujjat", "Debet", "Kredit", "Saldo"],
+    ["", "Saldo boshlang'ich", "", "", ledger.boshlangichSaldo]
+  ];
+  ledger.rows.forEach((t) => aoa.push([t.sana, t.hujjat, t.debet || "", t.kredit || "", t.saldo]));
+  aoa.push(["", "Saldo oxirigi", "", "", ledger.oxirgiSaldo]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 12 }, { wch: 42 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Akt sverka");
+  XLSX.writeFile(wb, `BUX2112_sverka_${inn}_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
+}
+
+function printSverkaDetailPdf(nomi, inn, ledger) {
+  const s = STORE.settings;
+  const period = `${s.filterFrom || "davr boshidan"} — ${s.filterTo || "hozirgacha"}`;
+  const sideRows = ledger.rows.map((t) => `
+    <tr>
+      <td>${escapeHtml(t.sana || "")}</td>
+      <td>${escapeHtml(t.hujjat)}</td>
+      <td class="num">${t.debet ? fmt(t.debet, 2) : ""}</td>
+      <td class="num">${t.kredit ? fmt(t.kredit, 2) : ""}</td>
+    </tr>
+  `).join("");
+  const oxirgiHolat = ledger.oxirgiSaldo > 0.5
+    ? `на ${escapeHtml(s.filterTo || todayISO())} задолженность в пользу ${escapeHtml(s.companyName)} ${fmt(Math.abs(ledger.oxirgiSaldo), 2)} сум`
+    : ledger.oxirgiSaldo < -0.5
+      ? `на ${escapeHtml(s.filterTo || todayISO())} задолженность в пользу ${escapeHtml(nomi)} ${fmt(Math.abs(ledger.oxirgiSaldo), 2)} сум`
+      : `на ${escapeHtml(s.filterTo || todayISO())} задолженность отсутствует`;
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Акт сверки — ${escapeHtml(nomi)}</title>
+      <style>
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:28px; color:#1c2530;}
+        h1{font-size:17px; margin:0 0 10px; text-align:center;}
+        .sub{font-size:12px; color:#3a4553; margin:0 0 18px; text-align:center;}
+        .parties{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:14px; font-size:11.5px; font-weight:700; text-align:center;}
+        table{width:100%; border-collapse:collapse; font-size:10.8px;}
+        th, td{border:1px solid #ccd3da; padding:5px 7px; text-align:left;}
+        th{background:#eceff2;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        .split{display:grid; grid-template-columns:1fr 1fr;}
+        .split > div:first-child{border-right:2px solid #1c2530;}
+        tfoot td{font-weight:700; border-top:2px solid #1c2530;}
+        .holat{margin:18px 0; font-size:12px;}
+        .sign{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:36px; font-size:12px;}
+        .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:70%;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <h1>Акт сверки взаимных расчётов</h1>
+      <div class="sub">за период: ${escapeHtml(period)}<br>между "${escapeHtml(s.companyName)}" (ИНН ${escapeHtml(s.inn)}) и "${escapeHtml(nomi)}" (ИНН ${escapeHtml(inn)})</div>
+      <div class="parties">
+        <div>По данным "${escapeHtml(s.companyName)}"</div>
+        <div>По данным "${escapeHtml(nomi)}"</div>
+      </div>
+      <div class="split">
+        <div>
+          <table>
+            <thead><tr><th>Дата</th><th>Документ</th><th class="num">Дебет</th><th class="num">Кредит</th></tr></thead>
+            <tbody>
+              <tr><td colspan="3">Сальдо начальное</td><td class="num">${fmt(ledger.boshlangichSaldo, 2)}</td></tr>
+              ${sideRows}
+            </tbody>
+            <tfoot>
+              <tr><td colspan="2">Обороты за период</td><td class="num">${fmt(ledger.jamiDebet, 2)}</td><td class="num">${fmt(ledger.jamiKredit, 2)}</td></tr>
+              <tr><td colspan="3">Сальдо конечное</td><td class="num">${fmt(ledger.oxirgiSaldo, 2)}</td></tr>
+            </tfoot>
+          </table>
+        </div>
+        <div>
+          <table>
+            <thead><tr><th>Дата</th><th>Документ</th><th class="num">Дебет</th><th class="num">Кредит</th></tr></thead>
+            <tbody>
+              <tr><td colspan="3">Сальдо начальное</td><td class="num">${fmt(ledger.boshlangichSaldo, 2)}</td></tr>
+              ${sideRows}
+            </tbody>
+            <tfoot>
+              <tr><td colspan="2">Обороты за период</td><td class="num">${fmt(ledger.jamiDebet, 2)}</td><td class="num">${fmt(ledger.jamiKredit, 2)}</td></tr>
+              <tr><td colspan="3">Сальдо конечное</td><td class="num">${fmt(ledger.oxirgiSaldo, 2)}</td></tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+      <div class="holat">${oxirgiHolat}</div>
+      <div class="sign">
+        <div>От "${escapeHtml(s.companyName)}"<div class="line"></div></div>
+        <div>От "${escapeHtml(nomi)}"<div class="line"></div></div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+/* ------------------------------- Fayl yuklamalari ------------------------------- */
+// Faktura kirim / Faktura chiqim / Bank harakati bo'limlarida "Excel'dan
+// import" qilinganda, shu yerga faylning o'zi emas — faqat ma'lumoti (qaysi
+// bo'lim, fayl nomi, hajmi, yuklangan sana) yoziladi va yaratilgan har bir
+// yozuvga shu fayl ID'si biriktiriladi (fayl_id). Fayl o'chirilsa, bazadagi
+// FOREIGN KEY ... ON DELETE CASCADE orqali unga bog'liq barcha kirim/chiqim/
+// bank yozuvlari ham avtomat o'chib ketadi.
+
+// Bu ro'yxat "fayllar.bolim" qiymatini o'qiladigan nomga moslashtiradi.
+// Kalitlar STORE'dagi tegishli massiv nomi bilan bir xil bo'lishi shart
+// (masalan "ishHaqi") — shunda fayllarLinkedCount/deleteFayl kabi generik
+// funksiyalar hech qanday o'zgarishsiz ishlayveradi. Yangi bo'lim uchun fayl
+// yuklamasi qo'shilganda shu yerga ham bitta qator qo'shish yetarli.
+const FAYL_BOLIM_LABEL = {
+  kirim: "Faktura kirim", chiqim: "Faktura chiqim", bank: "Bank harakati",
+  ombor: "Ombor", ishHaqi: "Ish haqi"
+};
+
+// Fayllar jadvali hali yaratilmagan bo'lishi mumkin (migratsiya ishga
+// tushirilmagan) — shu holatda ham asosiy import ishlashda davom etishi
+// uchun xatolik jim yutiladi (faqat konsolga yoziladi).
+async function registerFaylUpload(bolim, file) {
+  try {
+    const { data, error } = await sbClient.from("fayllar").insert(toDbRow(FAYL_DB_MAP, {
+      bolim, faylNomi: file.name, hajmi: file.size
+    })).select().single();
+    if (error) { console.error(error); return null; }
+    const row = fromDbRow(FAYL_DB_MAP, data);
+    STORE.fayllar.push(row);
+    updateNavBadges();
+    return row;
+  } catch (err) {
+    console.error(err);
+    return null;
+  }
+}
+
+function fmtBytes(n) {
+  n = toNum(n);
+  if (n < 1024) return n + " B";
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB";
+  return (n / 1024 / 1024).toFixed(2) + " MB";
+}
+
+function fayllarLinkedCount(fayl) {
+  const rows = STORE[fayl.bolim] || [];
+  return rows.filter((r) => r.faylId === fayl.id).length;
+}
+
+function renderFayllar() {
+  const rows = STORE.fayllar.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const main = document.getElementById("main");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Fayl yuklamalari</h1>
+        <p class="page-desc">Faktura kirim, Faktura chiqim, Bank harakati, Ombor va Ish haqi bo'limlariga "Excel'dan import" orqali yuklangan fayllar tarixi — faylning o'zi emas, faqat ma'lumoti saqlanadi. Faylni o'chirsangiz, unga bog'liq barcha yozuvlar ham o'chib ketadi.</p>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Yuklangan sana</th>
+            <th>Bo'lim</th>
+            <th>Fayl nomi</th>
+            <th class="num">Hajmi</th>
+            <th class="num">Bog'langan yozuvlar</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="fayllarBody">
+          ${rows.length ? rows.map((f) => `
+            <tr data-id="${f.id}">
+              <td class="mono">${escapeHtml(f.sana ? new Date(f.sana).toLocaleString("ru-RU") : "—")}</td>
+              <td><span class="pill pill-ok">${escapeHtml(FAYL_BOLIM_LABEL[f.bolim] || f.bolim || "—")}</span></td>
+              <td>${escapeHtml(f.faylNomi || "—")}</td>
+              <td class="num">${fmtBytes(f.hajmi)}</td>
+              <td class="num">${fayllarLinkedCount(f)}</td>
+              <td class="row-actions"><button class="icon-btn" data-del-fayl="${f.id}" title="O'chirish (bog'liq yozuvlar bilan)">&#10005;</button></td>
+            </tr>
+          `).join("") : ""}
+        </tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128193;</div><div class="t">Hozircha fayl yuklanmagan</div><div class="d">Faktura kirim/chiqim yoki Bank bo'limida "Excel'dan import" qilinganda shu yerda ko'rinadi.</div></div>` : ""}
+  `;
+
+  const body = document.getElementById("fayllarBody");
+  if (body) body.addEventListener("click", (e) => {
+    const id = e.target.dataset.delFayl;
+    if (id) deleteFayl(id);
+  });
+}
+
+function deleteFayl(id) {
+  const fayl = STORE.fayllar.find((f) => f.id === id);
+  if (!fayl) return;
+  const count = fayllarLinkedCount(fayl);
+  openModal(`
+    <h3>Faylni o'chirish</h3>
+    <p class="modal-sub">"${escapeHtml(fayl.faylNomi || "")}" fayli va unga bog'liq <b>${count} ta yozuv</b> (${escapeHtml(FAYL_BOLIM_LABEL[fayl.bolim] || fayl.bolim)}) butunlay o'chiriladi. Bu amalni bekor qilib bo'lmaydi.</p>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-danger" id="mConfirm">Ha, o'chirish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mConfirm").addEventListener("click", async () => {
+    RECENTLY_DELETED.add(id);
+    const bolimType = fayl.bolim;
+    if (STORE[bolimType]) {
+      STORE[bolimType].filter((r) => r.faylId === id).forEach((r) => RECENTLY_DELETED.add(r.id));
+      STORE[bolimType] = STORE[bolimType].filter((r) => r.faylId !== id);
+    }
+    STORE.fayllar = STORE.fayllar.filter((f) => f.id !== id);
+    const { error } = await sbClient.from("fayllar").delete().eq("id", id);
+    if (error) console.error(error);
+    saveStore();
+    updateNavBadges();
+    closeModal();
+    renderFayllar();
+    toast("Fayl va unga bog'liq yozuvlar o'chirildi");
+  });
+}
+
+/* ------------------------------- Sozlamalar ------------------------------- */
+
+function renderSettings() {
+  const s = STORE.settings;
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Sozlamalar</h1>
+        <p class="page-desc">Korxona rekvizitlari va hisobotlarga ta'sir qiluvchi umumiy parametrlar.</p>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <div class="card">
+        <div class="card-title">Korxona rekvizitlari</div>
+        <div class="field"><label>Nomi</label><input id="sCompany" value="${escapeHtml(s.companyName)}"></div>
+        <div class="field"><label>INN</label><input id="sInn" value="${escapeHtml(s.inn)}"></div>
+        <div class="field"><label>Manzil</label><input id="sAddress" value="${escapeHtml(s.address)}"></div>
+        <div class="field"><label>Hisobot davri</label><input id="sPeriod" value="${escapeHtml(s.period)}"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Soliq stavkalari</div>
+        <div class="field"><label>QQS stavkasi (%)</label><input id="sQqs" value="${fmt(s.qqsStavka)}"></div>
+        <div class="field"><label>Foyda solig'i stavkasi (%)</label><input id="sFoyda" value="${fmt(s.foydaStavka)}"></div>
+        <div class="field"><label>Davr xarajatlari (F2, qo'lda)</label><input id="sDavr" value="${fmt(s.davrXarajati)}"></div>
+        <div class="field"><label>Moliyaviy xarajatlar (F2, qo'lda)</label><input id="sMoliya" value="${fmt(s.moliyaviyXarajat)}"></div>
+        <div class="field">
+          <label>Tannarxni qo'lda belgilash (bo'sh = avtomatik, kirim fakturalardan)</label>
+          <input id="sTannarx" value="${s.tannarxManual === null || s.tannarxManual === undefined ? "" : fmt(s.tannarxManual)}">
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Ish haqi hisoboti stavkalari</div>
+        <div class="field"><label>Ijtimoiy soliq stavkasi (%)</label><input id="sIjtimoiy" value="${fmt(s.ijtimoiySoliqStavka)}"></div>
+        <div class="field"><label>NDFL stavkasi (%)</label><input id="sNdfl" value="${fmt(s.ndflStavka)}"></div>
+        <div class="field"><label>INPS stavkasi (%)</label><input id="sInps" value="${fmt(s.inpsStavka, 1)}"></div>
+      </div>
+    </div>
+
+    <div class="card section">
+      <div class="card-title">Ma'lumotlar</div>
+      <div class="page-actions">
+        <button class="btn" id="btnExport">Barcha ma'lumotlarni yuklab olish (.json)</button>
+        <button class="btn" id="btnImportJson">.json fayldan tiklash</button>
+        <button class="btn btn-danger" id="btnReset">Hammasini tozalash</button>
+      </div>
+      <input type="file" id="jsonFile" accept=".json" style="display:none">
+      <div class="note">Barcha ma'lumotlar faqat shu brauzerning xotirasida (localStorage) saqlanadi. Boshqa qurilmaga ko'chirish uchun ".json" formatida eksport/import qiling.</div>
+    </div>
+
+    <div class="page-actions" style="margin-top:16px;">
+      <button class="btn btn-primary" id="btnSaveSettings">Saqlash</button>
+    </div>
+  `;
+
+  document.getElementById("btnSaveSettings").addEventListener("click", () => {
+    if (!requireDataReady()) return;
+    s.companyName = document.getElementById("sCompany").value;
+    s.inn = document.getElementById("sInn").value;
+    s.address = document.getElementById("sAddress").value;
+    s.period = document.getElementById("sPeriod").value;
+    s.qqsStavka = toNum(document.getElementById("sQqs").value);
+    s.foydaStavka = toNum(document.getElementById("sFoyda").value);
+    s.davrXarajati = toNum(document.getElementById("sDavr").value);
+    s.moliyaviyXarajat = toNum(document.getElementById("sMoliya").value);
+    const tannarxVal = document.getElementById("sTannarx").value.trim();
+    s.tannarxManual = tannarxVal === "" ? null : toNum(tannarxVal);
+    s.ijtimoiySoliqStavka = toNum(document.getElementById("sIjtimoiy").value);
+    s.ndflStavka = toNum(document.getElementById("sNdfl").value);
+    s.inpsStavka = toNum(document.getElementById("sInps").value);
+    saveSettingsToDb({
+      companyName: s.companyName, inn: s.inn, address: s.address, period: s.period,
+      qqsStavka: s.qqsStavka, foydaStavka: s.foydaStavka, davrXarajati: s.davrXarajati,
+      moliyaviyXarajat: s.moliyaviyXarajat, tannarxManual: s.tannarxManual,
+      ijtimoiySoliqStavka: s.ijtimoiySoliqStavka, ndflStavka: s.ndflStavka, inpsStavka: s.inpsStavka
+    });
+    saveStore();
+    toast("Sozlamalar saqlandi");
+  });
+
+  document.getElementById("btnExport").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(STORE, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `BUX2112_${todayISO()}.json`;
+    a.click();
+  });
+
+  document.getElementById("btnImportJson").addEventListener("click", () => document.getElementById("jsonFile").click());
+  document.getElementById("jsonFile").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const newSettings = Object.assign(defaultStore().settings, parsed.settings || {});
+
+      await Promise.all([
+        sbClient.from("kirim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("chiqim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("bank").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("ish_haqi").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("ombor").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("ishlab_chiqarish").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("mahsulotlar").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("fayllar").delete().neq("id", "00000000-0000-0000-0000-000000000000")
+      ]);
+
+      // Eslatma: "fayllar" jadvali reset paytida bo'shatilib qayta yaratilgani
+      // uchun eski fayl_id qiymatlari endi hech qanday faylga mos kelmaydi —
+      // FOREIGN KEY buzilishining oldini olish uchun tiklashda fayl_id
+      // biriktirilmaydi (tranzaksiya ma'lumotlarining o'zi to'liq tiklanadi,
+      // faqat "qaysi fayldan import qilingani" bog'lanishi yo'qoladi).
+      const stripFaylId = (r) => ({ ...r, faylId: undefined });
+      const inserts = [];
+      if ((parsed.kirim || []).length) inserts.push(sbClient.from("kirim").insert(parsed.kirim.map((r) => toDbRow(INVOICE_DB_MAP, stripFaylId(r)))));
+      if ((parsed.chiqim || []).length) inserts.push(sbClient.from("chiqim").insert(parsed.chiqim.map((r) => toDbRow(INVOICE_DB_MAP, stripFaylId(r)))));
+      if ((parsed.bank || []).length) inserts.push(sbClient.from("bank").insert(parsed.bank.map((r) => toDbRow(BANK_DB_MAP, stripFaylId(r)))));
+      if ((parsed.ishHaqi || []).length) inserts.push(sbClient.from("ish_haqi").insert(parsed.ishHaqi.map((r) => toDbRow(ISHHAQI_DB_MAP, stripFaylId(r)))));
+      if ((parsed.ombor || []).length) inserts.push(sbClient.from("ombor").insert(parsed.ombor.map((r) => toDbRow(OMBOR_DB_MAP, stripFaylId(r)))));
+      if ((parsed.mahsulotlar || []).length) inserts.push(sbClient.from("mahsulotlar").insert(parsed.mahsulotlar.map((r) => toDbRow(MAHSULOT_DB_MAP, r))));
+      if ((parsed.ishlabChiqarish || []).length) inserts.push(sbClient.from("ishlab_chiqarish").insert(parsed.ishlabChiqarish.map((r) => toDbRow(ISHLAB_CHIQARISH_DB_MAP, r))));
+      await Promise.all(inserts);
+      await saveSettingsToDb(newSettings);
+      await loadAllData();
+      renderSettings();
+      toast("Ma'lumotlar tiklandi");
+    } catch (err) {
+      console.error(err);
+      toast("Faylni o'qib bo'lmadi", "err");
+    }
+  });
+
+  document.getElementById("btnReset").addEventListener("click", () => {
+    openModal(`
+      <h3>Hammasini tozalash</h3>
+      <p class="modal-sub">Barcha kirim/chiqim/bank/ish haqi/ombor/ishlab chiqarish yozuvlari <b>butun jamoa uchun umumiy bazadan</b> o'chiriladi. Bu amalni bekor qilib bo'lmaydi.</p>
+      <div class="modal-actions">
+        <button class="btn" id="mCancel">Bekor qilish</button>
+        <button class="btn btn-danger" id="mConfirm">Ha, tozalash</button>
+      </div>
+    `);
+    document.getElementById("mCancel").addEventListener("click", closeModal);
+    document.getElementById("mConfirm").addEventListener("click", async () => {
+      await Promise.all([
+        sbClient.from("kirim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("chiqim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("bank").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("ish_haqi").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("ombor").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("ishlab_chiqarish").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("mahsulotlar").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
+        sbClient.from("fayllar").delete().neq("id", "00000000-0000-0000-0000-000000000000")
+      ]);
+      await saveSettingsToDb(defaultStore().settings);
+      await loadAllData();
+      closeModal();
+      renderSettings();
+      toast("Tozalandi");
+    });
+  });
+}
+
+/* ------------------------------- Hisobot export/import (Excel) ------------------------------- */
+// Har bir hisobot (F2, QQS, Foyda solig'i, Ish haqi hisoboti, F1) uchun umumiy: hisoblangan
+// ko'rsatkichlarni .xlsx fayl sifatida yuklab olish (eksport) va ilgari eksport qilingan
+// fayldan qo'lda kiritiladigan ko'rsatkichlarni qayta o'qib olish (import).
+
+function buildAndDownloadReportXlsx(filenameBase, title, lines, detail) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`],
+    [title],
+    [],
+    ["Kod", "Ko'rsatkich", "Summa"]
+  ];
+  lines.forEach((l) => aoa.push([l.code || "", l.label, toNum(l.value)]));
+  const ws1 = XLSX.utils.aoa_to_sheet(aoa);
+  ws1["!cols"] = [{ wch: 8 }, { wch: 55 }, { wch: 20 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws1, "Hisobot");
+
+  if (detail && detail.rows.length) {
+    const daoa = [detail.headers, ...detail.rows];
+    const ws2 = XLSX.utils.aoa_to_sheet(daoa);
+    XLSX.utils.book_append_sheet(wb, ws2, detail.sheetName || "Tafsilot");
+  }
+  XLSX.writeFile(wb, `${filenameBase}_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
+}
+
+function openGenericImportModal(titleHtml, hintHtml, acceptAttr, onFile) {
+  openModal(`
+    <h3>${titleHtml}</h3>
+    <p class="modal-sub">${hintHtml}</p>
+    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">${acceptAttr}</span></div>
+    <input type="file" id="impFile" accept="${acceptAttr}" style="display:none">
+    <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  const dz = document.getElementById("dz");
+  const inp = document.getElementById("impFile");
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("drag"); if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); });
+  inp.addEventListener("change", (e) => { if (e.target.files[0]) onFile(e.target.files[0]); });
+}
+
+// fieldMap: { "Excel'dagi ko'rsatkich matni": "STORE.settings kaliti" }
+async function handleReportSettingsImport(file, fieldMap, rerender) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    let applied = 0;
+    const changed = {};
+    rows.forEach((row) => {
+      const label = String(row[1] || "").trim();
+      if (fieldMap[label] !== undefined && row[2] !== "" && row[2] !== undefined) {
+        const key = fieldMap[label];
+        STORE.settings[key] = toNum(row[2]);
+        changed[key] = STORE.settings[key];
+        applied++;
+      }
+    });
+    if (Object.keys(changed).length) await saveSettingsToDb(changed);
+    saveStore();
+    closeModal();
+    rerender();
+    toast(applied ? `Import: ${applied} ta ko'rsatkich yangilandi` : "Mos ko'rsatkich topilmadi");
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
+/* ------------------------------- Import (Excel) ------------------------------- */
+
+function openImportModal(type) {
+  const info = INVOICE_LABELS[type];
+  openModal(`
+    <h3>${info.title} — Excel'dan import</h3>
+    <p class="modal-sub">didox.uz eksport qilgan .xlsx faylni yuklang (masalan: "factura ${type === "kirim" ? "kirim" : "chiqim"}.xlsx"). Har bir hujjat bitta qator sifatida qo'shiladi, takroriy hujjatlar o'tkazib yuboriladi.</p>
+    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls</span></div>
+    <input type="file" id="impFile" accept=".xlsx,.xls" style="display:none">
+    <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  const dz = document.getElementById("dz");
+  const inp = document.getElementById("impFile");
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dz.classList.remove("drag");
+    if (e.dataTransfer.files[0]) handleInvoiceImport(e.dataTransfer.files[0], type);
+  });
+  inp.addEventListener("change", (e) => {
+    if (e.target.files[0]) handleInvoiceImport(e.target.files[0], type);
+  });
+}
+
+function normalizeDate(v) {
+  if (v === "" || v === null || v === undefined) return "";
+  if (typeof v === "number") {
+    const d = XLSX.SSF.parse_date_code(v);
+    if (!d) return "";
+    return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+  }
+  const str = String(v).trim();
+  let m = str.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = str.match(/^(\d{4})[.\-](\d{2})[.\-](\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  return str;
+}
+
+// Didox.uz / soliqservis.uz eksport fayllarining ustunlar tartibi versiyadan
+// versiyaga sal-pal farq qilishi mumkin (masalan, chetda qo'shimcha bo'sh ustun
+// bo'lishi). Shu sabab ustun RAQAMIGA emas, birinchi qatordagi SARLAVHA
+// MATNIGA qarab moslashuvchan tarzda topamiz — bu qaysi eksport variantida
+// ham to'g'ri ishlaydi.
+function findCol(headerRow, predicate) {
+  for (let i = 0; i < headerRow.length; i++) {
+    if (predicate(String(headerRow[i] || "").trim().toLowerCase())) return i;
+  }
+  return -1;
+}
+
+function detectInvoiceColumns(headerRow) {
+  return {
+    id: findCol(headerRow, (s) => s === "id"),
+    status: findCol(headerRow, (s) => s === "статус" || s === "holati" || s === "status"),
+    hujjat: findCol(headerRow, (s) => s.includes("номер документ") || s.includes("hujjat")),
+    sana: findCol(headerRow, (s) => s.includes("дата документ") || (s.includes("sana") && !s.includes("отправки"))),
+    sellerInn: findCol(headerRow, (s) => s.startsWith("продавец") && s.includes("инн")),
+    sellerNomi: findCol(headerRow, (s) => s.startsWith("продавец") && s.includes("наименование")),
+    buyerInn: findCol(headerRow, (s) => s.startsWith("покупатель") && s.includes("инн")),
+    buyerNomi: findCol(headerRow, (s) => s.startsWith("покупатель") && s.includes("наименование")),
+    base: findCol(headerRow, (s) => s === "стоимость поставки"),
+    qqsStavka: findCol(headerRow, (s) => s.includes("ндс") && s.includes("ставка")),
+    qqsSumma: findCol(headerRow, (s) => s.includes("ндс") && s.includes("сумма")),
+    jami: findCol(headerRow, (s) => s.includes("стоимость поставки") && s.includes("учётом")),
+    // Ombor (mahsulot darajasidagi) qatorlar uchun qo'shimcha ustunlar
+    nomi: findCol(headerRow, (s) => s.includes("примечание") && s.includes("товар")),
+    birlik: findCol(headerRow, (s) => s.includes("единица") && s.includes("измерен")),
+    miqdor: findCol(headerRow, (s) => s === "количество"),
+    narx: findCol(headerRow, (s) => s === "цена")
+  };
+}
+
+async function handleInvoiceImport(file, type) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+    const col = detectInvoiceColumns(rows[0]);
+    if (col.id === -1 || col.hujjat === -1 || col.base === -1) {
+      toast("Fayl tuzilishi tanilmadi — ustunlar mos kelmayapti", "err");
+      return;
+    }
+
+    const isSellerSideKirim = type === "kirim";
+    const candidates = [];
+    let skipped = 0;
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const idCell = row[col.id];
+      if (!idCell) continue; // faqat hujjat sarlavha qatorlari (bo'lim qatorlari o'tkazib yuboriladi)
+
+      const status = String(row[col.status] || "Подписан").trim();
+      const hujjatRaqami = String(row[col.hujjat] || "").trim();
+      const sana = normalizeDate(row[col.sana]);
+      const kontragentInn = String((isSellerSideKirim ? row[col.sellerInn] : row[col.buyerInn]) || "").trim();
+      const kontragentNomi = String((isSellerSideKirim ? row[col.sellerNomi] : row[col.buyerNomi]) || "").trim();
+      const summaQQSsiz = toNum(row[col.base]);
+      const qqsStavka = toNum(row[col.qqsStavka]);
+      const qqsSumma = toNum(row[col.qqsSumma]);
+      const jamiSumma = toNum(row[col.jami]) || (summaQQSsiz + qqsSumma);
+
+      const dupExists = STORE[type].some((r) => r.hujjatRaqami === hujjatRaqami && r.sana === sana && Math.abs(r.jamiSumma - jamiSumma) < 1 && r.kontragentNomi === kontragentNomi);
+      if (dupExists) { skipped++; continue; }
+
+      candidates.push({ sana, hujjatRaqami, status, kontragentInn, kontragentNomi, summaQQSsiz, qqsStavka, qqsSumma, jamiSumma, tolandi: false });
+    }
+
+    if (candidates.length) {
+      const faylRow = await registerFaylUpload(type, file);
+      if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
+    }
+
+    let added = 0;
+    if (candidates.length) {
+      const { data, error } = await sbClient.from(TABLE_NAMES[type]).insert(candidates.map((r) => toDbRow(INVOICE_DB_MAP, r))).select();
+      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      (data || []).forEach((row) => STORE[type].push(fromDbRow(INVOICE_DB_MAP, row)));
+      added = (data || []).length;
+    }
+
+    saveStore();
+    closeModal();
+    renderInvoiceTable(type);
+    toast(`Import: ${added} ta qo'shildi, ${skipped} ta takror o'tkazib yuborildi`);
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
+function openBankImportModal() {
+  openModal(`
+    <h3>Bank harakati — fayldan import</h3>
+    <p class="modal-sub">ABS/Klient-Bank ko'chirmasi (masalan, Bank.xlsx) formati avtomatik tanib olinadi. Boshqa formatdagi fayl uchun ustunlar tartibi: sana, hujjat №, kontragent, tavsif, kirim, chiqim.</p>
+    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls / .csv</span></div>
+    <input type="file" id="impFile" accept=".xlsx,.xls,.csv" style="display:none">
+    <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  const dz = document.getElementById("dz");
+  const inp = document.getElementById("impFile");
+  dz.addEventListener("click", () => inp.click());
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag"); });
+  dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+  dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("drag"); if (e.dataTransfer.files[0]) handleBankImport(e.dataTransfer.files[0]); });
+  inp.addEventListener("change", (e) => { if (e.target.files[0]) handleBankImport(e.target.files[0]); });
+}
+
+function parseBalanceLine(cell, label) {
+  const re = new RegExp(label + ".*?:\\s*([\\d\\s.,]+)", "i");
+  const m = String(cell).match(re);
+  return m ? toNum(m[1]) : null;
+}
+
+// ABS/Klient-Bank ko'chirmasi: "Дата", "Cчет/ИНН", "№ док", "Оп", "МФО", "Оборот Дебет" (chiqim), "Оборот Кредит" (kirim), "Назначение платежа"
+function tryParseAbsBankStatement(rows) {
+  let headerIdx = -1;
+  const col = {};
+  for (let i = 0; i < Math.min(rows.length, 12); i++) {
+    const joined = rows[i].map((c) => String(c).toLowerCase());
+    const dateI = joined.findIndex((c) => /дата/.test(c));
+    const debetI = joined.findIndex((c) => /дебет/.test(c));
+    const kreditI = joined.findIndex((c) => /кредит/.test(c));
+    if (dateI >= 0 && debetI >= 0 && kreditI >= 0) {
+      headerIdx = i;
+      col.date = dateI;
+      col.schet = joined.findIndex((c) => /инн/.test(c));
+      col.doc = joined.findIndex((c) => /док/.test(c));
+      col.debet = debetI;
+      col.kredit = kreditI;
+      col.naznach = joined.findIndex((c) => /назначен/.test(c));
+      break;
+    }
+  }
+  if (headerIdx === -1) return null;
+
+  let opening = null;
+  for (let i = 0; i < headerIdx; i++) {
+    for (const cell of rows[i]) {
+      if (typeof cell !== "string") continue;
+      const o = parseBalanceLine(cell, "Остаток на начало");
+      if (o !== null) opening = o;
+    }
+  }
+
+  const parsed = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i];
+    const dateCell = row[col.date];
+    // Sana katakchasi Excel'da matn ("01.06.2026 11:18") yoki sonli sana
+    // (masalan 46237.60...) ko'rinishida bo'lishi mumkin — ikkalasini ham
+    // qabul qilamiz. Boshqa turdagi (masalan "Итоговый оборот" yozuvi yoki
+    // bo'sh) qatorlar o'tkazib yuboriladi.
+    const isValidDateCell = (typeof dateCell === "number" && dateCell > 0) ||
+      (typeof dateCell === "string" && /^\d{2}\.\d{2}\.\d{4}/.test(dateCell));
+    if (!isValidDateCell) continue;
+    const schetCell = String(row[col.schet] || "");
+    const parts = schetCell.split("/");
+    const kontragentInn = (parts[1] || "").trim();
+    const kontragentNomi = (parts.slice(2).join("/") || "").trim();
+    const hujjatRaqami = String(row[col.doc] || "").trim();
+    const chiqim = toNum(row[col.debet]);
+    const kirim = toNum(row[col.kredit]);
+    const tavsif = String(row[col.naznach] || "").trim();
+    parsed.push({
+      sana: normalizeDate(typeof dateCell === "string" ? dateCell.split(" ")[0] : dateCell),
+      hujjatRaqami,
+      kontragent: kontragentNomi,
+      kontragentInn,
+      tavsif,
+      kirim,
+      chiqim
+    });
+  }
+  return { rows: parsed, opening };
+}
+
+async function handleBankImport(file) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+    const wasEmpty = STORE.bank.length === 0;
+    const abs = tryParseAbsBankStatement(rows);
+    const candidates = [];
+    let skipped = 0;
+    let newOpening = null;
+
+    if (abs) {
+      if (abs.opening !== null && wasEmpty) newOpening = abs.opening;
+      for (const r of abs.rows) {
+        const dup = STORE.bank.some((b) => b.hujjatRaqami === r.hujjatRaqami && b.sana === r.sana && Math.abs(b.kirim - r.kirim) < 1 && Math.abs(b.chiqim - r.chiqim) < 1);
+        if (dup) { skipped++; continue; }
+        candidates.push(r);
+      }
+    } else {
+      let start = 0;
+      const first = rows[0];
+      const looksLikeHeader = first.some((c) => typeof c === "string" && /sana|дата|hujjat|kirim|chiqim|приход|расход|сумма/i.test(c));
+      if (looksLikeHeader) start = 1;
+
+      for (let i = start; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row.length || row.every((c) => c === "")) continue;
+        const sana = normalizeDate(row[0]);
+        const hujjatRaqami = String(row[1] || "").trim();
+        const kontragent = String(row[2] || "").trim();
+        const tavsif = String(row[3] || "").trim();
+        const kirim = toNum(row[4]);
+        const chiqim = toNum(row[5]);
+        if (!sana && !kirim && !chiqim) continue;
+        const dup = STORE.bank.some((b) => b.sana === sana && b.hujjatRaqami === hujjatRaqami && Math.abs(b.kirim - kirim) < 1 && Math.abs(b.chiqim - chiqim) < 1 && b.kontragent === kontragent);
+        if (dup) { skipped++; continue; }
+        candidates.push({ sana, hujjatRaqami, kontragent, kontragentInn: "", tavsif, kirim, chiqim });
+      }
+    }
+
+    if (newOpening !== null) {
+      STORE.settings.bankOpeningBalance = newOpening;
+      await saveSettingsToDb({ bankOpeningBalance: newOpening });
+    }
+
+    if (candidates.length) {
+      const faylRow = await registerFaylUpload("bank", file);
+      if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
+    }
+
+    let added = 0;
+    if (candidates.length) {
+      const { data, error } = await sbClient.from("bank").insert(candidates.map((r) => toDbRow(BANK_DB_MAP, r))).select();
+      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      (data || []).forEach((row) => STORE.bank.push(fromDbRow(BANK_DB_MAP, row)));
+      added = (data || []).length;
+    }
+
+    saveStore();
+    closeModal();
+    renderBank();
+    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}`);
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
+/* --------------------------------- theme --------------------------------- */
+
+function applyTheme() {
+  if (THEME === "dark") {
+    document.documentElement.setAttribute("data-theme", "dark");
+    document.getElementById("themeLabel").textContent = "Tungi rejim";
+    document.getElementById("themeIcon").innerHTML = "&#9789;";
+  } else {
+    document.documentElement.setAttribute("data-theme", "light");
+    document.getElementById("themeLabel").textContent = "Yorug' rejim";
+    document.getElementById("themeIcon").innerHTML = "&#9728;";
+  }
+}
+
+document.getElementById("themeToggle").addEventListener("click", () => {
+  THEME = THEME === "dark" ? "light" : "dark";
+  localStorage.setItem(THEME_KEY, THEME);
+  applyTheme();
+});
+
+/* --------------------------------- realtime sync --------------------------------- */
+
+let REALTIME_CHANNEL = null;
+
+// Foydalanuvchi HOZIR (so'nggi 1.5 soniya ichida) inputga yozayotgan bo'lsa, uzoqdan
+// kelgan yangilanish uning tugallanmagan yozuvini o'chirib yubormasligi uchun sahifani
+// qayta chizishni bir zumga to'xtatib turamiz. Faqat maydonga bosib qo'yish (lekin
+// yozmaslik) sinxronlashni bloklamaydi — bu eski usuldagi kamchilik edi.
+let lastTypingAt = 0;
+document.addEventListener("input", (e) => {
+  if (e.target && e.target.closest && e.target.closest("#main")) lastTypingAt = Date.now();
+}, true);
+
+function rerenderCurrentPage() {
+  if (Date.now() - lastTypingAt < 1500) return;
+  PAGES[CURRENT_PAGE].render();
+}
+
+// Bitta xil obyektga tegishli real vaqtli xabarlar bazadagi tartibda kelishi
+// kafolatlanmaydi — masalan, "qo'shildi" xabari network kechikishi tufayli
+// foydalanuvchi allaqachon o'sha qatorni o'chirib ulgurganidan KEYIN yetib
+// kelishi mumkin. Shu holatda uni qayta "tiriltirib" qo'ymaslik uchun,
+// shu klient o'chirgan id'larni eslab qolamiz va ular uchun kelgan eskirgan
+// "qo'shildi/yangilandi" xabarlarini e'tiborsiz qoldiramiz.
+const RECENTLY_DELETED = new Set();
+
+function applyRemoteRowChange(type, payload) {
+  const map = TABLE_MAPS[type];
+  if (payload.eventType === "INSERT") {
+    if (RECENTLY_DELETED.has(payload.new.id)) return;
+    if (!STORE[type].some((r) => r.id === payload.new.id)) STORE[type].push(fromDbRow(map, payload.new));
+  } else if (payload.eventType === "UPDATE") {
+    if (RECENTLY_DELETED.has(payload.new.id)) return;
+    const idx = STORE[type].findIndex((r) => r.id === payload.new.id);
+    if (idx >= 0) STORE[type][idx] = fromDbRow(map, payload.new);
+    else STORE[type].push(fromDbRow(map, payload.new));
+  } else if (payload.eventType === "DELETE") {
+    STORE[type] = STORE[type].filter((r) => r.id !== payload.old.id);
+    RECENTLY_DELETED.delete(payload.old.id);
+  }
+  recomputeAllPaymentStatus();
+  updateNavBadges();
+  rerenderCurrentPage();
+}
+
+function setSyncStatus(connected) {
+  const dot = document.getElementById("syncDot");
+  const label = document.getElementById("syncLabel");
+  if (!dot || !label) return;
+  dot.classList.toggle("off", !connected);
+  label.textContent = connected ? "Onlayn — real vaqtda sinxron" : "Ulanish yo'q";
+}
+
+function setupRealtime() {
+  if (REALTIME_CHANNEL) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
+  REALTIME_CHANNEL = sbClient.channel("bux2112-sync")
+    .on("postgres_changes", { event: "*", schema: "public", table: "kirim" }, (p) => applyRemoteRowChange("kirim", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "chiqim" }, (p) => applyRemoteRowChange("chiqim", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "bank" }, (p) => applyRemoteRowChange("bank", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "ish_haqi" }, (p) => applyRemoteRowChange("ishHaqi", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "ombor" }, (p) => applyRemoteRowChange("ombor", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "mahsulotlar" }, (p) => applyRemoteRowChange("mahsulotlar", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "ishlab_chiqarish" }, (p) => applyRemoteRowChange("ishlabChiqarish", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "fayllar" }, (p) => applyRemoteRowChange("fayllar", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "settings" }, (p) => {
+      STORE.settings = Object.assign(STORE.settings, fromDbSettings(p.new), loadLocalFilters());
+      rerenderCurrentPage();
+    })
+    .subscribe((status) => {
+      setSyncStatus(status === "SUBSCRIBED");
+      // Kanal (qayta) ulanganda — masalan noutbuk uyg'ongandan yoki Wi-Fi
+      // tiklangandan keyin — shu oraliqda o'tkazib yuborilgan o'zgarishlarni
+      // to'ldirish uchun ma'lumotlarni bazadan qaytadan yuklaymiz.
+      if (status === "SUBSCRIBED") reconcileData();
+    });
+}
+
+let RECONCILING = false;
+async function reconcileData() {
+  if (!hasBooted || RECONCILING) return;
+  RECONCILING = true;
+  try {
+    await loadAllData();
+    rerenderCurrentPage();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    RECONCILING = false;
+  }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") reconcileData();
+});
+window.addEventListener("online", reconcileData);
+window.addEventListener("focus", reconcileData);
+
+/* --------------------------------- auth gate --------------------------------- */
+
+function showAuthGate() {
+  document.getElementById("authGate").style.display = "flex";
+}
+function hideAuthGate() {
+  document.getElementById("authGate").style.display = "none";
+}
+
+async function bootAfterAuth() {
+  hideAuthGate();
+  applyTheme();
+  navigate("dashboard");
+  try {
+    await loadAllData();
+  } catch (err) {
+    console.error(err);
+    toast("Ma'lumotlarni yuklashda xatolik", "err");
+  }
+  setupRealtime();
+  updateNavBadges();
+  // "loadAllData" tugashi bir necha yuz millisekund cho'zilishi mumkin — shu oraliqda
+  // foydalanuvchi allaqachon boshqa bo'limga o'tgan bo'lishi mumkin. Shu sabab uni
+  // majburan "dashboard"ga qaytarmaymiz, aksincha HOZIRGI turgan sahifasini yangi
+  // (endi yuklangan) ma'lumot bilan qayta chizamiz.
+  PAGES[CURRENT_PAGE].render();
+}
+
+// Supabase "onAuthStateChange" nafaqat kirish/chiqishda, balki fon rejimida
+// xavfsizlik tokeni yangilanganda (TOKEN_REFRESHED) ham ishga tushadi.
+// Shu sabab "hasBooted" bayrog'i orqali to'liq yuklash+navigatsiyani FAQAT
+// haqiqiy kirishda bir marta bajaramiz — aks holda foydalanuvchi ishlab
+// turgan sahifasidan kutilmaganda "Bosh sahifa"ga uloqtirilib qolardi.
+let hasBooted = false;
+
+const ACTIVE_BAZA_KEY = "bux2112_active_baza";
+
+function getBaza(id) {
+  return BAZALAR.find((b) => b.id === id) || BAZALAR[0];
+}
+
+// Tanlangan bazaga mos Supabase client'ni yaratadi va shu client uchun
+// auth-hodisalarini tinglashni o'rnatadi. Har bir baza — butunlay alohida
+// Supabase loyihasi (o'z URL/key/sessiyasi bilan), shu sabab baza
+// almashtirilganda eskisi bilan bog'liq kanal/holat tozalanadi.
+function connectBaza(bazaId) {
+  if (REALTIME_CHANNEL && sbClient) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
+  const cfg = getBaza(bazaId);
+  ACTIVE_BAZA_ID = cfg.id;
+  sbClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+  hasBooted = false;
+  sbClient.auth.onAuthStateChange((event, session) => {
+    if (session) {
+      if (!hasBooted) {
+        hasBooted = true;
+        localStorage.setItem(ACTIVE_BAZA_KEY, ACTIVE_BAZA_ID);
+        bootAfterAuth();
+      }
+    } else {
+      hasBooted = false;
+      if (REALTIME_CHANNEL) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
+      setSyncStatus(false);
+      showAuthGate();
+    }
+  });
+}
+
+const authBazaEl = document.getElementById("authBaza");
+authBazaEl.innerHTML = BAZALAR.map((b) => `<option value="${b.id}">${b.nomi}</option>`).join("");
+authBazaEl.value = localStorage.getItem(ACTIVE_BAZA_KEY) || BAZALAR[0].id;
+
+connectBaza(authBazaEl.value);
+
+document.getElementById("authSubmit").addEventListener("click", async () => {
+  const pwdEl = document.getElementById("authPassword");
+  const errEl = document.getElementById("authError");
+  const btn = document.getElementById("authSubmit");
+  const pwd = pwdEl.value;
+  errEl.textContent = "";
+  if (!pwd) { errEl.textContent = "Parolni kiriting"; return; }
+  if (authBazaEl.value !== ACTIVE_BAZA_ID) connectBaza(authBazaEl.value);
+  btn.disabled = true;
+  btn.textContent = "Tekshirilmoqda…";
+  const cfg = getBaza(ACTIVE_BAZA_ID);
+  const { error } = await sbClient.auth.signInWithPassword({ email: cfg.sharedEmail, password: pwd });
+  btn.disabled = false;
+  btn.textContent = "Kirish";
+  if (error) {
+    errEl.textContent = "Parol noto'g'ri";
+  } else {
+    pwdEl.value = "";
+  }
+});
+document.getElementById("authPassword").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") document.getElementById("authSubmit").click();
+});
+document.getElementById("logoutBtn").addEventListener("click", () => {
+  sbClient.auth.signOut();
+});
+
+/* --------------------------------- init --------------------------------- */
+
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.addEventListener("click", () => navigate(item.dataset.page));
+});
+
+applyTheme();

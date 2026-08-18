@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BUX2112 — Buxgalteriya bazasi</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2222%22 fill=%22%232f6f5e%22/><text x=%2250%22 y=%2266%22 font-size=%2254%22 text-anchor=%22middle%22 fill=%22white%22 font-family=%22Arial%22 font-weight=%22bold%22>B</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">2112</div>
+      <div class="brand-text">
+        <div class="brand-title">BUX2112</div>
+        <div class="brand-sub" id="brandCompany">Buxgalteriya bazasi</div>
+      </div>
+    </div>
+
+    <div class="nav-group-label">Umumiy</div>
+    <div class="nav-item active" data-page="dashboard"><span class="ic">&#8962;</span>Bosh sahifa</div>
+
+    <div class="nav-group-label">Birlamchi hujjatlar</div>
+    <div class="nav-item" data-page="kirim"><span class="ic">&#8595;</span>Faktura kirim<span class="badge" id="navKirimCount">0</span></div>
+    <div class="nav-item" data-page="chiqim"><span class="ic">&#8593;</span>Faktura chiqim<span class="badge" id="navChiqimCount">0</span></div>
+    <div class="nav-item" data-page="bank"><span class="ic">&#8862;</span>Bank harakati<span class="badge" id="navBankCount">0</span></div>
+    <div class="nav-item" data-page="ishhaqi"><span class="ic">&#128101;</span>Ish haqi<span class="badge" id="navIshHaqiCount">0</span></div>
+
+    <div class="nav-group-label">Ombor</div>
+    <div class="nav-item" data-page="ombor"><span class="ic">&#128230;</span>Ombor<span class="badge" id="navOmborCount">0</span></div>
+    <div class="nav-item" data-page="ishlabchiqarish"><span class="ic">&#127981;</span>Ishlab chiqarish<span class="badge" id="navIshlabChiqarishCount">0</span></div>
+
+    <div class="nav-group-label">Hisobotlar</div>
+    <div class="nav-item" data-page="f2"><span class="ic">&#128202;</span>F2 — Moliyaviy natija</div>
+    <div class="nav-item" data-page="qqs"><span class="ic">&#37;</span>QQS hisob-kitobi</div>
+    <div class="nav-item" data-page="foyda"><span class="ic">&#8352;</span>Foyda solig'i</div>
+    <div class="nav-item" data-page="ishhaqihisobot"><span class="ic">&#128176;</span>Ish haqi hisoboti</div>
+    <div class="nav-item" data-page="f1"><span class="ic">&#9776;</span>F1 — Balans</div>
+    <div class="nav-item" data-page="sverka"><span class="ic">&#128203;</span>Solishtirma dalolatnoma</div>
+
+    <div class="nav-group-label">Tizim</div>
+    <div class="nav-item" data-page="fayllar"><span class="ic">&#128193;</span>Fayl yuklamalari<span class="badge" id="navFayllarCount">0</span></div>
+    <div class="nav-item" data-page="settings"><span class="ic">&#9881;</span>Sozlamalar</div>
+
+    <div class="sidebar-foot">
+      <div class="theme-toggle" id="themeToggle">
+        <span id="themeLabel">Yorug' rejim</span>
+        <span id="themeIcon">&#9728;</span>
+      </div>
+      <div class="theme-toggle" id="logoutBtn">
+        <span><span class="sync-dot" id="syncDot"></span><span id="syncLabel">Ulanmoqda…</span></span>
+        <span>&#9211;</span>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <!-- sahifalar app.js orqali shu yerga render qilinadi -->
+  </main>
+</div>
+
+<div id="modalRoot"></div>
+<div class="toast-stack" id="toastStack"></div>
+
+<div class="auth-gate" id="authGate">
+  <div class="auth-box">
+    <div class="brand-mark">2112</div>
+    <h2>BUX2112</h2>
+    <p class="faint">Bazani tanlang va umumiy parolni kiriting</p>
+    <select id="authBaza" style="width:100%;margin-bottom:10px;"></select>
+    <input type="password" id="authPassword" placeholder="Parol" autocomplete="current-password">
+    <button class="btn btn-primary" id="authSubmit" style="width:100%;margin-top:10px;">Kirish</button>
+    <div class="auth-error" id="authError"></div>
+    <div class="auth-status">Bu parol shu baza uchun umumiy — ma'lumotlar shu bazaga ulangan xodimlar orasida real vaqtda sinxronlanadi. Ikkala baza bir-biriga bog'liq emas.</div>
+  </div>
+</div>
+
+<script>
+  // Har biri mustaqil Supabase loyihasiga ulanadigan bazalar ro'yxati.
+  // Ochiq kalitlar (anon key) — xavfsizlik server tomonda RLS orqali ta'minlanadi.
+  const BAZALAR = [
+    {
+      id: "asosiy",
+      nomi: "1-baza",
+      url: "https://eyhkwjmzakwbwvqebjat.supabase.co",
+      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5aGt3am16YWt3Ynd2cWViamF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyOTkxODIsImV4cCI6MjEwMTg3NTE4Mn0.udpUDozLxa3qu6SLcarBksVAybkz3KRqpLIQt-GN214",
+      sharedEmail: "buxgalter@bux2112.app"
+    },
+    {
+      id: "ikkinchi",
+      nomi: "2-baza",
+      url: "https://dtpwactsxnooqsnpgjrz.supabase.co",
+      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0cHdhY3RzeG5vb3FzbnBnanJ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwMTcyNTMsImV4cCI6MjEwMjU5MzI1M30.T3xqyPUvVl-8AP79zTePXjsjwi1VVvxtKoaowvSsHFk",
+      sharedEmail: "bux_2112@baza.app"
+    }
+  ];
+</script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+    "window.density.editorTabHeight": "compact",
+    "workbench.editor.autoLockGroups": {
+        "workbench.editor.chatSession": true
+    },
+    "workbench.editor.alwaysShowEditorActions": true
+}
