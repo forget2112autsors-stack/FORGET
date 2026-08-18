@@ -4124,7 +4124,10 @@ function connectBaza(bazaId) {
   if (REALTIME_CHANNEL && sbClient) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
   const cfg = getBaza(bazaId);
   ACTIVE_BAZA_ID = cfg.id;
-  sbClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+  // persistSession: false — sessiya brauzer xotirasida saqlanmaydi, shu sabab
+  // har safar sahifa ochilganda avvalgi bazaga avtomat kirib ketmaydi va
+  // foydalanuvchi har doim bazani tanlab, parolni qayta kiritishi kerak bo'ladi.
+  sbClient = window.supabase.createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false } });
   hasBooted = false;
   sbClient.auth.onAuthStateChange((event, session) => {
     if (session) {
