@@ -32,6 +32,10 @@
     <div class="nav-item" data-page="ombor"><span class="ic">&#128230;</span>Ombor<span class="badge" id="navOmborCount">0</span></div>
     <div class="nav-item" data-page="ishlabchiqarish"><span class="ic">&#127981;</span>Ishlab chiqarish<span class="badge" id="navIshlabChiqarishCount">0</span></div>
 
+    <div class="nav-group-label">Ma'lumotnomalar</div>
+    <div class="nav-item" data-page="kontragentlar"><span class="ic">&#128100;</span>Kontragentlar</div>
+    <div class="nav-item" data-page="asosiyvositalar"><span class="ic">&#127970;</span>Asosiy vositalar</div>
+
     <div class="nav-group-label">Hisobotlar</div>
     <div class="nav-item" data-page="f2"><span class="ic">&#128202;</span>F2 — Moliyaviy natija</div>
     <div class="nav-item" data-page="qqs"><span class="ic">&#37;</span>QQS hisob-kitobi</div>
@@ -42,9 +46,11 @@
 
     <div class="nav-group-label">Tizim</div>
     <div class="nav-item" data-page="fayllar"><span class="ic">&#128193;</span>Fayl yuklamalari<span class="badge" id="navFayllarCount">0</span></div>
+    <div class="nav-item" data-page="audit"><span class="ic">&#128220;</span>O'zgarishlar tarixi</div>
     <div class="nav-item" data-page="settings"><span class="ic">&#9881;</span>Sozlamalar</div>
 
     <div class="sidebar-foot">
+      <div class="faint" id="currentUserLabel" style="font-size:11px;padding:0 4px 6px;"></div>
       <div class="theme-toggle" id="themeToggle">
         <span id="themeLabel">Yorug' rejim</span>
         <span id="themeIcon">&#9728;</span>
@@ -68,12 +74,13 @@
   <div class="auth-box">
     <div class="brand-mark">2112</div>
     <h2>BUX2112</h2>
-    <p class="faint">Bazani tanlang va umumiy parolni kiriting</p>
+    <p class="faint">Bazani va shaxsiy login/parolingizni kiriting</p>
     <select id="authBaza" style="width:100%;margin-bottom:10px;"></select>
+    <input type="email" id="authEmail" placeholder="Email" autocomplete="username" style="margin-bottom:10px;">
     <input type="password" id="authPassword" placeholder="Parol" autocomplete="current-password">
     <button class="btn btn-primary" id="authSubmit" style="width:100%;margin-top:10px;">Kirish</button>
     <div class="auth-error" id="authError"></div>
-    <div class="auth-status">Bu parol shu baza uchun umumiy — ma'lumotlar shu bazaga ulangan xodimlar orasida real vaqtda sinxronlanadi. Ikkala baza bir-biriga bog'liq emas.</div>
+    <div class="auth-status">Har bir xodim o'z shaxsiy login/parol bilan kiradi. Ma'lumotlar butun jamoa uchun umumiy — real vaqtda sinxronlanadi. Ikkala baza bir-biriga bog'liq emas.</div>
   </div>
 </div>
 
@@ -85,15 +92,13 @@
       id: "asosiy",
       nomi: "1-baza",
       url: "https://eyhkwjmzakwbwvqebjat.supabase.co",
-      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5aGt3am16YWt3Ynd2cWViamF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyOTkxODIsImV4cCI6MjEwMTg3NTE4Mn0.udpUDozLxa3qu6SLcarBksVAybkz3KRqpLIQt-GN214",
-      sharedEmail: "buxgalter@bux2112.app"
+      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5aGt3am16YWt3Ynd2cWViamF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyOTkxODIsImV4cCI6MjEwMTg3NTE4Mn0.udpUDozLxa3qu6SLcarBksVAybkz3KRqpLIQt-GN214"
     },
     {
       id: "ikkinchi",
       nomi: "2-baza",
       url: "https://dtpwactsxnooqsnpgjrz.supabase.co",
-      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0cHdhY3RzeG5vb3FzbnBnanJ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwMTcyNTMsImV4cCI6MjEwMjU5MzI1M30.T3xqyPUvVl-8AP79zTePXjsjwi1VVvxtKoaowvSsHFk",
-      sharedEmail: "bux_2112@baza.app"
+      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0cHdhY3RzeG5vb3FzbnBnanJ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwMTcyNTMsImV4cCI6MjEwMjU5MzI1M30.T3xqyPUvVl-8AP79zTePXjsjwi1VVvxtKoaowvSsHFk"
     }
   ];
 </script>
