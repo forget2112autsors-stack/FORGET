@@ -70,7 +70,7 @@ const ISHLAB_CHIQARISH_DB_MAP = {
 const KONTRAGENT_DB_MAP = {
   nomi: "nomi", inn: "inn", manzil: "manzil", telefon: "telefon",
   bankHisob: "bank_hisob", bankMfo: "bank_mfo", bankNomi: "bank_nomi",
-  turi: "turi", izoh: "izoh"
+  turi: "turi", izoh: "izoh", boshlangichQarz: "boshlangich_qarz"
 };
 const ASOSIY_VOSITA_DB_MAP = {
   nomi: "nomi", inventarRaqami: "inventar_raqami", ishgaTushirishSanasi: "ishga_tushirish_sanasi",
@@ -109,9 +109,21 @@ const SETTINGS_DB_MAP = {
   ijtimoiySoliqStavka: "ijtimoiy_soliq_stavka", ndflStavka: "ndfl_stavka", inpsStavka: "inps_stavka"
 };
 
+// Excel/CSV fayllardan o'qilgan matnlarda ba'zan uzilgan unicode surrogate
+// juftlik uchraydi (eski bank ko'chirmalarida ko'p). Bunday belgi bazaga
+// yozilganda audit_log trigger'i to_jsonb() chaqirganda "invalid input
+// syntax for type json" xatoligi bilan butun yozuvni bekor qiladi — shu
+// sabab har bir matnni bazaga yuborishdan oldin tozalab olamiz.
+function stripLoneSurrogates(str) {
+  return str.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?:^|[^\uD800-\uDBFF])[\uDC00-\uDFFF]/g, (m) => m.length > 1 ? m[0] : "");
+}
+
 function toDbRow(map, obj) {
   const out = {};
-  Object.keys(map).forEach((k) => { if (obj[k] !== undefined) out[map[k]] = obj[k]; });
+  Object.keys(map).forEach((k) => {
+    if (obj[k] === undefined) return;
+    out[map[k]] = typeof obj[k] === "string" ? stripLoneSurrogates(obj[k]) : obj[k];
+  });
   return out;
 }
 
@@ -129,7 +141,10 @@ function fromDbSettings(row) {
 
 async function saveSettingsToDb(partial) {
   const dbPartial = {};
-  Object.keys(partial).forEach((k) => { if (SETTINGS_DB_MAP[k]) dbPartial[SETTINGS_DB_MAP[k]] = partial[k]; });
+  Object.keys(partial).forEach((k) => {
+    if (!SETTINGS_DB_MAP[k]) return;
+    dbPartial[SETTINGS_DB_MAP[k]] = typeof partial[k] === "string" ? stripLoneSurrogates(partial[k]) : partial[k];
+  });
   if (!Object.keys(dbPartial).length) return;
   const { error } = await sbClient.from("settings").update(dbPartial).eq("id", 1);
   if (error) { console.error(error); toast("Sozlamani saqlashda xatolik", "err"); }
@@ -223,32 +238,85 @@ function saveLocalFilters() {
   localStorage.setItem(FILTERS_KEY, JSON.stringify({ filterFrom: STORE.settings.filterFrom, filterTo: STORE.settings.filterTo }));
 }
 
+// Supabase/PostgREST standart bo'yicha bitta so'rovdan qaytadigan qatorlar sonini
+// 1000 tagacha cheklaydi ("db-max-rows"). Shu sabab jadvalda 1000 dan ortiq
+// yozuv bo'lsa, oddiy ".select(\"*\")" faqat birinchi 1000 tasini qaytarardi —
+// qolganlari "yo'qolganday" ko'rinardi (aslida bazada bor, shunchaki yuklanmagan
+// edi). Bu funksiya ".range()" yordamida sahifalab, JADVALDAGI BARCHA qatorlarni
+// (nechta bo'lishidan qat'i nazar) yig'ib qaytaradi.
+const SUPABASE_PAGE_SIZE = 1000;
+
+// Sessiya tokeni (JWT) muddati tugaganda Supabase 401 bilan javob beradi —
+// bu odatda brauzer tabini uzoq vaqt (bir necha soat) fon rejimida ochiq
+// qoldirib, keyin qaytib import/saqlash qilishga urinishda uchraydi (tab fon
+// rejimida bo'lganda avtomatik token yangilash pauza qilinishi mumkin). Bunday
+// holatda tushunarsiz "Bazaga yozishda xatolik" o'rniga foydalanuvchini aniq
+// qayta kirishga yo'naltiramiz.
+function isAuthExpiredError(error) {
+  return !!(error && /jwt|token/i.test(String(error.message || "")));
+}
+
+async function forceReauth() {
+  toast("Sessiya muddati tugadi — qayta kiring", "err");
+  try { await sbClient.auth.signOut(); } catch (e) { console.error(e); }
+}
+
+async function fetchAllRows(table) {
+  let all = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await sbClient.from(table).select("*").range(from, from + SUPABASE_PAGE_SIZE - 1);
+    if (error) { if (isAuthExpiredError(error)) forceReauth(); throw error; }
+    all = all.concat(data || []);
+    if (!data || data.length < SUPABASE_PAGE_SIZE) break;
+    from += SUPABASE_PAGE_SIZE;
+  }
+  return all;
+}
+
+// Xuddi shu 1000 qatorlik chegara ".insert().select()" javobiga ham taalluqli
+// bo'lgani uchun, katta fayl (masalan 1000+ qatorli bank ko'chirmasi) import
+// qilinganda kichik bo'laklarga bo'lib yozamiz — shunda bazaga yozilgan HAR
+// bir qator to'liq qaytariladi va joriy sahifada ham darhol ko'rinadi.
+const DB_INSERT_CHUNK_SIZE = 500;
+
+async function insertRowsChunked(table, dbRows) {
+  const all = [];
+  for (let i = 0; i < dbRows.length; i += DB_INSERT_CHUNK_SIZE) {
+    const chunk = dbRows.slice(i, i + DB_INSERT_CHUNK_SIZE);
+    const { data, error } = await sbClient.from(table).insert(chunk).select();
+    if (error) { if (isAuthExpiredError(error)) forceReauth(); throw error; }
+    all.push(...(data || []));
+  }
+  return all;
+}
+
 async function loadAllData() {
-  const [settingsRes, kirimRes, chiqimRes, bankRes, ishHaqiRes, omborRes, mahsulotlarRes, ishlabChiqarishRes, fayllarRes, kontragentlarRes, asosiyVositalarRes] = await Promise.all([
+  const [settingsRes, kirim, chiqim, bank, ishHaqi, ombor, mahsulotlar, ishlabChiqarish, fayllar, kontragentlar, asosiyVositalar] = await Promise.all([
     sbClient.from("settings").select("*").eq("id", 1).single(),
-    sbClient.from("kirim").select("*"),
-    sbClient.from("chiqim").select("*"),
-    sbClient.from("bank").select("*"),
-    sbClient.from("ish_haqi").select("*"),
-    sbClient.from("ombor").select("*"),
-    sbClient.from("mahsulotlar").select("*"),
-    sbClient.from("ishlab_chiqarish").select("*"),
-    sbClient.from("fayllar").select("*"),
-    sbClient.from("kontragentlar").select("*"),
-    sbClient.from("asosiy_vositalar").select("*")
+    fetchAllRows("kirim"),
+    fetchAllRows("chiqim"),
+    fetchAllRows("bank"),
+    fetchAllRows("ish_haqi"),
+    fetchAllRows("ombor"),
+    fetchAllRows("mahsulotlar"),
+    fetchAllRows("ishlab_chiqarish"),
+    fetchAllRows("fayllar"),
+    fetchAllRows("kontragentlar"),
+    fetchAllRows("asosiy_vositalar")
   ]);
   if (settingsRes.error) throw settingsRes.error;
   STORE.settings = Object.assign(defaultStore().settings, fromDbSettings(settingsRes.data), loadLocalFilters());
-  STORE.kirim = (kirimRes.data || []).map((r) => fromDbRow(INVOICE_DB_MAP, r));
-  STORE.chiqim = (chiqimRes.data || []).map((r) => fromDbRow(INVOICE_DB_MAP, r));
-  STORE.bank = (bankRes.data || []).map((r) => fromDbRow(BANK_DB_MAP, r));
-  STORE.ishHaqi = (ishHaqiRes.data || []).map((r) => fromDbRow(ISHHAQI_DB_MAP, r));
-  STORE.ombor = (omborRes.data || []).map((r) => fromDbRow(OMBOR_DB_MAP, r));
-  STORE.mahsulotlar = (mahsulotlarRes.data || []).map((r) => fromDbRow(MAHSULOT_DB_MAP, r));
-  STORE.ishlabChiqarish = (ishlabChiqarishRes.data || []).map((r) => fromDbRow(ISHLAB_CHIQARISH_DB_MAP, r));
-  STORE.fayllar = (fayllarRes.data || []).map((r) => fromDbRow(FAYL_DB_MAP, r));
-  STORE.kontragentlar = (kontragentlarRes.data || []).map((r) => fromDbRow(KONTRAGENT_DB_MAP, r));
-  STORE.asosiyVositalar = (asosiyVositalarRes.data || []).map((r) => fromDbRow(ASOSIY_VOSITA_DB_MAP, r));
+  STORE.kirim = kirim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
+  STORE.chiqim = chiqim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
+  STORE.bank = bank.map((r) => fromDbRow(BANK_DB_MAP, r));
+  STORE.ishHaqi = ishHaqi.map((r) => fromDbRow(ISHHAQI_DB_MAP, r));
+  STORE.ombor = ombor.map((r) => fromDbRow(OMBOR_DB_MAP, r));
+  STORE.mahsulotlar = mahsulotlar.map((r) => fromDbRow(MAHSULOT_DB_MAP, r));
+  STORE.ishlabChiqarish = ishlabChiqarish.map((r) => fromDbRow(ISHLAB_CHIQARISH_DB_MAP, r));
+  STORE.fayllar = fayllar.map((r) => fromDbRow(FAYL_DB_MAP, r));
+  STORE.kontragentlar = kontragentlar.map((r) => fromDbRow(KONTRAGENT_DB_MAP, r));
+  STORE.asosiyVositalar = asosiyVositalar.map((r) => fromDbRow(ASOSIY_VOSITA_DB_MAP, r));
   recomputeAllPaymentStatus();
   DATA_LOADED = true;
   if (markDataReady) { markDataReady(); markDataReady = null; }
@@ -834,6 +902,7 @@ function bindInvoiceRowEvents(type) {
       row.kontragentInn = e.target.value;
       pushFieldsUpdate(type, id, { kontragentInn: row.kontragentInn });
       saveStore();
+      ensureKontragentAutoAdded(row.kontragentInn, row.kontragentNomi);
       renderInvoiceTable(type);
       return;
     } else if (field === "kontragentNomi") {
@@ -847,6 +916,7 @@ function bindInvoiceRowEvents(type) {
         renderInvoiceTable(type);
         return;
       }
+      ensureKontragentAutoAdded(row.kontragentInn, row.kontragentNomi);
       saveStore();
     } else {
       row[field] = e.target.value;
@@ -1041,14 +1111,14 @@ function omborChiqimRowHtml(r) {
     <tr data-id="${r.id}">
       <td class="mono">${escapeHtml(r.sana || "—")}</td>
       <td>${escapeHtml(r.hujjatRaqami || "")}</td>
-      <td>${escapeHtml(r.nomi || "")}</td>
+      <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(r.nomi || "")}">${escapeHtml(r.nomi || "")}</td>
       <td>${escapeHtml(r.birlik || "")}</td>
       <td class="num">${fmt(r.miqdor, 3)}</td>
       <td class="num">${fmt(r.narx, 2)}</td>
       <td class="num">${fmtSum(r.yetkazibBerishNarxi)}</td>
       <td class="num">${fmtSum(r.qqsSumma)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
-      <td>${escapeHtml(r.kontragentNomi || "")}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(r.kontragentNomi || "")}">${escapeHtml(r.kontragentNomi || "")}</td>
       <td class="row-actions"><button class="icon-btn" data-del-chiqim="${r.id}" data-ic="${icId}" title="O'chirish">&#10005;</button></td>
     </tr>
   `;
@@ -1146,7 +1216,7 @@ function renderOmborQoldiq() {
         <tbody>
           ${qoldiq.length ? qoldiq.map((q) => `
             <tr>
-              <td>${escapeHtml(q.nomi)}</td>
+              <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(q.nomi)}">${escapeHtml(q.nomi)}</td>
               <td>${escapeHtml(q.birlik || "")}</td>
               <td class="num">${fmt(q.kirim, 3)}</td>
               <td class="num">${fmt(q.chiqim, 3)}</td>
@@ -1238,9 +1308,9 @@ function omborRowHtml(r) {
     <tr data-id="${r.id}">
       <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
       <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
-      <td><input class="cell-input" data-f="nomi" value="${escapeHtml(r.nomi || "")}" style="min-width:220px"></td>
-      <td><input class="cell-input" data-f="birlik" value="${escapeHtml(r.birlik || "")}" style="width:90px"></td>
-      <td class="num"><input class="cell-input num" data-f="miqdor" value="${fmt(r.miqdor, 3)}" style="width:90px"></td>
+      <td><input class="cell-input" data-f="nomi" value="${escapeHtml(r.nomi || "")}" title="${escapeHtml(r.nomi || "")}" style="min-width:160px;max-width:240px;overflow:hidden;text-overflow:ellipsis;"></td>
+      <td><input class="cell-input" data-f="birlik" value="${escapeHtml(r.birlik || "")}" style="width:80px"></td>
+      <td class="num"><input class="cell-input num" data-f="miqdor" value="${fmt(r.miqdor, 3)}" style="width:80px"></td>
       <td class="num"><input class="cell-input num" data-f="narx" value="${fmt(r.narx, 2)}"></td>
       <td class="num"><input class="cell-input num" data-f="yetkazibBerishNarxi" value="${fmt(r.yetkazibBerishNarxi)}"></td>
       <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
@@ -1417,10 +1487,12 @@ async function handleOmborImport(file) {
 
     let added = 0;
     if (candidates.length) {
-      const { data, error } = await sbClient.from("ombor").insert(candidates.map((r) => toDbRow(OMBOR_DB_MAP, r))).select();
-      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
-      (data || []).forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
-      added = (data || []).length;
+      let data;
+      try {
+        data = await insertRowsChunked("ombor", candidates.map((r) => toDbRow(OMBOR_DB_MAP, r)));
+      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      data.forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+      added = data.length;
     }
 
     updateNavBadges();
@@ -1576,6 +1648,55 @@ function resolveKontragentByNomi(nomi) {
   return STORE.kontragentlar.find((k) => String(k.nomi || "").trim().toLowerCase() === q) || null;
 }
 
+// Faktura kirim, Faktura chiqim va Bank harakati bo'limlarida kontragent nomi/INN
+// kiritilganda (qo'lda yozilganda ham, fayldan import qilinganda ham) Kontragentlar
+// spravochnigini avtomatik to'ldiradi: agar shu INN (yoki, INN bo'lmasa, shu nom)
+// bilan yozuv hali yo'q bo'lsa — yangi kontragent qo'shiladi; mavjud bo'lsa, faqat
+// undagi bo'sh INN maydoni to'ldiriladi (boshqa maydonlar qo'lda kiritilgan holda
+// qoladi, ustidan yozilmaydi).
+async function ensureKontragentAutoAdded(inn, nomi) {
+  const innTrim = String(inn || "").trim();
+  const nomiTrim = String(nomi || "").trim();
+  if (!nomiTrim) return null;
+
+  let existing = innTrim ? STORE.kontragentlar.find((k) => String(k.inn || "").trim() === innTrim) : null;
+  if (!existing) existing = resolveKontragentByNomi(nomiTrim);
+  if (existing) {
+    if (innTrim && !String(existing.inn || "").trim()) {
+      existing.inn = innTrim;
+      pushFieldsUpdate("kontragentlar", existing.id, { inn: innTrim });
+      if (CURRENT_PAGE === "kontragentlar") renderKontragentlar();
+    }
+    return existing;
+  }
+
+  const payload = { nomi: nomiTrim, inn: innTrim, manzil: "", telefon: "", bankHisob: "", bankMfo: "", bankNomi: "", turi: "", izoh: "" };
+  const { data, error } = await sbClient.from("kontragentlar").insert(toDbRow(KONTRAGENT_DB_MAP, payload)).select().single();
+  if (error) { console.error(error); return null; }
+  const newK = fromDbRow(KONTRAGENT_DB_MAP, data);
+  STORE.kontragentlar.push(newK);
+  if (CURRENT_PAGE === "kontragentlar") renderKontragentlar();
+  return newK;
+}
+
+// Solishtirma dalolatnomadagi "Davr boshiga" ustuni qo'lda kiritiladi — bu
+// funksiya shu qiymatni tegishli kontragent yozuviga saqlaydi (yozuv hali
+// Kontragentlar spravochnigida yo'q bo'lsa, shu nom/INN bilan yaratadi).
+async function updateKontragentBoshlangichQarz(inn, nomi, value) {
+  const existing = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
+  if (existing) {
+    existing.boshlangichQarz = value;
+    pushFieldsUpdate("kontragentlar", existing.id, { boshlangichQarz: value });
+    return existing;
+  }
+  const payload = { nomi: nomi || inn, inn, manzil: "", telefon: "", bankHisob: "", bankMfo: "", bankNomi: "", turi: "", izoh: "", boshlangichQarz: value };
+  const { data, error } = await sbClient.from("kontragentlar").insert(toDbRow(KONTRAGENT_DB_MAP, payload)).select().single();
+  if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return null; }
+  const newK = fromDbRow(KONTRAGENT_DB_MAP, data);
+  STORE.kontragentlar.push(newK);
+  return newK;
+}
+
 function tarkibRowHtml(item) {
   item = item || {};
   return `
@@ -1694,8 +1815,10 @@ function renderKontragentlar() {
   if (body) body.addEventListener("click", (e) => {
     const editId = e.target.dataset.edit;
     const delId = e.target.dataset.del;
+    const detailInn = e.target.dataset.detailInn;
     if (editId) openKontragentModal(editId);
     else if (delId) deleteKontragent(delId);
+    else if (detailInn) openSverkaDetail(detailInn, "kontragentlar");
   });
 }
 
@@ -1710,6 +1833,9 @@ function kontragentRowHtml(k) {
       <td class="mono">${escapeHtml(k.bankHisob || "")}</td>
       <td class="mono">${escapeHtml(k.bankMfo || "")}</td>
       <td class="row-actions">
+        ${(k.inn || "").trim()
+          ? `<button class="btn btn-sm" data-detail-inn="${escapeHtml(k.inn)}">Tarix</button>`
+          : `<button class="btn btn-sm" disabled title="Tarixni ko'rish uchun avval INN kiriting">Tarix</button>`}
         <button class="icon-btn" data-edit="${k.id}" title="Tahrirlash">&#9998;</button>
         <button class="icon-btn" data-del="${k.id}" title="O'chirish">&#10005;</button>
       </td>
@@ -1743,6 +1869,7 @@ function openKontragentModal(existingId) {
     <div class="field"><label>Bank hisob raqami</label><input id="kBankHisob" value="${escapeHtml(existing ? existing.bankHisob : "")}"></div>
     <div class="field"><label>MFO</label><input id="kBankMfo" value="${escapeHtml(existing ? existing.bankMfo : "")}"></div>
     <div class="field"><label>Bank nomi</label><input id="kBankNomi" value="${escapeHtml(existing ? existing.bankNomi : "")}"></div>
+    <div class="field"><label>Boshlang'ich qarz (qo'lda, Solishtirma dalolatnoma uchun)</label><input id="kBoshlangichQarz" value="${existing && existing.boshlangichQarz ? fmt(existing.boshlangichQarz) : ""}" placeholder="masalan: 1500000 (musbat — u bizga qarzdor)"></div>
     <div class="field"><label>Izoh</label><input id="kIzoh" value="${escapeHtml(existing ? existing.izoh : "")}"></div>
     <div class="modal-actions">
       <button class="btn" id="mCancel">Bekor qilish</button>
@@ -1765,6 +1892,7 @@ async function saveKontragentFromModal(existingId) {
     bankHisob: document.getElementById("kBankHisob").value.trim(),
     bankMfo: document.getElementById("kBankMfo").value.trim(),
     bankNomi: document.getElementById("kBankNomi").value.trim(),
+    boshlangichQarz: toNum(document.getElementById("kBoshlangichQarz").value),
     izoh: document.getElementById("kIzoh").value.trim()
   };
 
@@ -2249,10 +2377,12 @@ async function handleOmborChiqimImport(file) {
 
     let added = 0;
     if (candidates.length) {
-      const { data, error } = await sbClient.from("ombor").insert(candidates.map((r) => toDbRow(OMBOR_DB_MAP, r))).select();
-      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
-      (data || []).forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
-      added = (data || []).length;
+      let data;
+      try {
+        data = await insertRowsChunked("ombor", candidates.map((r) => toDbRow(OMBOR_DB_MAP, r)));
+      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      data.forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+      added = data.length;
     }
 
     updateNavBadges();
@@ -2405,6 +2535,9 @@ function bindBankRowEvents() {
         renderBank();
         return;
       }
+      ensureKontragentAutoAdded(row.kontragentInn, row.kontragent);
+    } else if (field === "kontragentInn") {
+      ensureKontragentAutoAdded(row.kontragentInn, row.kontragent);
     }
   });
   body.addEventListener("click", (e) => {
@@ -2599,10 +2732,12 @@ async function handleIshHaqiImport(file) {
 
     let added = 0;
     if (candidates.length) {
-      const { data, error } = await sbClient.from("ish_haqi").insert(candidates.map((r) => toDbRow(ISHHAQI_DB_MAP, r))).select();
-      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
-      (data || []).forEach((row) => STORE.ishHaqi.push(fromDbRow(ISHHAQI_DB_MAP, row)));
-      added = (data || []).length;
+      let data;
+      try {
+        data = await insertRowsChunked("ish_haqi", candidates.map((r) => toDbRow(ISHHAQI_DB_MAP, r)));
+      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      data.forEach((row) => STORE.ishHaqi.push(fromDbRow(ISHHAQI_DB_MAP, row)));
+      added = data.length;
     }
 
     saveStore();
@@ -3196,6 +3331,10 @@ function computeReconciliationRows() {
   STORE.chiqim.forEach((r) => note(r.kontragentInn, r.kontragentNomi));
   STORE.kirim.forEach((r) => note(r.kontragentInn, r.kontragentNomi));
   STORE.bank.forEach((r) => note(r.kontragentInn, r.kontragent));
+  // Boshlang'ich qarzi qo'lda kiritilgan, lekin hozircha faktura/bank
+  // yozuvlari bo'lmagan kontragentlar ham (davr harakati nolga teng bo'lsa
+  // ham) ro'yxatda ko'rinishi uchun.
+  STORE.kontragentlar.forEach((k) => { if (toNum(k.boshlangichQarz)) note(k.inn, k.nomi); });
 
   function periodTotals(inn, matchFn) {
     const chiqimAmt = STORE.chiqim.filter((r) => (r.kontragentInn || "").trim() === inn && isValidStatus(r.status) && matchFn(r.sana)).reduce((a, r) => a + toNum(r.jamiSumma), 0);
@@ -3205,9 +3344,13 @@ function computeReconciliationRows() {
     return { kirimCol: chiqimAmt + bankChiqimAmt, chiqimCol: kirimAmt + bankKirimAmt };
   }
 
+  // "Davr boshiga" endi avtomatik hisoblanmaydi — Kontragentlar spravochnigida
+  // (yoki shu jadvaldagi ustunning o'zida) qo'lda kiritiladigan "boshlangichQarz"
+  // qiymati ishlatiladi. Faqat davr ichidagi ("Kirim"/"Chiqim") harakat
+  // tanlangan sana oralig'idan avtomatik hisoblanadi.
   return Object.keys(innInfo).map((inn) => {
-    const boshigaTotals = from ? periodTotals(inn, (sana) => !!sana && sana < from) : { kirimCol: 0, chiqimCol: 0 };
-    const boshiga = boshigaTotals.kirimCol - boshigaTotals.chiqimCol;
+    const kontragent = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
+    const boshiga = kontragent ? toNum(kontragent.boshlangichQarz) : 0;
     const period = periodTotals(inn, (sana) => inRange(sana, from, to));
     const oxiriga = boshiga + period.kirimCol - period.chiqimCol;
     return { inn, nomi: innInfo[inn] || "(nomsiz)", boshiga, kirim: period.kirimCol, chiqim: period.chiqimCol, oxiriga };
@@ -3239,7 +3382,7 @@ function sverkaRowHtml(r) {
     <tr>
       <td>${escapeHtml(r.nomi)}</td>
       <td class="tag-inn">${escapeHtml(r.inn)}</td>
-      <td class="num">${fmtSum(r.boshiga)}</td>
+      <td class="num"><input class="cell-input num" data-boshiga-inn="${escapeHtml(r.inn)}" data-boshiga-nomi="${escapeHtml(r.nomi)}" value="${fmt(r.boshiga)}" style="min-width:110px" title="Qo'lda kiritiladi — davr harakatiga qo'shilib, 'Davr oxiriga'ni beradi"></td>
       <td class="num">${fmtSum(r.kirim)}</td>
       <td class="num">${fmtSum(r.chiqim)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.oxiriga)}</td>
@@ -3279,7 +3422,7 @@ function renderSverka() {
       `).join("")}
     </div>
 
-    ${dateRangeBarHtml('"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.')}
+    ${dateRangeBarHtml('"Davr boshiga" ustuni qo\'lda kiritiladi, davr ichidagi harakat esa tanlangan sana oralig\'idan avtomatik hisoblanadi.')}
 
     <div class="grid grid-2 section">
       <div class="card stat-card"><div class="stat-label">Jami debitorlik (bizga qarzdor)</div><div class="stat-value">${fmtSum(totalDebitor)}</div></div>
@@ -3299,7 +3442,7 @@ function renderSverka() {
             <th></th>
           </tr>
         </thead>
-        <tbody>
+        <tbody id="sverkaBody">
           ${filteredRows.length ? filteredRows.map(sverkaRowHtml).join("") : ""}
         </tbody>
       </table>
@@ -3308,12 +3451,19 @@ function renderSverka() {
       ? `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Bu holatga mos kontragent yo'q</div><div class="d">Filterni bekor qilish uchun tanlangan tugmani qayta bosing.</div></div>`
       : `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Ma'lumot yo'q</div><div class="d">Faktura yoki bank yozuvlarida INN kiritilgan kontragentlar shu yerda ko'rinadi.</div></div>`) : ""}
     <div class="note">
-      <b>Hisoblash mantig'i:</b> "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
+      <b>Hisoblash mantig'i:</b> "Davr boshiga" — qo'lda kiritiladi (o'zgartirilganda avtomat saqlanadi). "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
     </div>
   `;
   document.getElementById("btnExportSverka").addEventListener("click", () => exportSverkaXlsx(filteredRows, totalDebitor, totalKreditor));
   document.getElementById("btnPrintSverka").addEventListener("click", () => printSverkaPdf(filteredRows, totalDebitor, totalKreditor));
-  main.querySelectorAll("[data-detail-inn]").forEach((b) => b.addEventListener("click", () => openSverkaDetail(b.dataset.detailInn)));
+  const sverkaBody = document.getElementById("sverkaBody");
+  if (sverkaBody) sverkaBody.addEventListener("change", (e) => {
+    const inn = e.target.dataset.boshigaInn;
+    if (!inn) return;
+    const nomi = e.target.dataset.boshigaNomi || "";
+    updateKontragentBoshlangichQarz(inn, nomi, toNum(e.target.value)).then(() => renderSverka());
+  });
+  main.querySelectorAll("[data-detail-inn]").forEach((b) => b.addEventListener("click", () => openSverkaDetail(b.dataset.detailInn, "sverka")));
   main.querySelectorAll("[data-status-filter]").forEach((b) => b.addEventListener("click", () => {
     const key = b.dataset.statusFilter;
     SVERKA_STATUS_FILTER = SVERKA_STATUS_FILTER === key ? null : key;
@@ -3422,11 +3572,16 @@ function printSverkaPdf(rows, totalDebitor, totalKreditor) {
 // mantiq — faqat hujjat darajasida yoyilgan holda.
 
 let SVERKA_DETAIL_INN = null;
+// Bu tafsilot sahifasi Solishtirma dalolatnoma'dan tashqari Kontragentlar
+// sahifasidagi "Tarix" tugmasi orqali ham ochiladi — "Ro'yxatga qaytish"
+// tugmasi ochilgan joyga qaytishi uchun eslab qolinadi.
+let SVERKA_DETAIL_RETURN_PAGE = "sverka";
 
-function openSverkaDetail(inn) {
+function openSverkaDetail(inn, returnPage) {
   SVERKA_DETAIL_INN = inn;
+  SVERKA_DETAIL_RETURN_PAGE = returnPage || "sverka";
   CURRENT_PAGE = "sverkaDetail";
-  document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === "sverka"));
+  document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === SVERKA_DETAIL_RETURN_PAGE));
   renderSverkaDetail();
 }
 
@@ -3455,8 +3610,11 @@ function computeKontragentLedger(inn) {
     return list;
   }
 
-  const before = from ? txList((sana) => !!sana && sana < from) : [];
-  const boshlangichSaldo = before.reduce((a, t) => a + t.debet - t.kredit, 0);
+  // Solishtirma dalolatnoma jadvalidagi "Davr boshiga" bilan bir xil manba —
+  // qo'lda kiritilgan boshlang'ich qarz (Kontragentlar spravochnigidagi
+  // "boshlangichQarz" maydoni), tarixdan avtomatik hisoblanmaydi.
+  const kontragent = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
+  const boshlangichSaldo = kontragent ? toNum(kontragent.boshlangichQarz) : 0;
 
   const period = txList((sana) => inRange(sana, from, to)).sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
   let running = boshlangichSaldo;
@@ -3475,11 +3633,12 @@ function computeKontragentLedger(inn) {
 function renderSverkaDetail() {
   const inn = SVERKA_DETAIL_INN;
   const main = document.getElementById("main");
-  if (!inn) { navigate("sverka"); return; }
+  if (!inn) { navigate(SVERKA_DETAIL_RETURN_PAGE); return; }
 
   const summaryRows = computeReconciliationRows();
   const info = summaryRows.find((r) => r.inn === inn);
-  const nomi = info ? info.nomi : inn;
+  const kRecord = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
+  const nomi = info ? info.nomi : (kRecord ? kRecord.nomi : inn);
   const ledger = computeKontragentLedger(inn);
 
   main.innerHTML = `
@@ -3529,7 +3688,7 @@ function renderSverkaDetail() {
     </div>
   `;
 
-  document.getElementById("btnBackSverka").addEventListener("click", () => navigate("sverka"));
+  document.getElementById("btnBackSverka").addEventListener("click", () => navigate(SVERKA_DETAIL_RETURN_PAGE));
   document.getElementById("btnExportDetail").addEventListener("click", () => exportSverkaDetailXlsx(nomi, inn, ledger));
   document.getElementById("btnPrintDetail").addEventListener("click", () => printSverkaDetailPdf(nomi, inn, ledger));
   bindDateRangeBar(renderSverkaDetail);
@@ -4239,16 +4398,29 @@ async function handleInvoiceImport(file, type) {
     }
 
     if (candidates.length) {
+      const seenKontragents = new Set();
+      for (const c of candidates) {
+        if (!c.kontragentNomi) continue;
+        const key = c.kontragentInn + "|" + c.kontragentNomi.toLowerCase();
+        if (seenKontragents.has(key)) continue;
+        seenKontragents.add(key);
+        await ensureKontragentAutoAdded(c.kontragentInn, c.kontragentNomi);
+      }
+    }
+
+    if (candidates.length) {
       const faylRow = await registerFaylUpload(type, file);
       if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
     }
 
     let added = 0;
     if (candidates.length) {
-      const { data, error } = await sbClient.from(TABLE_NAMES[type]).insert(candidates.map((r) => toDbRow(INVOICE_DB_MAP, r))).select();
-      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
-      (data || []).forEach((row) => STORE[type].push(fromDbRow(INVOICE_DB_MAP, row)));
-      added = (data || []).length;
+      let data;
+      try {
+        data = await insertRowsChunked(TABLE_NAMES[type], candidates.map((r) => toDbRow(INVOICE_DB_MAP, r)));
+      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      data.forEach((row) => STORE[type].push(fromDbRow(INVOICE_DB_MAP, row)));
+      added = data.length;
     }
 
     saveStore();
@@ -4398,16 +4570,29 @@ async function handleBankImport(file) {
     }
 
     if (candidates.length) {
+      const seenKontragents = new Set();
+      for (const c of candidates) {
+        if (!c.kontragent) continue;
+        const key = c.kontragentInn + "|" + c.kontragent.toLowerCase();
+        if (seenKontragents.has(key)) continue;
+        seenKontragents.add(key);
+        await ensureKontragentAutoAdded(c.kontragentInn, c.kontragent);
+      }
+    }
+
+    if (candidates.length) {
       const faylRow = await registerFaylUpload("bank", file);
       if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
     }
 
     let added = 0;
     if (candidates.length) {
-      const { data, error } = await sbClient.from("bank").insert(candidates.map((r) => toDbRow(BANK_DB_MAP, r))).select();
-      if (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
-      (data || []).forEach((row) => STORE.bank.push(fromDbRow(BANK_DB_MAP, row)));
-      added = (data || []).length;
+      let data;
+      try {
+        data = await insertRowsChunked("bank", candidates.map((r) => toDbRow(BANK_DB_MAP, r)));
+      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      data.forEach((row) => STORE.bank.push(fromDbRow(BANK_DB_MAP, row)));
+      added = data.length;
     }
 
     saveStore();
@@ -4524,10 +4709,16 @@ async function reconcileData() {
   if (!hasBooted || RECONCILING) return;
   RECONCILING = true;
   try {
+    // Tab uzoq vaqt fon rejimida (yoki noutbuk uyquda) turgan bo'lsa, sessiya
+    // tokenini avtomatik yangilash kechikkan bo'lishi mumkin — foydalanuvchi
+    // qaytib import/saqlashga urinishidan OLDIN shu yerda majburan yangilab
+    // qo'yamiz, aks holda birinchi so'rov 401 bilan qaytishi mumkin edi.
+    try { await sbClient.auth.refreshSession(); } catch (e) { /* tokeni hali amal qiladi bo'lsa xatolik shart emas */ }
     await loadAllData();
     rerenderCurrentPage();
   } catch (err) {
     console.error(err);
+    if (isAuthExpiredError(err)) forceReauth();
   } finally {
     RECONCILING = false;
   }
@@ -4556,7 +4747,8 @@ async function bootAfterAuth() {
     await loadAllData();
   } catch (err) {
     console.error(err);
-    toast("Ma'lumotlarni yuklashda xatolik", "err");
+    if (isAuthExpiredError(err)) forceReauth();
+    else toast("Ma'lumotlarni yuklashda xatolik", "err");
   }
   setupRealtime();
   updateNavBadges();

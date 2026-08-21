@@ -14,7 +14,8 @@ create table public.kontragentlar (
   bank_mfo text,
   bank_nomi text,
   turi text,
-  izoh text
+  izoh text,
+  boshlangich_qarz numeric default 0
 );
 
 create table public.asosiy_vositalar (

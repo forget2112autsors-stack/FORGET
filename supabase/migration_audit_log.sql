@@ -10,7 +10,7 @@ create table public.audit_log (
   actor_email text,
   jadval text,
   amal text,          -- INSERT / UPDATE / DELETE
-  row_id uuid,
+  row_id text,         -- text: "settings" jadvali uuid emas, integer id ishlatadi
   malumot jsonb        -- INSERT: yangi qator; DELETE: eski qator;
                         -- UPDATE: {"oldi": {...}, "yangi": {...}}
 );
@@ -28,15 +28,15 @@ declare
 begin
   if (tg_op = 'INSERT') then
     insert into public.audit_log(actor_email, jadval, amal, row_id, malumot)
-    values (actor, tg_table_name, tg_op, new.id, to_jsonb(new));
+    values (actor, tg_table_name, tg_op, new.id::text, to_jsonb(new));
     return new;
   elsif (tg_op = 'UPDATE') then
     insert into public.audit_log(actor_email, jadval, amal, row_id, malumot)
-    values (actor, tg_table_name, tg_op, new.id, jsonb_build_object('oldi', to_jsonb(old), 'yangi', to_jsonb(new)));
+    values (actor, tg_table_name, tg_op, new.id::text, jsonb_build_object('oldi', to_jsonb(old), 'yangi', to_jsonb(new)));
     return new;
   elsif (tg_op = 'DELETE') then
     insert into public.audit_log(actor_email, jadval, amal, row_id, malumot)
-    values (actor, tg_table_name, tg_op, old.id, to_jsonb(old));
+    values (actor, tg_table_name, tg_op, old.id::text, to_jsonb(old));
     return old;
   end if;
 end;
