@@ -3887,7 +3887,10 @@ function renderFayllar() {
               <td><span class="pill pill-ok">${escapeHtml(FAYL_BOLIM_LABEL[f.bolim] || f.bolim || "—")}</span></td>
               <td>${escapeHtml(f.faylNomi || "—")}</td>
               <td class="num">${fmtBytes(f.hajmi)}</td>
-              <td class="num">${fayllarLinkedCount(f)}</td>
+              <td class="num">
+                <span class="linked-count">${fayllarLinkedCount(f)}</span>
+                <button class="icon-btn icon-btn-sync" data-sync-fayl="${f.id}" title="Bog'langan yozuvlarni yangilash (bazadan qayta integratsiya qilish)">&#8635;</button>
+              </td>
               <td class="row-actions"><button class="icon-btn" data-del-fayl="${f.id}" title="O'chirish (bog'liq yozuvlar bilan)">&#10005;</button></td>
             </tr>
           `).join("") : ""}
@@ -3899,9 +3902,49 @@ function renderFayllar() {
 
   const body = document.getElementById("fayllarBody");
   if (body) body.addEventListener("click", (e) => {
-    const id = e.target.dataset.delFayl;
-    if (id) deleteFayl(id);
+    const delId = e.target.dataset.delFayl;
+    if (delId) { deleteFayl(delId); return; }
+    const syncId = e.target.dataset.syncFayl;
+    if (syncId) syncFaylLinks(syncId, e.target);
   });
+}
+
+// "Bog'langan yozuvlar" ustunidagi yangilash tugmasi: shu faylga tegishli
+// bo'lim jadvalidan (fayl_id bo'yicha) bazadan qayta o'qiydi va STORE'dagi
+// mos yozuvlarni almashtiradi — shu orqali boshqa brauzerda/xodim tomonidan
+// kiritilgan/o'chirilgan yozuvlar joriy sahifadagi hisoblagichga integratsiya
+// qilinadi (to'liq loadAllData() chaqirmasdan, faqat shu faylga tegishli qism).
+async function syncFaylLinks(id, btnEl) {
+  const fayl = STORE.fayllar.find((f) => f.id === id);
+  if (!fayl) return;
+  const table = TABLE_NAMES[fayl.bolim];
+  const map = TABLE_MAPS[fayl.bolim];
+  if (!table || !map) return;
+
+  const btn = btnEl || document.querySelector(`[data-sync-fayl="${id}"]`);
+  if (btn) { btn.disabled = true; btn.classList.add("spin"); }
+
+  try {
+    let fresh = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await sbClient.from(table).select("*").eq("fayl_id", id).range(from, from + SUPABASE_PAGE_SIZE - 1);
+      if (error) { if (isAuthExpiredError(error)) forceReauth(); throw error; }
+      fresh = fresh.concat(data || []);
+      if (!data || data.length < SUPABASE_PAGE_SIZE) break;
+      from += SUPABASE_PAGE_SIZE;
+    }
+    const freshRows = fresh.map((r) => fromDbRow(map, r));
+    STORE[fayl.bolim] = STORE[fayl.bolim].filter((r) => r.faylId !== id).concat(freshRows);
+    recomputeAllPaymentStatus();
+    updateNavBadges();
+    renderFayllar();
+    toast("Ma'lumotlar integratsiya qilindi");
+  } catch (err) {
+    console.error(err);
+    toast("Ma'lumotlarni integratsiya qilishda xatolik", "err");
+    if (btn) { btn.disabled = false; btn.classList.remove("spin"); }
+  }
 }
 
 function deleteFayl(id) {
