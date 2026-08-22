@@ -67,11 +67,19 @@ end $$;
 /* --------------------------------------------------------------------------
  SQL shu yerda tugadi. MUHIM KEYINGI QADAM — o'zingizni (va kerakli xodimlarni)
  admin sifatida belgilang, aks holda HECH KIM (siz ham) hech qanday qatorni
- o'chira olmaysiz:
+ o'chira olmaysiz. Bu skript IKKALA bazada (1-baza va 2-baza) alohida
+ ishga tushirilgani uchun, quyidagi INSERT'ni ham HAR BIR bazada O'SHA
+ baza uchun to'g'ri admin email bilan bajaring — ikkalasi bir xil emas:
 
+   -- 1-baza (asosiy) uchun:
    insert into public.foydalanuvchi_rollari (email, role)
-    values ('buxgalter@bux2112.app', 'admin')
-    on conflict (email) do update set role = 'admin';
+   values ('buxgalter@bux2112.app', 'admin')
+   on conflict (email) do update set role = 'admin';
+
+   -- 2-baza (ikkinchi) uchun:
+   insert into public.foydalanuvchi_rollari (email, role)
+   values ('bux_2112@baza.app', 'admin')
+   on conflict (email) do update set role = 'admin';
 
  Boshqa xodimlar ro'yxatga kiritilmagan bo'lsa avtomatik "xodim" (o'chira
  olmaydi) hisoblanadi — ular uchun ham xohlasangiz shu jadvalga
