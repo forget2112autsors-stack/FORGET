@@ -114,7 +114,8 @@ const SETTINGS_DB_MAP = {
   bankOpeningBalance: "bank_opening_balance",
   f1AsosiyVositalar: "f1_asosiy_vositalar", f1TovarZaxira: "f1_tovar_zaxira", f1Kassa: "f1_kassa",
   f1UstavKapitali: "f1_ustav_kapitali", f1OldingiFoyda: "f1_oldingi_foyda", f1UzoqMajburiyat: "f1_uzoq_majburiyat",
-  ijtimoiySoliqStavka: "ijtimoiy_soliq_stavka", ndflStavka: "ndfl_stavka", inpsStavka: "inps_stavka"
+  ijtimoiySoliqStavka: "ijtimoiy_soliq_stavka", ndflStavka: "ndfl_stavka", inpsStavka: "inps_stavka",
+  rahbar: "rahbar"
 };
 
 // Excel/CSV fayllardan o'qilgan matnlarda ba'zan uzilgan unicode surrogate
@@ -154,8 +155,26 @@ async function saveSettingsToDb(partial) {
     dbPartial[SETTINGS_DB_MAP[k]] = typeof partial[k] === "string" ? stripLoneSurrogates(partial[k]) : partial[k];
   });
   if (!Object.keys(dbPartial).length) return;
-  const { error } = await sbClient.from("settings").update(dbPartial).eq("id", 1);
-  if (error) { console.error(error); toast("Sozlamani saqlashda xatolik", "err"); }
+  // Yangi qo'shilgan ustunlar (masalan "rahbar") migratsiyasi hali ishga
+  // tushirilmagan bazada butun sozlamalar saqlanishini buzmasligi uchun,
+  // "column does not exist" xatosida shu ustunni chiqarib tashlab qayta
+  // urinamiz — qolgan maydonlar baribir saqlanadi.
+  let attempt = dbPartial;
+  for (let i = 0; i < 5; i++) {
+    const { error } = await sbClient.from("settings").update(attempt).eq("id", 1);
+    if (!error) return;
+    const m = isMissingColumnError(error) && String(error.message || "").match(/column "?([\w]+)"?/i);
+    if (m && attempt[m[1]] !== undefined) {
+      const rest = { ...attempt };
+      delete rest[m[1]];
+      attempt = rest;
+      if (!Object.keys(attempt).length) return;
+      continue;
+    }
+    console.error(error);
+    toast("Sozlamani saqlashda xatolik", "err");
+    return;
+  }
 }
 
 // Bitta qatordagi bir yoki bir nechta maydonni bazaga yozadi (fire-and-forget).
@@ -230,7 +249,9 @@ function defaultStore() {
       // Ish haqi hisoboti uchun soliq stavkalari
       ijtimoiySoliqStavka: 12,
       ndflStavka: 12,
-      inpsStavka: 0.1
+      inpsStavka: 0.1,
+      // Kalkulyatsiya blankasi (chop etish) "UTVERJDAYU" bandida ko'rsatiladi
+      rahbar: ""
     },
     kirim: [],
     chiqim: [],
@@ -2452,23 +2473,60 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
 
 // openChiqimKalkulyatsiyaModal bilan bir xil ma'lumot, lekin rasmiy hujjat
 // (blanka) ko'rinishida chop etish uchun — printSverkaPdf naqshi bo'yicha.
+// Rasmiy "KALKULYATSIYA" blankasi andazasi (UTVERJDAYU + ikki bo'limli
+// jadval: 1) sotilgan mahsulotlar, 2) sarflangan xomashyo — moslashtirilgan
+// avtotransport ta'mirlash kalkulyatsiyasi blankasi asosida) bo'yicha chop
+// etish. printSverkaPdf/Акт sverki bilan bir xil window.open+print naqshi.
 function printChiqimKalkulyatsiyaBlanka(chiqimId) {
   const chiqimRow = STORE.chiqim.find((r) => r.id === chiqimId);
   if (!chiqimRow) return;
   const rows = STORE.chiqimTafsil.filter((t) => t.chiqimId === chiqimId);
   const s = STORE.settings;
 
-  const bodyRows = rows.map((t) => {
+  // 1-bo'lim: facturadagi har bir sotilgan mahsulot qatori — mos kalkulyatsiya
+  // nomi bilan birga (rasmiy blankadagi "Наименование работ" jadvaliga mos).
+  let productsTotal = 0;
+  const productRows = rows.map((t, i) => {
     const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
-    const tarkibText = mahsulot ? (mahsulot.tarkib || []).map((x) =>
-      `${escapeHtml(x.nomi)} ${fmt(toNum(x.norma) * t.miqdor, 3)} ${escapeHtml(x.birlik || "")}`).join(", ") : "—";
+    const summa = toNum(t.summa) || toNum(t.miqdor) * toNum(t.narx);
+    productsTotal += summa;
     return `
       <tr>
-        <td>${escapeHtml(t.nomi)}</td>
+        <td class="num">${i + 1}</td>
+        <td>${escapeHtml(t.nomi)}${mahsulot ? "" : ` <i>(kalkulyatsiya qilinmagan)</i>`}</td>
         <td class="num">${fmt(t.miqdor, 3)} ${escapeHtml(t.birlik || "")}</td>
         <td class="num">${fmtSum(t.narx)}</td>
-        <td>${escapeHtml(mahsulot ? mahsulot.nomi : "Kalkulyatsiya qilinmagan")}</td>
-        <td>${tarkibText}</td>
+        <td class="num">${fmtSum(summa)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  // 2-bo'lim: har bir sotilgan mahsulotning kalkulyatsiyasi (tarkib) asosida
+  // kerak bo'lgan xomashyo, BIR XIL nomdagilar butun faktura bo'yicha
+  // yig'ilgan holda (rasmiy blankadagi "Стоимость материалов" jadvaliga mos).
+  const materialMap = new Map();
+  rows.forEach((t) => {
+    const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
+    if (!mahsulot) return;
+    const { consumptions } = computeMahsulotConsumption(mahsulot, t.miqdor);
+    consumptions.forEach((c) => {
+      const cur = materialMap.get(c.nomi) || { nomi: c.nomi, birlik: c.birlik, miqdor: 0 };
+      cur.miqdor += c.miqdor;
+      materialMap.set(c.nomi, cur);
+    });
+  });
+  let materialsTotal = 0;
+  const materialRows = Array.from(materialMap.values()).map((c) => {
+    const narx = avgOmborNarx(c.nomi);
+    const summa = c.miqdor * narx;
+    materialsTotal += summa;
+    return `
+      <tr>
+        <td>${escapeHtml(c.nomi)}</td>
+        <td class="num">${escapeHtml(c.birlik || "")}</td>
+        <td class="num">${fmt(c.miqdor, 3)}</td>
+        <td class="num">${fmtSum(narx)}</td>
+        <td class="num">${fmtSum(summa)}</td>
       </tr>
     `;
   }).join("");
@@ -2478,30 +2536,56 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
     <html lang="uz">
     <head>
       <meta charset="UTF-8">
-      <title>Kalkulyatsiya blankasi</title>
+      <title>Kalkulyatsiya ${escapeHtml(chiqimRow.hujjatRaqami || "")}</title>
       <style>
-        body{font-family:Arial, "Segoe UI", sans-serif; padding:28px; color:#1c2530;}
-        h1{font-size:18px; margin:0 0 4px;}
-        .sub{font-size:12px; color:#5b6b7b; margin:0 0 18px;}
-        table{width:100%; border-collapse:collapse; font-size:11.5px;}
-        th, td{border:1px solid #ccd3da; padding:6px 8px; text-align:left;}
-        th{background:#eceff2;}
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:32px; color:#1c2530; font-size:12.5px;}
+        .approve{float:right; text-align:center; width:260px; font-size:12px;}
+        .approve .line{margin-top:6px;}
+        .approve .dots{border-bottom:1px dotted #1c2530; display:inline-block; min-width:170px;}
+        h1{font-size:19px; text-align:center; margin:70px 0 14px;}
+        .meta{font-size:12.5px; margin-bottom:6px;}
+        .meta b{font-weight:700;}
+        .section-title{font-weight:700; margin:20px 0 8px; font-size:13px;}
+        table{width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:6px;}
+        th, td{border:1px solid #1c2530; padding:5px 8px; text-align:left;}
+        th{background:#eceff2; text-align:center;}
         td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        .jami{margin:6px 0 0; font-weight:700;}
+        .sign{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:48px; font-size:12px;}
+        .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:80%;}
         @media print { body{padding:0;} }
       </style>
     </head>
     <body>
-      <h1>${escapeHtml(s.companyName)}</h1>
-      <div class="sub">
-        INN: ${escapeHtml(s.inn)} &middot; Kalkulyatsiya blankasi (yuridik shaxs)<br>
-        Faktura ${escapeHtml(chiqimRow.hujjatRaqami || "")} &middot; ${escapeHtml(chiqimRow.sana || "")} &middot; Xaridor: ${escapeHtml(chiqimRow.kontragentNomi || "")} (INN ${escapeHtml(chiqimRow.kontragentInn || "")})
+      <div class="approve">
+        «ТАСДИҚЛАЙМАН»<br>
+        ${escapeHtml(s.companyName)} rahbari<br>
+        <span class="dots">${escapeHtml(s.rahbar || "")}</span>
+        <div class="line">«____» ______________ 20____ y.</div>
       </div>
+      <div style="clear:both;"></div>
+      <h1>KALKULYATSIYA № ${escapeHtml(chiqimRow.hujjatRaqami || "")}</h1>
+      <div class="meta"><b>Mavzu:</b> Sotilgan mahsulot tannarxi bo'yicha kalkulyatsiya &nbsp; <b>Asos:</b> Faktura № ${escapeHtml(chiqimRow.hujjatRaqami || "")}, ${escapeHtml(chiqimRow.sana || "")}</div>
+      <div class="meta"><b>Xaridor:</b> ${escapeHtml(chiqimRow.kontragentNomi || "")} (INN ${escapeHtml(chiqimRow.kontragentInn || "")})</div>
+
+      <div class="section-title">1. Sotilgan mahsulotlar qiymati</div>
       <table>
-        <thead>
-          <tr><th>Mahsulot (facturada)</th><th class="num">Miqdor</th><th class="num">Narx</th><th>Kalkulyatsiya</th><th>Sarflangan xomashyo</th></tr>
-        </thead>
-        <tbody>${bodyRows}</tbody>
+        <thead><tr><th>№</th><th>Mahsulot nomi</th><th class="num">Miqdori</th><th class="num">Narxi</th><th class="num">Summa</th></tr></thead>
+        <tbody>${productRows || `<tr><td colspan="5" style="text-align:center;">Mahsulot qatorlari topilmadi</td></tr>`}</tbody>
       </table>
+      <div class="jami">JAMI: sotilgan mahsulotlar summasi — ${fmtSum(productsTotal)}</div>
+
+      <div class="section-title">2. Sarflangan xomashyo (tannarx)</div>
+      <table>
+        <thead><tr><th>Xomashyo nomi</th><th class="num">O'lchov birligi</th><th class="num">Miqdori</th><th class="num">Narxi</th><th class="num">Summa</th></tr></thead>
+        <tbody>${materialRows || `<tr><td colspan="5" style="text-align:center;">Kalkulyatsiya qilingan xomashyo topilmadi</td></tr>`}</tbody>
+      </table>
+      <div class="jami">JAMI: xomashyo tannarxi — ${fmtSum(materialsTotal)}</div>
+
+      <div class="sign">
+        <div>Tuzdi (buxgalter)<div class="line"></div></div>
+        <div>Tasdiqladi (rahbar)<div class="line"></div></div>
+      </div>
     </body>
     </html>
   `;
@@ -4504,6 +4588,7 @@ function renderSettings() {
         <div class="field"><label>INN</label><input id="sInn" value="${escapeHtml(s.inn)}"></div>
         <div class="field"><label>Manzil</label><input id="sAddress" value="${escapeHtml(s.address)}"></div>
         <div class="field"><label>Hisobot davri</label><input id="sPeriod" value="${escapeHtml(s.period)}"></div>
+        <div class="field"><label>Rahbar F.I.Sh. (kalkulyatsiya blankasida "Tasdiqlayman" bandida)</label><input id="sRahbar" value="${escapeHtml(s.rahbar || "")}" placeholder="masalan: Karimov A.A."></div>
       </div>
       <div class="card">
         <div class="card-title">Soliq stavkalari</div>
@@ -4546,6 +4631,7 @@ function renderSettings() {
     s.inn = document.getElementById("sInn").value;
     s.address = document.getElementById("sAddress").value;
     s.period = document.getElementById("sPeriod").value;
+    s.rahbar = document.getElementById("sRahbar").value;
     s.qqsStavka = toNum(document.getElementById("sQqs").value);
     s.foydaStavka = toNum(document.getElementById("sFoyda").value);
     s.davrXarajati = toNum(document.getElementById("sDavr").value);
@@ -4556,7 +4642,7 @@ function renderSettings() {
     s.ndflStavka = toNum(document.getElementById("sNdfl").value);
     s.inpsStavka = toNum(document.getElementById("sInps").value);
     saveSettingsToDb({
-      companyName: s.companyName, inn: s.inn, address: s.address, period: s.period,
+      companyName: s.companyName, inn: s.inn, address: s.address, period: s.period, rahbar: s.rahbar,
       qqsStavka: s.qqsStavka, foydaStavka: s.foydaStavka, davrXarajati: s.davrXarajati,
       moliyaviyXarajat: s.moliyaviyXarajat, tannarxManual: s.tannarxManual,
       ijtimoiySoliqStavka: s.ijtimoiySoliqStavka, ndflStavka: s.ndflStavka, inpsStavka: s.inpsStavka
