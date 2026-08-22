@@ -163,10 +163,10 @@ async function saveSettingsToDb(partial) {
   for (let i = 0; i < 5; i++) {
     const { error } = await sbClient.from("settings").update(attempt).eq("id", 1);
     if (!error) return;
-    const m = isMissingColumnError(error) && String(error.message || "").match(/column "?([\w]+)"?/i);
-    if (m && attempt[m[1]] !== undefined) {
+    const missingCol = isMissingColumnError(error) && extractMissingColumnName(error);
+    if (missingCol && attempt[missingCol] !== undefined) {
       const rest = { ...attempt };
-      delete rest[m[1]];
+      delete rest[missingCol];
       attempt = rest;
       if (!Object.keys(attempt).length) return;
       continue;
@@ -2115,7 +2115,21 @@ function openMahsulotModal(existingId) {
 // exist" xatosi bilan butun mahsulotni saqlashni buzmasligi uchun, shu xatoni
 // alohida aniqlab, maydonsiz qayta urinib ko'ramiz.
 function isMissingColumnError(error) {
-  return !!(error && (error.code === "42703" || /column .* does not exist/i.test(String(error.message || ""))));
+  return !!(error && (error.code === "42703" || error.code === "PGRST204" ||
+    /column .* does not exist/i.test(String(error.message || "")) ||
+    /could not find the .* column/i.test(String(error.message || ""))));
+}
+
+// Postgres va PostgREST bir xil xatoni turlicha formatda yozadi:
+// Postgres: column "foo" does not exist / Postgres: column foo does not exist
+// PostgREST: Could not find the 'foo' column of 'settings' in the schema cache
+function extractMissingColumnName(error) {
+  const msg = String((error && error.message) || "");
+  let m = msg.match(/column "?([\w]+)"? does not exist/i);
+  if (m) return m[1];
+  m = msg.match(/find the '([\w]+)' column/i);
+  if (m) return m[1];
+  return null;
 }
 
 async function saveMahsulotFromModal(existingId) {
