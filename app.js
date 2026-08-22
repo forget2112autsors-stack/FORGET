@@ -159,6 +159,40 @@ function pushFieldsUpdate(type, id, partial) {
   });
 }
 
+// RLS policy o'chirishni rad etganda (masalan, faqat admin o'chira oladigan
+// qatorni oddiy xodim o'chirishga urinishi) Supabase/Postgres "42501" xato
+// kodini qaytaradi — buni tushunarli xabarga aylantiramiz.
+function isPermissionError(error) {
+  return !!(error && (error.code === "42501" || /permission|policy|rls/i.test(String(error.message || ""))));
+}
+
+// STORE'dan optimistik ravishda o'chiradi (UI darhol yangilanadi), lekin
+// bazaga yozish muvaffaqiyatsiz bo'lsa (masalan RLS ruxsat bermasa) qatorni
+// JOYIGA qaytaradi — aks holda foydalanuvchi "o'chirildi" deb o'ylab qoladi,
+// aslida qator bazada saqlanib qolgan bo'ladi (va keyingi sinxronlashda yoki
+// sahifani yangilaganda kutilmaganda "qayta paydo bo'ladi").
+async function deleteRowSafe(table, type, id, rerender) {
+  const idx = STORE[type].findIndex((r) => r.id === id);
+  if (idx === -1) return true;
+  const row = STORE[type][idx];
+  RECENTLY_DELETED.add(id);
+  STORE[type] = STORE[type].filter((r) => r.id !== id);
+  updateNavBadges();
+  if (rerender) rerender();
+  const { error } = await sbClient.from(table).delete().eq("id", id);
+  if (error) {
+    console.error(error);
+    RECENTLY_DELETED.delete(id);
+    STORE[type].splice(Math.min(idx, STORE[type].length), 0, row);
+    updateNavBadges();
+    if (rerender) rerender();
+    toast(isPermissionError(error) ? "Sizda bu qatorni o'chirish huquqi yo'q (faqat admin)" : "O'chirishda xatolik", "err");
+    return false;
+  }
+  saveStore();
+  return true;
+}
+
 /* ---------------------------- default data ---------------------------- */
 
 function defaultStore() {
@@ -749,10 +783,41 @@ const INVOICE_LABELS = {
   chiqim: { title: "Faktura chiqim", desc: "Xaridorlarga chiqarilgan savdo fakturalari (didox.uz eksportidan import qilinadi yoki qo'lda kiritiladi).", party: "Xaridor" }
 };
 
+// Hujjat raqami + sana + summa + kontragent nomi bo'yicha "identifikator" hosil
+// qiladi — katta-kichik harf va ortiqcha bo'sh joylarga sezgir emas (Excel
+// import qilingandagi ANIQ moslikka asoslangan tekshiruvdan ko'ra kengroq,
+// chunki qo'lda kiritilgan yozuvlarda oz-moz farq bo'lishi mumkin).
+function invoiceDuplicateKey(r) {
+  const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return `${norm(r.hujjatRaqami)}|${r.sana || ""}|${Math.round(toNum(r.jamiSumma))}|${norm(r.kontragentNomi)}`;
+}
+
+// Faqat KO'RSATISH uchun — hech narsani avtomat o'chirmaydi. Qaysi nusxa
+// "asl" ekanini ishonchli aniqlash mumkin emas (kirim/chiqim jadvalida
+// yaratilgan vaqti saqlanmaydi), shu sabab yakuniy qarorni odam qabul qilishi
+// kerak — mavjud "O'chirish" tugmasi orqali (endi xatoni to'g'ri qaytaradigan).
+function findDuplicateInvoiceIds(type) {
+  const groups = new Map();
+  STORE[type].forEach((r) => {
+    if (!r.hujjatRaqami) return; // hujjat raqamisiz qatorlarni solishtirmaymiz
+    const key = invoiceDuplicateKey(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+  const ids = new Set();
+  let groupCount = 0;
+  groups.forEach((list) => { if (list.length > 1) { groupCount++; list.forEach((r) => ids.add(r.id)); } });
+  return { ids, groupCount };
+}
+
+let INVOICE_DUP_FILTER = { kirim: false, chiqim: false };
+
 function renderInvoiceTable(type) {
   const info = INVOICE_LABELS[type];
   const filtered = getFilteredRows(STORE[type]);
-  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const { ids: dupIds, groupCount: dupGroupCount } = findDuplicateInvoiceIds(type);
+  const visibleRows = INVOICE_DUP_FILTER[type] ? filtered.filter((r) => dupIds.has(r.id)) : filtered;
+  const rows = visibleRows.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
   const main = document.getElementById("main");
 
   const totalBase = sumRows(filtered, "summaQQSsiz");
@@ -781,8 +846,11 @@ function renderInvoiceTable(type) {
 
     <div class="toolbar">
       <input class="search-input" id="searchBox" placeholder="Qidirish: kontragent, hujjat raqami...">
+      <button class="btn ${INVOICE_DUP_FILTER[type] ? "btn-primary" : ""}" id="btnDupToggle" title="Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuvlarni ko'rsatadi">
+        &#128260; Takrorlar${dupGroupCount ? ` (${dupGroupCount})` : ""}
+      </button>
       <div class="spacer"></div>
-      <span class="faint">${rows.length} ta yozuv</span>
+      <span class="faint">${rows.length} ta yozuv${INVOICE_DUP_FILTER[type] ? " (faqat takrorlar)" : ""}</span>
     </div>
 
     <div class="table-wrap">
@@ -803,27 +871,32 @@ function renderInvoiceTable(type) {
           </tr>
         </thead>
         <tbody id="invoiceBody">
-          ${rows.length ? rows.map((r) => invoiceRowHtml(type, r)).join("") : ""}
+          ${rows.length ? rows.map((r) => invoiceRowHtml(type, r, dupIds.has(r.id))).join("") : ""}
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128196;</div><div class="t">Hujjatlar yo'q</div><div class="d">"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128196;</div><div class="t">${INVOICE_DUP_FILTER[type] ? "Takrorlangan hujjat topilmadi" : "Hujjatlar yo'q"}</div><div class="d">${INVOICE_DUP_FILTER[type] ? "Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuv yo'q." : `"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.`}</div></div>` : ""}
     ${kontragentlarDatalistHtml()}
   `;
 
   document.getElementById("btnAddRow").addEventListener("click", () => addInvoiceRow(type));
   document.getElementById("btnImport").addEventListener("click", () => openImportModal(type));
   document.getElementById("searchBox").addEventListener("input", (e) => filterInvoiceRows(e.target.value));
+  document.getElementById("btnDupToggle").addEventListener("click", () => {
+    INVOICE_DUP_FILTER[type] = !INVOICE_DUP_FILTER[type];
+    renderInvoiceTable(type);
+  });
   bindDateRangeBar(() => renderInvoiceTable(type));
 
   bindInvoiceRowEvents(type);
 }
 
-function invoiceRowHtml(type, r) {
+function invoiceRowHtml(type, r, isDup) {
   const invalid = !isValidStatus(r.status);
   const statusPill = invalid ? "pill-danger" : (r.status === "Ожидает" ? "pill-warn" : "pill-ok");
+  const rowStyle = [invalid ? "opacity:.55" : "", isDup ? "background:var(--warn-soft)" : ""].filter(Boolean).join(";");
   return `
-    <tr data-id="${r.id}" style="${invalid ? "opacity:.55" : ""}">
+    <tr data-id="${r.id}" style="${rowStyle}" title="${isDup ? "Diqqat: bu hujjat raqami+sana+summa+kontragent bo'yicha boshqa yozuv(lar) bilan bir xil bo'lishi mumkin" : ""}">
       <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
       <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
       <td><input class="cell-input" data-f="kontragentNomi" list="kontragentlarList" value="${escapeHtml(r.kontragentNomi || "")}" style="min-width:170px"></td>
@@ -926,13 +999,7 @@ function bindInvoiceRowEvents(type) {
   });
   body.addEventListener("click", (e) => {
     const delId = e.target.dataset.del;
-    if (delId) {
-      RECENTLY_DELETED.add(delId);
-      STORE[type] = STORE[type].filter((r) => r.id !== delId);
-      sbClient.from(TABLE_NAMES[type]).delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
-      saveStore();
-      renderInvoiceTable(type);
-    }
+    if (delId) deleteRowSafe(TABLE_NAMES[type], type, delId, () => renderInvoiceTable(type));
   });
 }
 
@@ -1182,12 +1249,8 @@ function renderOmborChiqim() {
 }
 
 async function deleteOmborChiqimRow(id) {
-  RECENTLY_DELETED.add(id);
-  STORE.ombor = STORE.ombor.filter((r) => r.id !== id);
-  await sbClient.from("ombor").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
-  updateNavBadges();
-  renderOmborChiqim();
-  toast("O'chirildi, ombor qoldig'i yangilandi");
+  const ok = await deleteRowSafe("ombor", "ombor", id, renderOmborChiqim);
+  if (ok) toast("O'chirildi, ombor qoldig'i yangilandi");
 }
 
 function renderOmborQoldiq() {
@@ -1358,13 +1421,7 @@ function bindOmborRowEvents() {
   });
   body.addEventListener("click", (e) => {
     const delId = e.target.dataset.del;
-    if (delId) {
-      RECENTLY_DELETED.add(delId);
-      STORE.ombor = STORE.ombor.filter((r) => r.id !== delId);
-      sbClient.from("ombor").delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
-      updateNavBadges();
-      renderOmbor();
-    }
+    if (delId) deleteRowSafe("ombor", "ombor", delId, renderOmbor);
   });
 }
 
@@ -1679,23 +1736,6 @@ async function ensureKontragentAutoAdded(inn, nomi) {
   return newK;
 }
 
-// Solishtirma dalolatnomadagi "Davr boshiga" ustuni qo'lda kiritiladi — bu
-// funksiya shu qiymatni tegishli kontragent yozuviga saqlaydi (yozuv hali
-// Kontragentlar spravochnigida yo'q bo'lsa, shu nom/INN bilan yaratadi).
-async function updateKontragentBoshlangichQarz(inn, nomi, value) {
-  const existing = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
-  if (existing) {
-    existing.boshlangichQarz = value;
-    pushFieldsUpdate("kontragentlar", existing.id, { boshlangichQarz: value });
-    return existing;
-  }
-  const payload = { nomi: nomi || inn, inn, manzil: "", telefon: "", bankHisob: "", bankMfo: "", bankNomi: "", turi: "", izoh: "", boshlangichQarz: value };
-  const { data, error } = await sbClient.from("kontragentlar").insert(toDbRow(KONTRAGENT_DB_MAP, payload)).select().single();
-  if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return null; }
-  const newK = fromDbRow(KONTRAGENT_DB_MAP, data);
-  STORE.kontragentlar.push(newK);
-  return newK;
-}
 
 function tarkibRowHtml(item) {
   item = item || {};
@@ -1763,11 +1803,8 @@ async function saveMahsulotFromModal(existingId) {
 }
 
 async function deleteMahsulot(id) {
-  RECENTLY_DELETED.add(id);
-  STORE.mahsulotlar = STORE.mahsulotlar.filter((m) => m.id !== id);
-  await sbClient.from("mahsulotlar").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
-  renderIshlabChiqarish();
-  toast("Mahsulot o'chirildi");
+  const ok = await deleteRowSafe("mahsulotlar", "mahsulotlar", id, renderIshlabChiqarish);
+  if (ok) toast("Mahsulot o'chirildi");
 }
 
 /* ------------------------------ Kontragentlar ------------------------------ */
@@ -1912,11 +1949,8 @@ async function saveKontragentFromModal(existingId) {
 }
 
 async function deleteKontragent(id) {
-  RECENTLY_DELETED.add(id);
-  STORE.kontragentlar = STORE.kontragentlar.filter((k) => k.id !== id);
-  await sbClient.from("kontragentlar").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
-  renderKontragentlar();
-  toast("Kontragent o'chirildi");
+  const ok = await deleteRowSafe("kontragentlar", "kontragentlar", id, renderKontragentlar);
+  if (ok) toast("Kontragent o'chirildi");
 }
 
 /* ---------------------------- Asosiy vositalar ---------------------------- */
@@ -2068,11 +2102,8 @@ async function saveAsosiyVositaFromModal(existingId) {
 }
 
 async function deleteAsosiyVosita(id) {
-  RECENTLY_DELETED.add(id);
-  STORE.asosiyVositalar = STORE.asosiyVositalar.filter((a) => a.id !== id);
-  await sbClient.from("asosiy_vositalar").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
-  renderAsosiyVositalar();
-  toast("Asosiy vosita o'chirildi");
+  const ok = await deleteRowSafe("asosiy_vositalar", "asosiyVositalar", id, renderAsosiyVositalar);
+  if (ok) toast("Asosiy vosita o'chirildi");
 }
 
 function openIshlabChiqarishModal() {
@@ -2191,19 +2222,34 @@ async function addIshlabChiqarishEntry() {
 }
 
 async function deleteIshlabChiqarishEntry(id) {
-  RECENTLY_DELETED.add(id);
+  const entryIdx = STORE.ishlabChiqarish.findIndex((r) => r.id === id);
+  const entry = entryIdx >= 0 ? STORE.ishlabChiqarish[entryIdx] : null;
   const linked = STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `IC-${id}`);
+  RECENTLY_DELETED.add(id);
+  linked.forEach((r) => RECENTLY_DELETED.add(r.id));
   STORE.ishlabChiqarish = STORE.ishlabChiqarish.filter((r) => r.id !== id);
   STORE.ombor = STORE.ombor.filter((r) => !(r.turi === "chiqim" && r.hujjatRaqami === `IC-${id}`));
-  await sbClient.from("ishlab_chiqarish").delete().eq("id", id).then(({ error }) => { if (error) console.error(error); });
-  if (linked.length) {
-    linked.forEach((r) => RECENTLY_DELETED.add(r.id));
-    await sbClient.from("ombor").delete().in("id", linked.map((r) => r.id)).then(({ error }) => { if (error) console.error(error); });
-  }
   updateNavBadges();
   // Ombor chiqimi tabidan chaqirilganda ham to'g'ri sahifa qayta chizilishi
   // uchun "Ishlab chiqarish"ga majburan o'tkazib yubormay, joriy sahifani
   // (qaysi bo'lsa ham) qayta render qilamiz.
+  PAGES[CURRENT_PAGE].render();
+  const { error } = await sbClient.from("ishlab_chiqarish").delete().eq("id", id);
+  if (error) {
+    console.error(error);
+    RECENTLY_DELETED.delete(id);
+    if (entry) STORE.ishlabChiqarish.push(entry);
+    linked.forEach((r) => { RECENTLY_DELETED.delete(r.id); STORE.ombor.push(r); });
+    updateNavBadges();
+    PAGES[CURRENT_PAGE].render();
+    toast(isPermissionError(error) ? "Sizda bu qatorni o'chirish huquqi yo'q (faqat admin)" : "O'chirishda xatolik", "err");
+    return;
+  }
+  if (linked.length) {
+    const { error: error2 } = await sbClient.from("ombor").delete().in("id", linked.map((r) => r.id));
+    if (error2) console.error(error2);
+  }
+  updateNavBadges();
   PAGES[CURRENT_PAGE].render();
   toast("O'chirildi, hom ashyo qoldig'i tiklandi");
 }
@@ -2542,13 +2588,7 @@ function bindBankRowEvents() {
   });
   body.addEventListener("click", (e) => {
     const delId = e.target.dataset.del;
-    if (delId) {
-      RECENTLY_DELETED.add(delId);
-      STORE.bank = STORE.bank.filter((r) => r.id !== delId);
-      sbClient.from("bank").delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
-      saveStore();
-      renderBank();
-    }
+    if (delId) deleteRowSafe("bank", "bank", delId, renderBank);
   });
 }
 
@@ -2829,13 +2869,7 @@ function bindIshHaqiRowEvents() {
   });
   body.addEventListener("click", (e) => {
     const delId = e.target.dataset.del;
-    if (delId) {
-      RECENTLY_DELETED.add(delId);
-      STORE.ishHaqi = STORE.ishHaqi.filter((r) => r.id !== delId);
-      sbClient.from("ish_haqi").delete().eq("id", delId).then(({ error }) => { if (error) console.error(error); });
-      saveStore();
-      renderIshHaqi();
-    }
+    if (delId) deleteRowSafe("ish_haqi", "ishHaqi", delId, renderIshHaqi);
   });
 }
 
@@ -3344,13 +3378,20 @@ function computeReconciliationRows() {
     return { kirimCol: chiqimAmt + bankChiqimAmt, chiqimCol: kirimAmt + bankKirimAmt };
   }
 
-  // "Davr boshiga" endi avtomatik hisoblanmaydi — Kontragentlar spravochnigida
-  // (yoki shu jadvaldagi ustunning o'zida) qo'lda kiritiladigan "boshlangichQarz"
-  // qiymati ishlatiladi. Faqat davr ichidagi ("Kirim"/"Chiqim") harakat
-  // tanlangan sana oralig'idan avtomatik hisoblanadi.
+  // "Davr boshiga" = Kontragentlar bo'limida qo'lda kiritilgan boshlang'ich baza
+  // (odatda BUX2112'dan oldingi tarixni ifodalaydi) + tanlangan "Davr"ning
+  // boshigacha ("from" sanasidan OLDIN) bo'lgan barcha faktura/bank harakati.
+  // Shu sabab davr filtri o'zgarganda "Davr boshiga" ham to'g'ri qayta
+  // hisoblanadi (masalan "Joriy chorak" tanlansa, o'sha chorakdan oldingi
+  // barcha tarix "Davr boshiga"ga yig'iladi — avval bu qiymat filtrdan
+  // qat'i nazar doim bitta qo'lda kiritilgan raqamda "muzlab" qolar, natijada
+  // "Davr oxiriga" ham har qanday davr uchun noto'g'ri chiqardi).
+  // "from" bo'sh bo'lsa (filtr yo'q) faqat qo'lda kiritilgan baza qiymati ishlatiladi.
   return Object.keys(innInfo).map((inn) => {
     const kontragent = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
-    const boshiga = kontragent ? toNum(kontragent.boshlangichQarz) : 0;
+    const baseQarz = kontragent ? toNum(kontragent.boshlangichQarz) : 0;
+    const before = from ? periodTotals(inn, (sana) => !!sana && sana < from) : { kirimCol: 0, chiqimCol: 0 };
+    const boshiga = baseQarz + before.kirimCol - before.chiqimCol;
     const period = periodTotals(inn, (sana) => inRange(sana, from, to));
     const oxiriga = boshiga + period.kirimCol - period.chiqimCol;
     return { inn, nomi: innInfo[inn] || "(nomsiz)", boshiga, kirim: period.kirimCol, chiqim: period.chiqimCol, oxiriga };
@@ -3382,7 +3423,7 @@ function sverkaRowHtml(r) {
     <tr>
       <td>${escapeHtml(r.nomi)}</td>
       <td class="tag-inn">${escapeHtml(r.inn)}</td>
-      <td class="num"><input class="cell-input num" data-boshiga-inn="${escapeHtml(r.inn)}" data-boshiga-nomi="${escapeHtml(r.nomi)}" value="${fmt(r.boshiga)}" style="min-width:110px" title="Qo'lda kiritiladi — davr harakatiga qo'shilib, 'Davr oxiriga'ni beradi"></td>
+      <td class="num" title="Boshlang'ich baza (Kontragentlar bo'limida tahrirlanadi) + davr boshigacha bo'lgan tarix asosida avtomatik hisoblanadi">${fmtSum(r.boshiga)}</td>
       <td class="num">${fmtSum(r.kirim)}</td>
       <td class="num">${fmtSum(r.chiqim)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.oxiriga)}</td>
@@ -3422,7 +3463,7 @@ function renderSverka() {
       `).join("")}
     </div>
 
-    ${dateRangeBarHtml('"Davr boshiga" ustuni qo\'lda kiritiladi, davr ichidagi harakat esa tanlangan sana oralig\'idan avtomatik hisoblanadi.')}
+    ${dateRangeBarHtml('"Davr boshiga" — boshlang\'ich baza (Kontragentlar bo\'limida tahrirlanadi) + davr boshigacha bo\'lgan tarix asosida avtomatik hisoblanadi.')}
 
     <div class="grid grid-2 section">
       <div class="card stat-card"><div class="stat-label">Jami debitorlik (bizga qarzdor)</div><div class="stat-value">${fmtSum(totalDebitor)}</div></div>
@@ -3451,18 +3492,11 @@ function renderSverka() {
       ? `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Bu holatga mos kontragent yo'q</div><div class="d">Filterni bekor qilish uchun tanlangan tugmani qayta bosing.</div></div>`
       : `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Ma'lumot yo'q</div><div class="d">Faktura yoki bank yozuvlarida INN kiritilgan kontragentlar shu yerda ko'rinadi.</div></div>`) : ""}
     <div class="note">
-      <b>Hisoblash mantig'i:</b> "Davr boshiga" — qo'lda kiritiladi (o'zgartirilganda avtomat saqlanadi). "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
+      <b>Hisoblash mantig'i:</b> "Davr boshiga" — Kontragentlar bo'limida kiritilgan boshlang'ich baza + tanlangan davr boshigacha bo'lgan barcha tarix asosida avtomatik hisoblanadi (baza qiymatini o'zgartirish uchun "Kontragentlar" bo'limidagi shu kontragent yozuviga o'ting). "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
     </div>
   `;
   document.getElementById("btnExportSverka").addEventListener("click", () => exportSverkaXlsx(filteredRows, totalDebitor, totalKreditor));
   document.getElementById("btnPrintSverka").addEventListener("click", () => printSverkaPdf(filteredRows, totalDebitor, totalKreditor));
-  const sverkaBody = document.getElementById("sverkaBody");
-  if (sverkaBody) sverkaBody.addEventListener("change", (e) => {
-    const inn = e.target.dataset.boshigaInn;
-    if (!inn) return;
-    const nomi = e.target.dataset.boshigaNomi || "";
-    updateKontragentBoshlangichQarz(inn, nomi, toNum(e.target.value)).then(() => renderSverka());
-  });
   main.querySelectorAll("[data-detail-inn]").forEach((b) => b.addEventListener("click", () => openSverkaDetail(b.dataset.detailInn, "sverka")));
   main.querySelectorAll("[data-status-filter]").forEach((b) => b.addEventListener("click", () => {
     const key = b.dataset.statusFilter;
@@ -3610,11 +3644,17 @@ function computeKontragentLedger(inn) {
     return list;
   }
 
-  // Solishtirma dalolatnoma jadvalidagi "Davr boshiga" bilan bir xil manba —
-  // qo'lda kiritilgan boshlang'ich qarz (Kontragentlar spravochnigidagi
-  // "boshlangichQarz" maydoni), tarixdan avtomatik hisoblanmaydi.
+  // Solishtirma dalolatnoma jadvalidagi "Davr boshiga" bilan bir xil manba va
+  // mantiq (computeReconciliationRows): Kontragentlar spravochnigidagi qo'lda
+  // kiritilgan boshlang'ich baza + tanlangan davr boshigacha ("from" sanasidan
+  // OLDIN) bo'lgan barcha harakatlar yig'indisi — shu sabab davr filtri
+  // o'zgarganda "Saldo boshlang'ich" ham to'g'ri qayta hisoblanadi.
   const kontragent = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
-  const boshlangichSaldo = kontragent ? toNum(kontragent.boshlangichQarz) : 0;
+  const baseQarz = kontragent ? toNum(kontragent.boshlangichQarz) : 0;
+  const beforeDelta = from
+    ? txList((sana) => !!sana && sana < from).reduce((a, t) => a + t.debet - t.kredit, 0)
+    : 0;
+  const boshlangichSaldo = baseQarz + beforeDelta;
 
   const period = txList((sana) => inRange(sana, from, to)).sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
   let running = boshlangichSaldo;
@@ -3963,17 +4003,26 @@ function deleteFayl(id) {
   document.getElementById("mConfirm").addEventListener("click", async () => {
     RECENTLY_DELETED.add(id);
     const bolimType = fayl.bolim;
-    if (STORE[bolimType]) {
-      STORE[bolimType].filter((r) => r.faylId === id).forEach((r) => RECENTLY_DELETED.add(r.id));
-      STORE[bolimType] = STORE[bolimType].filter((r) => r.faylId !== id);
-    }
+    const linkedRows = STORE[bolimType] ? STORE[bolimType].filter((r) => r.faylId === id) : [];
+    linkedRows.forEach((r) => RECENTLY_DELETED.add(r.id));
+    if (STORE[bolimType]) STORE[bolimType] = STORE[bolimType].filter((r) => r.faylId !== id);
     STORE.fayllar = STORE.fayllar.filter((f) => f.id !== id);
-    const { error } = await sbClient.from("fayllar").delete().eq("id", id);
-    if (error) console.error(error);
-    saveStore();
     updateNavBadges();
     closeModal();
     renderFayllar();
+    const { error } = await sbClient.from("fayllar").delete().eq("id", id);
+    if (error) {
+      console.error(error);
+      RECENTLY_DELETED.delete(id);
+      linkedRows.forEach((r) => RECENTLY_DELETED.delete(r.id));
+      if (STORE[bolimType]) STORE[bolimType] = STORE[bolimType].concat(linkedRows);
+      STORE.fayllar.push(fayl);
+      updateNavBadges();
+      renderFayllar();
+      toast(isPermissionError(error) ? "Sizda bu faylni o'chirish huquqi yo'q (faqat admin)" : "O'chirishda xatolik", "err");
+      return;
+    }
+    saveStore();
     toast("Fayl va unga bog'liq yozuvlar o'chirildi");
   });
 }
@@ -4176,12 +4225,13 @@ function renderSettings() {
   document.getElementById("jsonFile").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (!IS_ADMIN) { toast("Faqat admin ma'lumotlarni tiklashi mumkin", "err"); e.target.value = ""; return; }
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
       const newSettings = Object.assign(defaultStore().settings, parsed.settings || {});
 
-      await Promise.all([
+      const clearResults = await Promise.all([
         sbClient.from("kirim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
         sbClient.from("chiqim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
         sbClient.from("bank").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
@@ -4191,6 +4241,8 @@ function renderSettings() {
         sbClient.from("mahsulotlar").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
         sbClient.from("fayllar").delete().neq("id", "00000000-0000-0000-0000-000000000000")
       ]);
+      const clearError = clearResults.find((r) => r.error);
+      if (clearError) throw clearError.error;
 
       // Eslatma: "fayllar" jadvali reset paytida bo'shatilib qayta yaratilgani
       // uchun eski fayl_id qiymatlari endi hech qanday faylga mos kelmaydi —
@@ -4213,11 +4265,16 @@ function renderSettings() {
       toast("Ma'lumotlar tiklandi");
     } catch (err) {
       console.error(err);
-      toast("Faylni o'qib bo'lmadi", "err");
+      // Bazaga yozishdagi (masalan RLS ruxsat bermagan) xatolik bilan faylni
+      // o'qib bo'lmasligini ajratib ko'rsatamiz — ikkalasi ham shu catch'ga tushadi.
+      toast(isPermissionError(err) ? "Sizda ma'lumotlarni tiklash huquqi yo'q (faqat admin)" : "Faylni o'qib/tiklab bo'lmadi", "err");
+    } finally {
+      e.target.value = "";
     }
   });
 
   document.getElementById("btnReset").addEventListener("click", () => {
+    if (!IS_ADMIN) { toast("Faqat admin barcha ma'lumotlarni tozalashi mumkin", "err"); return; }
     openModal(`
       <h3>Hammasini tozalash</h3>
       <p class="modal-sub">Barcha kirim/chiqim/bank/ish haqi/ombor/ishlab chiqarish yozuvlari <b>butun jamoa uchun umumiy bazadan</b> o'chiriladi. Bu amalni bekor qilib bo'lmaydi.</p>
@@ -4228,7 +4285,7 @@ function renderSettings() {
     `);
     document.getElementById("mCancel").addEventListener("click", closeModal);
     document.getElementById("mConfirm").addEventListener("click", async () => {
-      await Promise.all([
+      const results = await Promise.all([
         sbClient.from("kirim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
         sbClient.from("chiqim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
         sbClient.from("bank").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
@@ -4238,6 +4295,16 @@ function renderSettings() {
         sbClient.from("mahsulotlar").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
         sbClient.from("fayllar").delete().neq("id", "00000000-0000-0000-0000-000000000000")
       ]);
+      const failed = results.find((r) => r.error);
+      if (failed) {
+        console.error(failed.error);
+        closeModal();
+        // Ba'zi jadvallar allaqachon tozalangan bo'lishi mumkin — haqiqiy holatni ko'rsatish uchun qayta yuklaymiz.
+        await loadAllData();
+        renderSettings();
+        toast(isPermissionError(failed.error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Tozalashda xatolik — ba'zi jadvallar tozalanmagan bo'lishi mumkin", "err");
+        return;
+      }
       await saveSettingsToDb(defaultStore().settings);
       await loadAllData();
       closeModal();
@@ -4782,12 +4849,32 @@ function hideAuthGate() {
   document.getElementById("authGate").style.display = "none";
 }
 
+// "foydalanuvchi_rollari" jadvali (migration_roles.sql orqali qo'shiladi) —
+// email bo'yicha "admin"/"xodim" rolini belgilaydi. Jadval hali yaratilmagan
+// yoki shu email uchun qator kiritilmagan bo'lsa — eng xavfsiz variant sifatida
+// oddiy xodim (IS_ADMIN=false) deb hisoblanadi (o'chirish huquqi bo'lmaydi).
+// Haqiqiy cheklov bazadagi RLS policy orqali ta'minlanadi — bu shunchaki UI'ni
+// shu bilan mos holda ko'rsatish/xabar berish uchun.
+let IS_ADMIN = false;
+
+async function loadUserRole() {
+  IS_ADMIN = false;
+  if (!CURRENT_USER_EMAIL) return;
+  try {
+    const { data, error } = await sbClient.from("foydalanuvchi_rollari").select("role").eq("email", CURRENT_USER_EMAIL).maybeSingle();
+    if (error) { console.error(error); return; }
+    IS_ADMIN = !!(data && data.role === "admin");
+  } catch (err) {
+    console.error(err);
+  }
+}
+
 async function bootAfterAuth() {
   hideAuthGate();
   applyTheme();
   navigate("dashboard");
   try {
-    await loadAllData();
+    await Promise.all([loadAllData(), loadUserRole()]);
   } catch (err) {
     console.error(err);
     if (isAuthExpiredError(err)) forceReauth();
@@ -4844,6 +4931,7 @@ function connectBaza(bazaId) {
     } else {
       hasBooted = false;
       CURRENT_USER_EMAIL = "";
+      IS_ADMIN = false;
       const label = document.getElementById("currentUserLabel");
       if (label) label.textContent = "";
       if (REALTIME_CHANNEL) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
