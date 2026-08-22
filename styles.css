@@ -17,6 +17,10 @@
   --warn-soft:#f7efdd;
   --ok:#2f6f5e;
   --ok-soft:#e3efec;
+  --chart-1:#2a78d6;
+  --chart-2:#eb6834;
+  --chart-3:#1baf7a;
+  --chart-grid:#e1e0d9;
   --shadow:0 1px 2px rgba(20,30,40,.04), 0 4px 14px rgba(20,30,40,.05);
   --radius:12px;
   --radius-sm:8px;
@@ -44,6 +48,10 @@
   --warn-soft:#332a1a;
   --ok:#4fa088;
   --ok-soft:#1d2f2a;
+  --chart-1:#3987e5;
+  --chart-2:#d95926;
+  --chart-3:#199e70;
+  --chart-grid:#2c2c2a;
   --shadow:0 1px 2px rgba(0,0,0,.2), 0 6px 20px rgba(0,0,0,.28);
   color-scheme: dark;
 }
@@ -68,6 +76,10 @@
     --warn-soft:#332a1a;
     --ok:#4fa088;
     --ok-soft:#1d2f2a;
+    --chart-1:#3987e5;
+    --chart-2:#d95926;
+    --chart-3:#199e70;
+    --chart-grid:#2c2c2a;
     --shadow:0 1px 2px rgba(0,0,0,.2), 0 6px 20px rgba(0,0,0,.28);
     color-scheme: dark;
   }
@@ -242,6 +254,21 @@ button, input, select, textarea{font-family:inherit; font-size:inherit; color:in
 .stat-sub{font-size:12px; color:var(--text-muted); margin-top:4px;}
 .stat-sub.pos{color:var(--ok);}
 .stat-sub.neg{color:var(--danger);}
+.stat-value.pos{color:var(--ok);}
+.stat-value.neg{color:var(--danger);}
+
+/* ---------- dashboard trend chart ---------- */
+.chart-legend{display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:12px; font-size:12.5px; color:var(--text-muted);}
+.chart-legend-item{display:inline-flex; align-items:center; gap:6px;}
+.chart-legend-key{display:inline-block; width:14px; height:3px; border-radius:2px; flex-shrink:0;}
+.chart-wrap{position:relative;}
+.chart-tooltip{
+  position:absolute; background:var(--bg-elevated); border:1px solid var(--border); border-radius:8px;
+  box-shadow:var(--shadow); padding:8px 10px; font-size:12px; pointer-events:none; min-width:180px; z-index:5;
+}
+.chart-tooltip-title{font-weight:700; margin-bottom:4px;}
+.chart-tooltip-row{display:flex; align-items:center; gap:6px; margin-top:3px;}
+.chart-tooltip-label{flex:1; color:var(--text-muted);}
 
 .section{margin-bottom:26px;}
 .section-title{font-size:15px; font-weight:700; margin:0 0 12px;}

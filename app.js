@@ -478,6 +478,18 @@ function fmtSum(n) {
   return fmt(n, 0) + " so'm";
 }
 
+// Grafik o'q belgilari va qator oxiridagi qiymatlar uchun qisqartirilgan
+// format (masalan "5 mln", "500 ming") — to'liq summa tooltip/jadvalda
+// ko'rinadi.
+function fmtCompact(n) {
+  n = toNum(n);
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${fmt(n / 1e9, 1).replace(/,0$/, "")} mlrd`;
+  if (abs >= 1e6) return `${fmt(n / 1e6, 1).replace(/,0$/, "")} mln`;
+  if (abs >= 1e3) return `${fmt(n / 1e3, 0)} ming`;
+  return fmt(n, 0);
+}
+
 function escapeHtml(s) {
   return String(s === undefined || s === null ? "" : s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
@@ -625,6 +637,11 @@ function computeTotals() {
     if (!mahsulot) return sum;
     return sum + computeMahsulotConsumption(mahsulot, t.miqdor).tannarx;
   }, 0);
+  // Bosh sahifadagi "Kalkulyatsiya bo'yicha foyda" statistika kartasi uchun —
+  // faqat kalkulyatsiya bilan bog'langan chiqim_tafsil qatorlarining o'zidan
+  // (davr bo'yicha), kirim/chiqim fakturalar jamisidan emas.
+  const kalkulyatsiyaSavdo = periodChiqimTafsil.reduce((sum, t) => sum + (toNum(t.summa) || toNum(t.miqdor) * toNum(t.narx)), 0);
+  const kalkulyatsiyaFoyda = kalkulyatsiyaSavdo - kalkulyatsiyaTannarx;
 
   // ---- F2: Moliyaviy natijalar ----
   const revenue = chiqimBase;
@@ -670,7 +687,7 @@ function computeTotals() {
     chiqimBase, chiqimQQS, chiqimJami,
     bankKirim, bankChiqim, bankOpening, bankQoldiq,
     kreditorlik, debitorlik,
-    revenue, tannarx, kalkulyatsiyaTannarx, yalpiFoyda, davrXarajati, asosiyFaoliyatFoyda,
+    revenue, tannarx, kalkulyatsiyaTannarx, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, yalpiFoyda, davrXarajati, asosiyFaoliyatFoyda,
     moliyaviyXarajat, soliqqachaFoyda, foydaSoligi, sofFoyda,
     jamiDaromad, chegiriladiXarajat, soliqqaTortiladiganFoyda, imtiyozlar, soliqBazasi, foydaStavka,
     qqsInput, qqsOutput, qqsToPay,
@@ -723,8 +740,178 @@ function updateNavBadges() {
 
 /* ------------------------------- dashboard ------------------------------- */
 
+/* ------------------------- Bosh sahifa: oylik trend grafigi ------------------------- */
+// So'nggi N oy uchun savdo/tannarx/foyda — joriy "Davr" filtridan mustaqil
+// (har doim eng so'nggi oylarni ko'rsatadi, tarixiy tendensiyani solishtirish
+// uchun). Tannarx manbai computeTotals()dagi bilan bir xil (kalkulyatsiya
+// asosida), shu sabab dashboard va Foyda solig'i hisoboti mos keladi.
+const UZ_MONTH_SHORT = ["Yan", "Fev", "Mar", "Apr", "May", "Iyun", "Iyul", "Avg", "Sen", "Okt", "Noy", "Dek"];
+
+function computeMonthlyTrend(monthsCount) {
+  const now = new Date();
+  const buckets = [];
+  for (let i = monthsCount - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    buckets.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: UZ_MONTH_SHORT[d.getMonth()],
+      savdo: 0, tannarx: 0
+    });
+  }
+  const byKey = {};
+  buckets.forEach((b) => { byKey[b.key] = b; });
+
+  STORE.chiqim.forEach((r) => {
+    if (!isValidStatus(r.status) || !r.sana) return;
+    const b = byKey[r.sana.slice(0, 7)];
+    if (b) b.savdo += toNum(r.summaQQSsiz);
+  });
+  STORE.chiqimTafsil.forEach((tf) => {
+    if (!tf.sana) return;
+    const b = byKey[tf.sana.slice(0, 7)];
+    if (!b) return;
+    const mahsulot = tf.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === tf.mahsulotId) : null;
+    if (mahsulot) b.tannarx += computeMahsulotConsumption(mahsulot, tf.miqdor).tannarx;
+  });
+
+  buckets.forEach((b) => { b.foyda = b.savdo - b.tannarx; });
+  return buckets;
+}
+
+// "Chiroyli" (0/1000/2000 kabi) qadam bilan yaxlitlangan maksimal o'q qiymati —
+// gridlinelar shu qadamda chiziladi.
+function niceAxisMax(maxVal) {
+  if (maxVal <= 0) return { max: 4, step: 1 };
+  const rough = maxVal / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
+  return { max: step * 4, step };
+}
+
+const DASHBOARD_TREND_SERIES = [
+  { key: "savdo", label: "Savdo (sof tushum)", varName: "--chart-1" },
+  { key: "tannarx", label: "Tannarx (kalkulyatsiya)", varName: "--chart-2" },
+  { key: "foyda", label: "Foyda", varName: "--chart-3" }
+];
+
+function dashboardTrendChartHtml(trend) {
+  const W = 640, H = 230, padL = 54, padR = 64, padT = 16, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const maxVal = Math.max(1, ...trend.flatMap((b) => [b.savdo, b.tannarx, Math.abs(b.foyda)]));
+  const { max: axisMax, step } = niceAxisMax(maxVal);
+  const xAt = (i) => padL + (trend.length === 1 ? plotW / 2 : (plotW * i) / (trend.length - 1));
+  const yAt = (v) => padT + plotH - (Math.max(0, v) / axisMax) * plotH;
+
+  const gridLines = [];
+  for (let v = 0; v <= axisMax + 0.0001; v += step) {
+    const y = yAt(v);
+    gridLines.push(`<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="var(--chart-grid)" stroke-width="1"/>`);
+    gridLines.push(`<text x="${padL - 8}" y="${y + 4}" text-anchor="end" font-size="10.5" fill="var(--text-faint)">${fmtCompact(v)}</text>`);
+  }
+
+  const xLabels = trend.map((b, i) => `<text x="${xAt(i)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--text-faint)">${escapeHtml(b.label)}</text>`).join("");
+
+  const seriesPaths = DASHBOARD_TREND_SERIES.map((s) => {
+    const pts = trend.map((b, i) => `${xAt(i)},${yAt(b[s.key])}`).join(" ");
+    const lastX = xAt(trend.length - 1);
+    const lastY = yAt(trend[trend.length - 1][s.key]);
+    const lastVal = trend[trend.length - 1][s.key];
+    return `
+      <polyline points="${pts}" fill="none" stroke="var(${s.varName})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-series="${s.key}"/>
+      <circle cx="${lastX}" cy="${lastY}" r="6" fill="var(--bg-elevated)"/>
+      <circle cx="${lastX}" cy="${lastY}" r="4" fill="var(${s.varName})"/>
+      <text x="${lastX + 8}" y="${lastY + 4}" font-size="11" fill="var(--text)" font-weight="600">${fmtCompact(lastVal)}</text>
+    `;
+  }).join("");
+
+  const hitCols = trend.map((b, i) => `<rect data-month-idx="${i}" tabindex="0" role="button" aria-label="${escapeHtml(b.label)}" x="${xAt(i) - plotW / (trend.length * 2)}" y="${padT}" width="${plotW / trend.length}" height="${plotH}" fill="transparent"/>`).join("");
+
+  const legend = DASHBOARD_TREND_SERIES.map((s) => `
+    <span class="chart-legend-item"><span class="chart-legend-key" style="background:var(${s.varName})"></span>${escapeHtml(s.label)}</span>
+  `).join("");
+
+  const tableRows = trend.map((b) => `
+    <tr><td>${escapeHtml(b.label)}</td><td class="num">${fmtSum(b.savdo)}</td><td class="num">${fmtSum(b.tannarx)}</td><td class="num">${fmtSum(b.foyda)}</td></tr>
+  `).join("");
+
+  return `
+    <div class="chart-legend">${legend}<button class="btn btn-sm" id="btnDashChartTable" style="margin-left:auto;">Jadval ko'rinishida</button></div>
+    <div class="chart-wrap" id="dashChartWrap" style="position:relative;">
+      <svg id="dashTrendSvg" viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block;">
+        ${gridLines.join("")}
+        ${xLabels}
+        ${seriesPaths}
+        <line id="dashCrosshair" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="var(--border-strong)" stroke-width="1" style="display:none;"/>
+        ${hitCols}
+      </svg>
+      <div id="dashChartTooltip" class="chart-tooltip" style="display:none;"></div>
+    </div>
+    <div class="table-wrap" id="dashChartTableWrap" style="display:none; margin-top:10px;">
+      <table>
+        <thead><tr><th>Oy</th><th class="num">Savdo</th><th class="num">Tannarx</th><th class="num">Foyda</th></tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function bindDashboardChart(trend) {
+  const wrap = document.getElementById("dashChartWrap");
+  const svg = document.getElementById("dashTrendSvg");
+  const crosshair = document.getElementById("dashCrosshair");
+  const tooltip = document.getElementById("dashChartTooltip");
+  if (!wrap || !svg || !tooltip) return;
+
+  const showForIndex = (idx, clientX) => {
+    const b = trend[idx];
+    if (!b) return;
+    const rects = svg.querySelectorAll("[data-month-idx]");
+    const rect = rects[idx];
+    if (!rect) return;
+    const x = rect.x.baseVal.value + rect.width.baseVal.value / 2;
+    crosshair.setAttribute("x1", x);
+    crosshair.setAttribute("x2", x);
+    crosshair.style.display = "";
+    tooltip.innerHTML = `
+      <div class="chart-tooltip-title">${escapeHtml(b.label)}</div>
+      ${DASHBOARD_TREND_SERIES.map((s) => `
+        <div class="chart-tooltip-row">
+          <span class="chart-legend-key" style="background:var(${s.varName})"></span>
+          <span class="chart-tooltip-label">${escapeHtml(s.label)}</span>
+          <b>${fmtSum(b[s.key])}</b>
+        </div>
+      `).join("")}
+    `;
+    const wrapRect = wrap.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    const relX = (clientX !== undefined ? clientX : svgRect.left + (x / 640) * svgRect.width) - wrapRect.left;
+    tooltip.style.display = "";
+    tooltip.style.left = `${Math.min(Math.max(relX + 10, 0), wrapRect.width - 170)}px`;
+    tooltip.style.top = "6px";
+  };
+
+  svg.querySelectorAll("[data-month-idx]").forEach((rect) => {
+    rect.addEventListener("pointermove", (e) => showForIndex(Number(rect.dataset.monthIdx), e.clientX));
+    rect.addEventListener("pointerenter", (e) => showForIndex(Number(rect.dataset.monthIdx), e.clientX));
+    rect.addEventListener("focus", () => showForIndex(Number(rect.dataset.monthIdx)));
+  });
+  svg.addEventListener("pointerleave", () => { crosshair.style.display = "none"; tooltip.style.display = "none"; });
+
+  const tableBtn = document.getElementById("btnDashChartTable");
+  const tableWrap = document.getElementById("dashChartTableWrap");
+  if (tableBtn && tableWrap) tableBtn.addEventListener("click", () => {
+    const showingTable = tableWrap.style.display !== "none";
+    tableWrap.style.display = showingTable ? "none" : "";
+    wrap.style.display = showingTable ? "" : "none";
+    tableBtn.textContent = showingTable ? "Jadval ko'rinishida" : "Grafik ko'rinishida";
+  });
+}
+
 function renderDashboard() {
   const t = computeTotals();
+  const trend = computeMonthlyTrend(6);
+  const uncostedCount = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
   const main = document.getElementById("main");
   main.innerHTML = `
     <div class="page-header">
@@ -782,6 +969,26 @@ function renderDashboard() {
       </div>
     </div>
 
+    <div class="grid grid-2 section">
+      <div class="card stat-card">
+        <div class="stat-label">Kalkulyatsiya bo'yicha foyda</div>
+        <div class="stat-value">${fmtSum(t.kalkulyatsiyaFoyda)}</div>
+        <div class="stat-sub">Sotuv ${fmtSum(t.kalkulyatsiyaSavdo)} − tannarx ${fmtSum(t.kalkulyatsiyaTannarx)}</div>
+      </div>
+      <div class="card stat-card" ${uncostedCount ? `data-nav="ishlabchiqarish" style="cursor:pointer;"` : ""}>
+        <div class="stat-label">Kalkulyatsiya qilinmagan sotuvlar</div>
+        <div class="stat-value ${uncostedCount ? "neg" : ""}">${uncostedCount}</div>
+        <div class="stat-sub">${uncostedCount ? "Ishlab chiqarish sahifasida ko'rish uchun bosing" : "Barcha sotuvlar kalkulyatsiya bilan bog'langan"}</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 class="section-title">So'nggi 6 oy — savdo, tannarx, foyda</h2>
+      <div class="card" style="padding:18px;">
+        ${dashboardTrendChartHtml(trend)}
+      </div>
+    </div>
+
     <div class="section">
       <h2 class="section-title">Bo'limlar orasidagi bog'liqlik</h2>
       <div class="card" style="padding:22px;">
@@ -803,6 +1010,7 @@ function renderDashboard() {
   `;
   bindNavShortcuts(main);
   bindDateRangeBar(renderDashboard);
+  bindDashboardChart(trend);
 }
 
 function recentList(type) {
