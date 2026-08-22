@@ -544,21 +544,28 @@ function openModal(html) {
 
 /* ---------------------------- sana oralig'i filtri ---------------------------- */
 
-function dateRangeBarHtml(note) {
+function dateRangeBarHtml() {
   const s = STORE.settings;
   const active = s.filterFrom || s.filterTo;
   return `
-    <div class="toolbar section" style="margin-bottom:14px;">
-      <span class="faint" style="font-weight:600;">Davr:</span>
-      <input type="date" class="search-input" id="filterFrom" style="min-width:150px" value="${escapeHtml(s.filterFrom || "")}">
-      <span class="faint">—</span>
-      <input type="date" class="search-input" id="filterTo" style="min-width:150px" value="${escapeHtml(s.filterTo || "")}">
-      <button class="btn btn-sm" id="filterThisMonth">Joriy oy</button>
-      <button class="btn btn-sm" id="filterThisQuarter">Joriy chorak</button>
-      ${active ? `<button class="btn btn-sm" id="filterClear">Filtrni tozalash</button>` : ""}
-      ${note ? `<span class="faint" style="margin-left:auto;font-size:12px;">${note}</span>` : ""}
-    </div>
+    <svg class="ic" viewBox="0 0 24 24" style="color:var(--text-faint);"><use href="#i-calendar"/></svg>
+    <input type="date" class="search-input" id="filterFrom" style="min-width:128px" value="${escapeHtml(s.filterFrom || "")}">
+    <span class="faint">—</span>
+    <input type="date" class="search-input" id="filterTo" style="min-width:128px" value="${escapeHtml(s.filterTo || "")}">
+    <button class="btn btn-sm" id="filterThisMonth">Joriy oy</button>
+    <button class="btn btn-sm" id="filterThisQuarter">Joriy chorak</button>
+    ${active ? `<button class="btn btn-sm" id="filterClear">Tozalash</button>` : ""}
   `;
+}
+
+function renderTopbarPeriod() {
+  const wrap = document.getElementById("topbarPeriod");
+  if (!wrap) return;
+  wrap.innerHTML = dateRangeBarHtml();
+  bindDateRangeBar(() => {
+    renderTopbarPeriod();
+    if (PAGES[CURRENT_PAGE]) PAGES[CURRENT_PAGE].render();
+  });
 }
 
 function bindDateRangeBar(rerender) {
@@ -736,6 +743,95 @@ function updateNavBadges() {
   document.getElementById("navIshlabChiqarishCount").textContent = STORE.ishlabChiqarish.length;
   document.getElementById("navFayllarCount").textContent = STORE.fayllar.length;
   document.getElementById("brandCompany").textContent = STORE.settings.companyName.replace(/[“”"]/g, "");
+  updateTopbarNotifBadge();
+}
+
+// Bildirishnoma qo'ng'irog'i — hozircha yagona "haqiqiy" signal: kalkulyatsiya
+// bilan bog'lanmagan (demak ombordan hech narsa yechilmagan) sotuvlar soni.
+// Bosilganda "Ishlab chiqarish" sahifasiga o'tkazadi (shu ro'yxat o'sha yerda).
+function updateTopbarNotifBadge() {
+  const badge = document.getElementById("topbarNotifBadge");
+  if (!badge) return;
+  const count = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
+  if (count > 0) {
+    badge.textContent = count > 99 ? "99+" : String(count);
+    badge.style.display = "flex";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+/* ------------------------------ global qidiruv ---------------------------- */
+
+function computeGlobalSearchResults(query) {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const results = [];
+
+  STORE.kontragentlar.forEach((k) => {
+    if ((k.nomi || "").toLowerCase().includes(q) || (k.inn || "").toLowerCase().includes(q)) {
+      results.push({ type: "Kontragent", label: `${k.nomi || "—"}${k.inn ? " · " + k.inn : ""}`, page: "kontragentlar" });
+    }
+  });
+  STORE.kirim.forEach((r) => {
+    if ((r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kontragentNomi || "").toLowerCase().includes(q)) {
+      results.push({ type: "Kirim", label: `${r.hujjatRaqami || "—"} · ${r.kontragentNomi || ""}`, page: "kirim" });
+    }
+  });
+  STORE.chiqim.forEach((r) => {
+    if ((r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kontragentNomi || "").toLowerCase().includes(q)) {
+      results.push({ type: "Chiqim", label: `${r.hujjatRaqami || "—"} · ${r.kontragentNomi || ""}`, page: "chiqim" });
+    }
+  });
+  STORE.bank.forEach((r) => {
+    if ((r.tavsif || "").toLowerCase().includes(q) || (r.kontragent || "").toLowerCase().includes(q) || (r.hujjatRaqami || "").toLowerCase().includes(q)) {
+      results.push({ type: "Bank", label: `${r.kontragent || r.tavsif || "—"}`, page: "bank" });
+    }
+  });
+
+  return results.slice(0, 8);
+}
+
+function renderTopbarSearchResults(results, hasQuery) {
+  const box = document.getElementById("topbarSearchResults");
+  if (!box) return;
+  if (!hasQuery) { box.classList.remove("show"); box.innerHTML = ""; return; }
+  box.innerHTML = results.length
+    ? results.map((r, i) => `
+        <div class="tsr-item" data-idx="${i}">
+          <span class="tsr-type">${escapeHtml(r.type)}</span>
+          <span class="tsr-label">${escapeHtml(r.label)}</span>
+        </div>
+      `).join("")
+    : `<div class="tsr-empty">Mos natija topilmadi</div>`;
+  box.classList.add("show");
+  box.querySelectorAll(".tsr-item").forEach((itemEl) => {
+    itemEl.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const r = results[Number(itemEl.dataset.idx)];
+      if (!r) return;
+      navigate(r.page);
+      const input = document.getElementById("topbarSearchInput");
+      if (input) input.value = "";
+      box.classList.remove("show");
+    });
+  });
+}
+
+function bindGlobalSearch() {
+  const input = document.getElementById("topbarSearchInput");
+  const box = document.getElementById("topbarSearchResults");
+  if (!input || !box) return;
+  input.addEventListener("input", () => {
+    renderTopbarSearchResults(computeGlobalSearchResults(input.value), input.value.trim().length > 0);
+  });
+  input.addEventListener("focus", () => {
+    if (input.value.trim()) renderTopbarSearchResults(computeGlobalSearchResults(input.value), true);
+  });
+  input.addEventListener("blur", () => { setTimeout(() => box.classList.remove("show"), 150); });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { input.value = ""; box.classList.remove("show"); input.blur(); }
+  });
 }
 
 /* ------------------------------- dashboard ------------------------------- */
@@ -957,7 +1053,7 @@ function renderDashboard() {
       </div>
     </div>
 
-    ${dateRangeBarHtml("Ko'rsatkichlar tanlangan davrga mos ravishda hisoblanadi.")}
+    <div class="note" style="margin:0 0 14px;">Ko'rsatkichlar yuqoridagi "Davr" filtriga mos ravishda hisoblanadi.</div>
 
     <div class="grid grid-4 section">
       <div class="card stat-card">
@@ -1040,7 +1136,6 @@ function renderDashboard() {
     </div>
   `;
   bindNavShortcuts(main);
-  bindDateRangeBar(renderDashboard);
   bindDashboardChart(trend);
 }
 
@@ -1127,9 +1222,6 @@ function renderInvoiceTable(type) {
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
     </div>
-
-    ${dateRangeBarHtml()}
-
     <div class="grid grid-3 section">
       <div class="card stat-card"><div class="stat-label">Summa (QQSsiz)</div><div class="stat-value" id="statBase">${fmtSum(totalBase)}</div></div>
       <div class="card stat-card"><div class="stat-label">QQS summasi</div><div class="stat-value" id="statQQS">${fmtSum(totalQQS)}</div></div>
@@ -1178,7 +1270,6 @@ function renderInvoiceTable(type) {
     INVOICE_DUP_FILTER[type] = !INVOICE_DUP_FILTER[type];
     renderInvoiceTable(type);
   });
-  bindDateRangeBar(() => renderInvoiceTable(type));
 
   bindInvoiceRowEvents(type);
 }
@@ -1421,7 +1512,6 @@ function renderOmborKirim() {
     </div>
 
     ${omborTabBarHtml()}
-    ${dateRangeBarHtml()}
 
     <div class="grid grid-3 section">
       <div class="card stat-card"><div class="stat-label">Yetkazib berish narxi (QQSsiz)</div><div class="stat-value" id="statBaza">${fmtSum(totalBaza)}</div></div>
@@ -1464,7 +1554,6 @@ function renderOmborKirim() {
   document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
   document.getElementById("btnUnifyNomi").addEventListener("click", () => unifyOmborPolymerNames());
   document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
-  bindDateRangeBar(renderOmborKirim);
 
   bindOmborRowEvents();
 }
@@ -1507,7 +1596,6 @@ function renderOmborChiqim() {
     </div>
 
     ${omborTabBarHtml()}
-    ${dateRangeBarHtml()}
 
     <div class="toolbar">
       <div class="spacer"></div>
@@ -1532,7 +1620,6 @@ function renderOmborChiqim() {
   `;
 
   bindOmborTabBar(main);
-  bindDateRangeBar(renderOmborChiqim);
   document.getElementById("btnAddChiqim").addEventListener("click", () => openOmborChiqimModal());
   document.getElementById("btnImportChiqim").addEventListener("click", () => openOmborChiqimImportModal());
   const body = document.getElementById("omborChiqimBody");
@@ -3211,7 +3298,7 @@ function renderBank() {
       </div>
     </div>
 
-    ${dateRangeBarHtml('"Joriy qoldiq" har doim "Davr"ning oxirgi sanasiga nisbatan hisoblanadi.')}
+    <div class="note" style="margin:0 0 14px;">"Joriy qoldiq" har doim yuqoridagi "Davr"ning oxirgi sanasiga nisbatan hisoblanadi.</div>
 
     <div class="grid grid-4 section">
       <div class="card stat-card">
@@ -3249,7 +3336,6 @@ function renderBank() {
     saveStore();
     refreshBankSummary();
   });
-  bindDateRangeBar(renderBank);
   bindBankRowEvents();
 }
 
@@ -3381,9 +3467,6 @@ function renderIshHaqi() {
         <button class="btn btn-primary" id="btnAddRow">+ Xodim yozuvi qo'shish</button>
       </div>
     </div>
-
-    ${dateRangeBarHtml()}
-
     <div class="grid grid-4 section">
       <div class="card stat-card"><div class="stat-label">Hisoblangan ish haqi (jami)</div><div class="stat-value" id="statOylik">${fmtSum(t.oylikJami)}</div></div>
       <div class="card stat-card"><div class="stat-label">Ijtimoiy soliq</div><div class="stat-value" id="statIjtimoiy">${fmtSum(t.ijtimoiySoliqJami)}</div></div>
@@ -3429,7 +3512,6 @@ function renderIshHaqi() {
   document.getElementById("searchBox").addEventListener("input", (e) => filterIshHaqiRows(e.target.value));
   document.getElementById("btnExportIshHaqi").addEventListener("click", exportIshHaqiXlsx);
   document.getElementById("btnImportIshHaqi").addEventListener("click", openIshHaqiImportModal);
-  bindDateRangeBar(renderIshHaqi);
   bindIshHaqiRowEvents();
 }
 
@@ -3626,7 +3708,7 @@ function renderIshHaqiHisoboti() {
       </div>
     </div>
 
-    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+    <div class="note" style="margin:0 0 14px;">Hisobot yuqoridagi "Davr" filtriga mos ravishda shakllanadi.</div>
 
     <div class="grid grid-2">
       <div class="card">
@@ -3679,7 +3761,6 @@ function renderIshHaqiHisoboti() {
   `;
   document.getElementById("btnExportIshHaqiHisobot").addEventListener("click", exportIshHaqiHisobotXlsx);
   bindNavShortcuts(main);
-  bindDateRangeBar(renderIshHaqiHisoboti);
 }
 
 function exportIshHaqiHisobotXlsx() {
@@ -3753,7 +3834,7 @@ function renderF2() {
       </div>
     </div>
 
-    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+    <div class="note" style="margin:0 0 14px;">Hisobot yuqoridagi "Davr" filtriga mos ravishda shakllanadi.</div>
 
     <div class="grid grid-2">
       <div class="card">
@@ -3801,7 +3882,6 @@ function renderF2() {
     );
   });
   bindNavShortcuts(main);
-  bindDateRangeBar(renderF2);
 }
 
 function exportF2Xlsx() {
@@ -3836,7 +3916,7 @@ function renderQQS() {
       </div>
     </div>
 
-    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+    <div class="note" style="margin:0 0 14px;">Hisobot yuqoridagi "Davr" filtriga mos ravishda shakllanadi.</div>
 
     <div class="grid grid-2">
       <div class="card">
@@ -3866,7 +3946,6 @@ function renderQQS() {
       (file) => handleReportSettingsImport(file, { "Standart QQS stavkasi (%)": "qqsStavka" }, renderQQS)
     );
   });
-  bindDateRangeBar(renderQQS);
 }
 
 function exportQQSXlsx() {
@@ -3896,7 +3975,7 @@ function renderFoyda() {
       </div>
     </div>
 
-    ${dateRangeBarHtml("Hisobot tanlangan davr uchun shakllanadi.")}
+    <div class="note" style="margin:0 0 14px;">Hisobot yuqoridagi "Davr" filtriga mos ravishda shakllanadi.</div>
 
     <div class="grid grid-2">
       <div class="card">
@@ -3943,7 +4022,6 @@ function renderFoyda() {
       }, renderFoyda)
     );
   });
-  bindDateRangeBar(renderFoyda);
 }
 
 function exportFoydaXlsx() {
@@ -3980,7 +4058,7 @@ function renderF1() {
       </div>
     </div>
 
-    ${dateRangeBarHtml("Balans har doim \"Davr\"ning oxirgi sanasiga (\"gacha\") nisbatan hisoblanadi — u kunlik holatni ko'rsatadi.")}
+    <div class="note" style="margin:0 0 14px;">Balans har doim yuqoridagi "Davr"ning oxirgi sanasiga ("gacha") nisbatan hisoblanadi — u kunlik holatni ko'rsatadi.</div>
 
     <div class="grid grid-2">
       <div class="card">
@@ -4047,7 +4125,6 @@ function renderF1() {
       }, renderF1)
     );
   });
-  bindDateRangeBar(renderF1);
 }
 
 function exportF1Xlsx() {
@@ -4187,7 +4264,7 @@ function renderSverka() {
       `).join("")}
     </div>
 
-    ${dateRangeBarHtml('"Davr boshiga" — boshlang\'ich baza (Kontragentlar bo\'limida tahrirlanadi) + davr boshigacha bo\'lgan tarix asosida avtomatik hisoblanadi.')}
+    <div class="note" style="margin:0 0 14px;">"Davr boshiga" — boshlang'ich baza (Kontragentlar bo'limida tahrirlanadi) + davr boshigacha bo'lgan tarix asosida avtomatik hisoblanadi.</div>
 
     <div class="grid grid-2 section">
       <div class="card stat-card"><div class="stat-label">Jami debitorlik (bizga qarzdor)</div><div class="stat-value">${fmtSum(totalDebitor)}</div></div>
@@ -4227,7 +4304,6 @@ function renderSverka() {
     SVERKA_STATUS_FILTER = SVERKA_STATUS_FILTER === key ? null : key;
     renderSverka();
   }));
-  bindDateRangeBar(renderSverka);
 }
 
 function sverkaHolatText(r) {
@@ -4418,7 +4494,7 @@ function renderSverkaDetail() {
       </div>
     </div>
 
-    ${dateRangeBarHtml('"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.')}
+    <div class="note" style="margin:0 0 14px;">"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.</div>
 
     <div class="grid grid-3 section">
       <div class="card stat-card"><div class="stat-label">Saldo boshlang'ich</div><div class="stat-value">${fmtSum(ledger.boshlangichSaldo)}</div></div>
@@ -4455,7 +4531,6 @@ function renderSverkaDetail() {
   document.getElementById("btnBackSverka").addEventListener("click", () => navigate(SVERKA_DETAIL_RETURN_PAGE));
   document.getElementById("btnExportDetail").addEventListener("click", () => exportSverkaDetailXlsx(nomi, inn, ledger));
   document.getElementById("btnPrintDetail").addEventListener("click", () => printSverkaDetailPdf(nomi, inn, ledger));
-  bindDateRangeBar(renderSverkaDetail);
 }
 
 function exportSverkaDetailXlsx(nomi, inn, ledger) {
@@ -5677,6 +5752,9 @@ async function loadUserRole() {
 async function bootAfterAuth() {
   hideAuthGate();
   applyTheme();
+  renderTopbarPeriod();
+  bindGlobalSearch();
+  document.getElementById("topbarNotifBtn").addEventListener("click", () => navigate("ishlabchiqarish"));
   navigate("dashboard");
   try {
     await Promise.all([loadAllData(), loadUserRole()]);

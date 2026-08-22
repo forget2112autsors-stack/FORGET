@@ -212,6 +212,42 @@ svg.ic{stroke:currentColor; fill:none; stroke-width:1.7; stroke-linecap:round; s
   color:var(--text-muted);
 }
 
+.col{flex:1; min-width:0; display:flex; flex-direction:column;}
+
+.topbar{
+  position:sticky; top:0; z-index:6;
+  display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+  padding:10px 34px; background:var(--bg-elevated); border-bottom:1px solid var(--border);
+}
+.topbar-period{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+.topbar-period .ic{width:16px; height:16px;}
+.topbar-spacer{flex:1;}
+.topbar-search{position:relative; display:flex; align-items:center; max-width:320px; flex:1;}
+.topbar-search .ic{position:absolute; left:10px; width:16px; height:16px; color:var(--text-faint); pointer-events:none;}
+.topbar-search .search-input{width:100%; padding-left:32px;}
+.topbar-search-results{
+  position:absolute; top:calc(100% + 6px); left:0; right:0; z-index:10;
+  background:var(--bg-elevated); border:1px solid var(--border-strong); border-radius:var(--radius-sm);
+  box-shadow:var(--shadow); max-height:320px; overflow-y:auto; display:none;
+}
+.topbar-search-results.show{display:block;}
+.tsr-item{display:flex; align-items:center; gap:8px; padding:9px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--border);}
+.tsr-item:last-child{border-bottom:none;}
+.tsr-item:hover{background:var(--bg-sunken);}
+.tsr-item .tsr-type{font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; color:var(--text-faint); background:var(--bg-sunken); padding:2px 6px; border-radius:5px; flex-shrink:0;}
+.tsr-item .tsr-label{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.tsr-empty{padding:14px 12px; font-size:12.5px; color:var(--text-faint); text-align:center;}
+.icon-btn-tb{
+  width:36px; height:36px; border-radius:var(--radius-sm); border:1px solid var(--border-strong); background:var(--bg-elevated);
+  display:flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-muted); position:relative; flex-shrink:0;
+}
+.icon-btn-tb:hover{background:var(--bg-sunken); color:var(--text);}
+.tb-badge{
+  position:absolute; top:-5px; right:-5px; min-width:16px; height:16px; padding:0 4px; border-radius:20px;
+  background:var(--danger); color:#fff; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center;
+  font-family:var(--font-mono); line-height:1;
+}
+
 .main{
   flex:1;
   min-width:0;
@@ -500,6 +536,8 @@ tfoot td{
   .nav-group-label{display:none;}
   .sidebar-foot{margin-top:0; margin-left:auto; border-top:none; flex-direction:row;}
   .main{padding:18px;}
+  .topbar{padding:10px 16px;}
+  .topbar-search{display:none;}
 }
 
 /* ---------- auth gate ---------- */
