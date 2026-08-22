@@ -70,8 +70,8 @@ end $$;
  o'chira olmaysiz:
 
    insert into public.foydalanuvchi_rollari (email, role)
-   values ('sizning-emailingiz@masalan.uz', 'admin')
-   on conflict (email) do update set role = 'admin';
+    values ('buxgalter@bux2112.app', 'admin')
+    on conflict (email) do update set role = 'admin';
 
  Boshqa xodimlar ro'yxatga kiritilmagan bo'lsa avtomatik "xodim" (o'chira
  olmaydi) hisoblanadi — ular uchun ham xohlasangiz shu jadvalga
