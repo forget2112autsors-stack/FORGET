@@ -54,6 +54,8 @@ begin
   loop
     execute format('drop policy if exists "authenticated_full_access" on public.%I', t);
     execute format('drop policy if exists "authenticated_read_write" on public.%I', t);
+    execute format('drop policy if exists "authenticated_insert" on public.%I', t);
+    execute format('drop policy if exists "authenticated_update" on public.%I', t);
     execute format('drop policy if exists "authenticated_delete_admin" on public.%I', t);
     execute format('create policy "authenticated_read_write" on public.%I for select to authenticated using (true)', t);
     execute format('create policy "authenticated_insert" on public.%I for insert to authenticated with check (true)', t);
