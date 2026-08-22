@@ -778,6 +778,37 @@ function computeMonthlyTrend(monthsCount) {
   return buckets;
 }
 
+// KPI kartasidagi mini-trend chizig'i (so'nggi oylar) — faqat vizual signal,
+// sarlavhadagi asosiy raqam tanlangan davr filtriga bog'liq bo'lib qoladi.
+function sparklineSvg(values, colorVar) {
+  const w = 56, h = 22, pad = 2;
+  const max = Math.max(...values, 1);
+  const min = Math.min(...values, 0);
+  const range = max - min || 1;
+  const pts = values.map((v, i) => {
+    const x = pad + (w - pad * 2) * (i / (values.length - 1 || 1));
+    const y = h - pad - (h - pad * 2) * ((v - min) / range);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  return `<svg class="stat-spark" viewBox="0 0 ${w} ${h}"><polyline points="${pts}" fill="none" stroke="var(${colorVar})" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+// Oxirgi ikki oy qiymati asosida foizli o'zgarish belgisi.
+// goodWhenUp=false bo'lsa (masalan xarajat), kamayish "yaxshi" (yashil) deb ko'rsatiladi.
+function trendDeltaChip(values, goodWhenUp) {
+  if (values.length < 2) return "";
+  const prev = values[values.length - 2];
+  const curr = values[values.length - 1];
+  if (!prev) return "";
+  const pct = ((curr - prev) / Math.abs(prev)) * 100;
+  const up = pct >= 0;
+  const good = goodWhenUp === false ? !up : up;
+  const arrow = up
+    ? `<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>`
+    : `<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>`;
+  return `<span class="stat-delta ${good ? "good" : "bad"}">${arrow}${Math.abs(pct).toFixed(1)}%</span>`;
+}
+
 // "Chiroyli" (0/1000/2000 kabi) qadam bilan yaxlitlangan maksimal o'q qiymati —
 // gridlinelar shu qadamda chiziladi.
 function niceAxisMax(maxVal) {
@@ -930,19 +961,19 @@ function renderDashboard() {
 
     <div class="grid grid-4 section">
       <div class="card stat-card">
-        <div class="stat-label">Sof tushum (savdo)</div>
+        <div class="stat-top"><div class="stat-label">Sof tushum (savdo)</div>${sparklineSvg(trend.map((b) => b.savdo), "--ok")}</div>
         <div class="stat-value">${fmtSum(t.revenue)}</div>
-        <div class="stat-sub">${getFilteredRows(STORE.chiqim).length} ta chiqim faktura</div>
+        <div class="stat-sub">${trendDeltaChip(trend.map((b) => b.savdo), true)} ${getFilteredRows(STORE.chiqim).length} ta chiqim faktura</div>
       </div>
       <div class="card stat-card">
-        <div class="stat-label">Xaridlar (tannarx)</div>
+        <div class="stat-top"><div class="stat-label">Xaridlar (tannarx)</div>${sparklineSvg(trend.map((b) => b.tannarx), "--accent")}</div>
         <div class="stat-value">${fmtSum(t.tannarx)}</div>
-        <div class="stat-sub">${getFilteredRows(STORE.kirim).length} ta kirim faktura</div>
+        <div class="stat-sub">${trendDeltaChip(trend.map((b) => b.tannarx), false)} ${getFilteredRows(STORE.kirim).length} ta kirim faktura</div>
       </div>
       <div class="card stat-card">
-        <div class="stat-label">Sof foyda</div>
+        <div class="stat-top"><div class="stat-label">Sof foyda</div>${sparklineSvg(trend.map((b) => b.foyda), t.sofFoyda >= 0 ? "--ok" : "--danger")}</div>
         <div class="stat-value">${fmtSum(t.sofFoyda)}</div>
-        <div class="stat-sub ${t.sofFoyda >= 0 ? "pos" : "neg"}">${t.sofFoyda >= 0 ? "Foyda" : "Zarar"}</div>
+        <div class="stat-sub ${t.sofFoyda >= 0 ? "pos" : "neg"}">${trendDeltaChip(trend.map((b) => b.foyda), true)} ${t.sofFoyda >= 0 ? "Foyda" : "Zarar"}</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">Bank qoldig'i</div>
@@ -1108,7 +1139,7 @@ function renderInvoiceTable(type) {
     <div class="toolbar">
       <input class="search-input" id="searchBox" placeholder="Qidirish: kontragent, hujjat raqami...">
       <button class="btn ${INVOICE_DUP_FILTER[type] ? "btn-primary" : ""}" id="btnDupToggle" title="Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuvlarni ko'rsatadi">
-        &#128260; Takrorlar${dupGroupCount ? ` (${dupGroupCount})` : ""}
+        <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;vertical-align:-2px;margin-right:3px;"><use href="#i-copy"/></svg>Takrorlar${dupGroupCount ? ` (${dupGroupCount})` : ""}
       </button>
       <div class="spacer"></div>
       <span class="faint">${rows.length} ta yozuv${INVOICE_DUP_FILTER[type] ? " (faqat takrorlar)" : ""}</span>
@@ -1136,7 +1167,7 @@ function renderInvoiceTable(type) {
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128196;</div><div class="t">${INVOICE_DUP_FILTER[type] ? "Takrorlangan hujjat topilmadi" : "Hujjatlar yo'q"}</div><div class="d">${INVOICE_DUP_FILTER[type] ? "Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuv yo'q." : `"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.`}</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg><div class="t">${INVOICE_DUP_FILTER[type] ? "Takrorlangan hujjat topilmadi" : "Hujjatlar yo'q"}</div><div class="d">${INVOICE_DUP_FILTER[type] ? "Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuv yo'q." : `"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.`}</div></div>` : ""}
     ${kontragentlarDatalistHtml()}
   `;
 
@@ -1169,8 +1200,8 @@ function invoiceRowHtml(type, r, isDup) {
       <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
       <td class="row-actions">
-        ${type === "chiqim" ? `<button class="icon-btn" data-kalk="${r.id}" title="Kalkulyatsiya — sotilgan mahsulotlar va ombordan sarf">&#128290;</button>` : ""}
-        <button class="icon-btn" data-del="${r.id}" title="O'chirish">&#10005;</button>
+        ${type === "chiqim" ? `<button class="icon-btn" data-kalk="${r.id}" title="Kalkulyatsiya — sotilgan mahsulotlar va ombordan sarf"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>` : ""}
+        <button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
   `;
@@ -1425,7 +1456,7 @@ function renderOmborKirim() {
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128230;</div><div class="t">Ombor bo'sh</div><div class="d">"Excel'dan import" tugmasi orqali didox.uz "faktura kirim" eksport faylini yuklang yoki qo'lda qo'shing.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-package"/></svg><div class="t">Ombor bo'sh</div><div class="d">"Excel'dan import" tugmasi orqali didox.uz "faktura kirim" eksport faylini yuklang yoki qo'lda qo'shing.</div></div>` : ""}
   `;
 
   bindOmborTabBar(main);
@@ -1452,7 +1483,7 @@ function omborChiqimRowHtml(r) {
       <td class="num">${fmtSum(r.qqsSumma)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(r.kontragentNomi || "")}">${escapeHtml(r.kontragentNomi || "")}</td>
-      <td class="row-actions"><button class="icon-btn" data-del-chiqim="${r.id}" data-ic="${icId}" title="O'chirish">&#10005;</button></td>
+      <td class="row-actions"><button class="icon-btn" data-del-chiqim="${r.id}" data-ic="${icId}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
 }
@@ -1497,7 +1528,7 @@ function renderOmborChiqim() {
         <tbody id="omborChiqimBody">${rows.length ? rows.map(omborChiqimRowHtml).join("") : ""}</tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128230;</div><div class="t">Chiqim yo'q</div><div class="d">"+ Chiqim qo'shish" tugmasi yoki "Excel'dan import" orqali xomashyo yoki mahsulot chiqimini qayd eting.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-package"/></svg><div class="t">Chiqim yo'q</div><div class="d">"+ Chiqim qo'shish" tugmasi yoki "Excel'dan import" orqali xomashyo yoki mahsulot chiqimini qayd eting.</div></div>` : ""}
   `;
 
   bindOmborTabBar(main);
@@ -1644,7 +1675,7 @@ function omborRowHtml(r) {
       <td class="num"><input class="cell-input num" data-f="yetkazibBerishNarxi" value="${fmt(r.yetkazibBerishNarxi)}"></td>
       <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
-      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish">&#10005;</button></td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
 }
@@ -1930,7 +1961,7 @@ function icRowHtml(r) {
       <td>${escapeHtml(r.birlik || "")}</td>
       <td class="num">${fmtSum(r.tannarx)}</td>
       <td>${escapeHtml(r.izoh || "")}</td>
-      <td class="row-actions"><button class="icon-btn" data-del-ic="${r.id}" title="O'chirish">&#10005;</button></td>
+      <td class="row-actions"><button class="icon-btn" data-del-ic="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
 }
@@ -1953,7 +1984,7 @@ function renderIshlabChiqarish() {
 
     ${uncostedRows.length ? `
     <div class="section">
-      <h2 class="section-title" style="color:var(--warn,#b8860b);">&#9888; Kalkulyatsiya qilinmagan sotuvlar (${uncostedRows.length})</h2>
+      <h2 class="section-title" style="color:var(--warn,#b8860b);"><svg class="ic" viewBox="0 0 24 24" style="width:17px;height:17px;vertical-align:-3px;margin-right:4px;"><use href="#i-warn"/></svg>Kalkulyatsiya qilinmagan sotuvlar (${uncostedRows.length})</h2>
       <p class="page-desc">Chiqim fakturadan import qilingan bu mahsulotlar nomi yoki narxi bo'yicha hech qanday kalkulyatsiyaga mos kelmadi — ombordan hech narsa ayrilmagan. Mos mahsulot/kalkulyatsiya qo'shgach, "Yangilash" tugmasini bosing.</p>
       <div class="table-wrap">
         <table>
@@ -1967,8 +1998,8 @@ function renderIshlabChiqarish() {
                 <td class="num">${fmt(t.miqdor, 3)} ${escapeHtml(t.birlik || "")}</td>
                 <td class="num">${fmtSum(t.narx)}</td>
                 <td class="row-actions">
-                  <button class="icon-btn" data-rematch="${t.id}" title="Qayta moslashtirishga urinish">&#8635;</button>
-                  <button class="icon-btn" data-open-kalk="${t.chiqimId}" title="Kalkulyatsiyaga o'tish">&#128290;</button>
+                  <button class="icon-btn" data-rematch="${t.id}" title="Qayta moslashtirishga urinish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg></button>
+                  <button class="icon-btn" data-open-kalk="${t.chiqimId}" title="Kalkulyatsiyaga o'tish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>
                 </td>
               </tr>
             `).join("")}
@@ -1980,7 +2011,7 @@ function renderIshlabChiqarish() {
 
     <div class="section">
       <h2 class="section-title">Mahsulotlar</h2>
-      ${STORE.mahsulotlar.length ? `<div class="grid grid-3">${STORE.mahsulotlar.map((m) => mahsulotCardHtml(m)).join("")}</div>` : `<div class="empty-state"><div class="ic">&#127981;</div><div class="t">Mahsulot yo'q</div><div class="d">"+ Mahsulot va kalkulyatsiya" tugmasi orqali birinchi mahsulotingizni qo'shing.</div></div>`}
+      ${STORE.mahsulotlar.length ? `<div class="grid grid-3">${STORE.mahsulotlar.map((m) => mahsulotCardHtml(m)).join("")}</div>` : `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-factory"/></svg><div class="t">Mahsulot yo'q</div><div class="d">"+ Mahsulot va kalkulyatsiya" tugmasi orqali birinchi mahsulotingizni qo'shing.</div></div>`}
     </div>
 
     <div class="section">
@@ -1994,7 +2025,7 @@ function renderIshlabChiqarish() {
           <tbody id="icBody">${icRows.length ? icRows.map((r) => icRowHtml(r)).join("") : ""}</tbody>
         </table>
       </div>
-      ${!icRows.length ? `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Hozircha yozuv yo'q</div><div class="d">"+ Yozuv qo'shish" orqali sotilgan/ishlab chiqarilgan mahsulotni qayd eting.</div></div>` : ""}
+      ${!icRows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">Hozircha yozuv yo'q</div><div class="d">"+ Yozuv qo'shish" orqali sotilgan/ishlab chiqarilgan mahsulotni qayd eting.</div></div>` : ""}
     </div>
   `;
 
@@ -2076,7 +2107,7 @@ function tarkibRowHtml(item) {
       <input class="search-input tarkib-nomi" list="omborNomiList" placeholder="Xomashyo nomi (Ombordagi nomi bilan bir xil bo'lishi kerak)" value="${escapeHtml(item.nomi || "")}" style="flex:2">
       <input class="search-input tarkib-birlik" placeholder="Birlik" value="${escapeHtml(item.birlik || "")}" style="width:90px">
       <input class="search-input tarkib-norma" placeholder="Norma" value="${item.norma ? fmt(item.norma, 4) : ""}" style="width:110px">
-      <button type="button" class="icon-btn tarkib-del" title="O'chirish">&#10005;</button>
+      <button type="button" class="icon-btn tarkib-del" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
     </div>
   `;
 }
@@ -2210,7 +2241,7 @@ function renderKontragentlar() {
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128101;</div><div class="t">Kontragentlar yo'q</div><div class="d">"+ Yangi kontragent" tugmasi orqali birinchi yozuvni qo'shing.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg><div class="t">Kontragentlar yo'q</div><div class="d">"+ Yangi kontragent" tugmasi orqali birinchi yozuvni qo'shing.</div></div>` : ""}
   `;
 
   document.getElementById("btnAddKontragent").addEventListener("click", () => openKontragentModal());
@@ -2240,8 +2271,8 @@ function kontragentRowHtml(k) {
         ${(k.inn || "").trim()
           ? `<button class="btn btn-sm" data-detail-inn="${escapeHtml(k.inn)}">Tarix</button>`
           : `<button class="btn btn-sm" disabled title="Tarixni ko'rish uchun avval INN kiriting">Tarix</button>`}
-        <button class="icon-btn" data-edit="${k.id}" title="Tahrirlash">&#9998;</button>
-        <button class="icon-btn" data-del="${k.id}" title="O'chirish">&#10005;</button>
+        <button class="icon-btn" data-edit="${k.id}" title="Tahrirlash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg></button>
+        <button class="icon-btn" data-del="${k.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
   `;
@@ -2384,7 +2415,7 @@ function renderAsosiyVositalar() {
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128230;</div><div class="t">Asosiy vositalar yo'q</div><div class="d">"+ Yangi vosita" tugmasi orqali birinchi yozuvni qo'shing.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-package"/></svg><div class="t">Asosiy vositalar yo'q</div><div class="d">"+ Yangi vosita" tugmasi orqali birinchi yozuvni qo'shing.</div></div>` : ""}
   `;
 
   document.getElementById("btnAddAV").addEventListener("click", () => openAsosiyVositaModal());
@@ -2408,8 +2439,8 @@ function asosiyVositaRowHtml(a, asOf) {
       <td class="num" style="font-weight:700">${fmtSum(asosiyVositaQoldiqQiymati(a, asOf))}</td>
       <td>${escapeHtml(a.holati || "Ishlatilmoqda")}</td>
       <td class="row-actions">
-        <button class="icon-btn" data-edit="${a.id}" title="Tahrirlash">&#9998;</button>
-        <button class="icon-btn" data-del="${a.id}" title="O'chirish">&#10005;</button>
+        <button class="icon-btn" data-edit="${a.id}" title="Tahrirlash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg></button>
+        <button class="icon-btn" data-del="${a.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
   `;
@@ -2649,8 +2680,10 @@ async function rematchChiqimTafsil(tafsilId) {
 }
 
 const CHIQIM_TAFSIL_MOS_LABEL = {
-  nomi: "&#9989; Nomi bo'yicha", narx: "&#128993; Narxi bo'yicha",
-  qolda: "&#9998; Qo'lda tanlangan", none: "&#9898; Mos kelmadi"
+  nomi: '<span class="pill pill-ok">Nomi bo\'yicha</span>',
+  narx: '<span class="pill pill-warn">Narxi bo\'yicha</span>',
+  qolda: '<span class="pill pill-muted">Qo\'lda tanlangan</span>',
+  none: '<span class="pill pill-danger">Mos kelmadi</span>'
 };
 
 // Bitta chiqim fakturaning kalkulyatsiya bo'yicha aniqlangan sotuv summasi,
@@ -3203,7 +3236,7 @@ function renderBank() {
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#8862;</div><div class="t">Bank operatsiyalari yo'q</div><div class="d">"Fayldan import" tugmasi orqali bank ko'chirmasini (masalan, Bank.xlsx) yuklang yoki qo'lda kiriting.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-bank"/></svg><div class="t">Bank operatsiyalari yo'q</div><div class="d">"Fayldan import" tugmasi orqali bank ko'chirmasini (masalan, Bank.xlsx) yuklang yoki qo'lda kiriting.</div></div>` : ""}
     <div class="note">Bank.xlsx (ABS/Klient-Bank ko'chirmasi) formati avtomatik tanib olinadi — sana, kontragent/INN, hujjat №, "Оборот Дебет" (chiqim) va "Оборот Кредит" (kirim) ustunlari, shuningdek davr boshidagi qoldiq faylning o'zidan olinadi. Boshqa formatdagi fayl uchun ustunlar tartibi: <b>sana, hujjat №, kontragent, tavsif, kirim, chiqim</b> bo'lishi kerak.</div>
     ${kontragentlarDatalistHtml()}
   `;
@@ -3230,7 +3263,7 @@ function bankRowHtml(r) {
       <td><input class="cell-input" data-f="tavsif" value="${escapeHtml(r.tavsif || "")}" style="min-width:220px" title="${escapeHtml(r.tavsif || "")}"></td>
       <td class="num"><input class="cell-input num" data-f="kirim" value="${fmt(r.kirim)}"></td>
       <td class="num"><input class="cell-input num" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
-      <td class="row-actions"><button class="icon-btn" data-del="${r.id}">&#10005;</button></td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
 }
@@ -3388,7 +3421,7 @@ function renderIshHaqi() {
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128101;</div><div class="t">Xodimlar yo'q</div><div class="d">"+ Xodim yozuvi qo'shish" tugmasi orqali har oy uchun har bir xodimning hisoblangan ish haqini kiriting.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg><div class="t">Xodimlar yo'q</div><div class="d">"+ Xodim yozuvi qo'shish" tugmasi orqali har oy uchun har bir xodimning hisoblangan ish haqini kiriting.</div></div>` : ""}
     <div class="note">Ijtimoiy soliq (${fmt(STORE.settings.ijtimoiySoliqStavka)}%) — ish beruvchi xarajati, ish haqidan ushlanmaydi. NDFL (${fmt(STORE.settings.ndflStavka)}%) va INPS (${fmt(STORE.settings.inpsStavka, 1)}%) — xodim ish haqidan ushlab qolinadi. Stavkalarni "Sozlamalar" bo'limida o'zgartirish mumkin.</div>
   `;
 
@@ -3507,7 +3540,7 @@ function ishHaqiRowHtml(r) {
       <td class="num ihq-ndfl">${fmt(c.ndfl)}</td>
       <td class="num ihq-inps">${fmt(c.inps)}</td>
       <td class="num ihq-sof" style="font-weight:700">${fmtSum(c.sofIshHaqi)}</td>
-      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish">&#10005;</button></td>
+      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
 }
@@ -3641,7 +3674,7 @@ function renderIshHaqiHisoboti() {
           </tbody>
         </table>
       </div>
-      ${!rows.length ? `<div class="empty-state"><div class="ic">&#128101;</div><div class="t">Ma'lumot yo'q</div><div class="d">"Ish haqi" bo'limida xodim yozuvlarini kiriting.</div></div>` : ""}
+      ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg><div class="t">Ma'lumot yo'q</div><div class="d">"Ish haqi" bo'limida xodim yozuvlarini kiriting.</div></div>` : ""}
     </div>
   `;
   document.getElementById("btnExportIshHaqiHisobot").addEventListener("click", exportIshHaqiHisobotXlsx);
@@ -4180,8 +4213,8 @@ function renderSverka() {
       </table>
     </div>
     ${!filteredRows.length ? (rows.length
-      ? `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Bu holatga mos kontragent yo'q</div><div class="d">Filterni bekor qilish uchun tanlangan tugmani qayta bosing.</div></div>`
-      : `<div class="empty-state"><div class="ic">&#128203;</div><div class="t">Ma'lumot yo'q</div><div class="d">Faktura yoki bank yozuvlarida INN kiritilgan kontragentlar shu yerda ko'rinadi.</div></div>`) : ""}
+      ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">Bu holatga mos kontragent yo'q</div><div class="d">Filterni bekor qilish uchun tanlangan tugmani qayta bosing.</div></div>`
+      : `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">Ma'lumot yo'q</div><div class="d">Faktura yoki bank yozuvlarida INN kiritilgan kontragentlar shu yerda ko'rinadi.</div></div>`) : ""}
     <div class="note">
       <b>Hisoblash mantig'i:</b> "Davr boshiga" — Kontragentlar bo'limida kiritilgan boshlang'ich baza + tanlangan davr boshigacha bo'lgan barcha tarix asosida avtomatik hisoblanadi (baza qiymatini o'zgartirish uchun "Kontragentlar" bo'limidagi shu kontragent yozuviga o'ting). "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
     </div>
@@ -4620,15 +4653,15 @@ function renderFayllar() {
               <td class="num">${fmtBytes(f.hajmi)}</td>
               <td class="num">
                 <span class="linked-count">${fayllarLinkedCount(f)}</span>
-                <button class="icon-btn icon-btn-sync" data-sync-fayl="${f.id}" title="Bog'langan yozuvlarni yangilash (bazadan qayta integratsiya qilish)">&#8635;</button>
+                <button class="icon-btn icon-btn-sync" data-sync-fayl="${f.id}" title="Bog'langan yozuvlarni yangilash (bazadan qayta integratsiya qilish)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg></button>
               </td>
-              <td class="row-actions"><button class="icon-btn" data-del-fayl="${f.id}" title="O'chirish (bog'liq yozuvlar bilan)">&#10005;</button></td>
+              <td class="row-actions"><button class="icon-btn" data-del-fayl="${f.id}" title="O'chirish (bog'liq yozuvlar bilan)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
             </tr>
           `).join("") : ""}
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><div class="ic">&#128193;</div><div class="t">Hozircha fayl yuklanmagan</div><div class="d">Faktura kirim/chiqim yoki Bank bo'limida "Excel'dan import" qilinganda shu yerda ko'rinadi.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-folder"/></svg><div class="t">Hozircha fayl yuklanmagan</div><div class="d">Faktura kirim/chiqim yoki Bank bo'limida "Excel'dan import" qilinganda shu yerda ko'rinadi.</div></div>` : ""}
   `;
 
   const body = document.getElementById("fayllarBody");
@@ -4823,7 +4856,7 @@ function auditRowHtml(row, idx) {
       <td>${escapeHtml(jadval)}</td>
       <td>${escapeHtml(amal)}</td>
       <td style="max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(qisqa)}">${escapeHtml(qisqa)}</td>
-      <td class="row-actions"><button class="icon-btn" data-detail="${idx}" title="Batafsil">&#128269;</button></td>
+      <td class="row-actions"><button class="icon-btn" data-detail="${idx}" title="Batafsil"><svg class="ic" viewBox="0 0 24 24"><use href="#i-search"/></svg></button></td>
     </tr>
   `;
 }
@@ -5492,11 +5525,11 @@ function applyTheme() {
   if (THEME === "dark") {
     document.documentElement.setAttribute("data-theme", "dark");
     document.getElementById("themeLabel").textContent = "Tungi rejim";
-    document.getElementById("themeIcon").innerHTML = "&#9789;";
+    document.getElementById("themeIcon").innerHTML = '<svg class="ic" viewBox="0 0 24 24"><use href="#i-moon"/></svg>';
   } else {
     document.documentElement.setAttribute("data-theme", "light");
     document.getElementById("themeLabel").textContent = "Yorug' rejim";
-    document.getElementById("themeIcon").innerHTML = "&#9728;";
+    document.getElementById("themeIcon").innerHTML = '<svg class="ic" viewBox="0 0 24 24"><use href="#i-sun"/></svg>';
   }
 }
 
@@ -5756,5 +5789,16 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => navigate(item.dataset.page));
 });
+
+const SIDEBAR_COLLAPSE_KEY = "bux2112_sidebar_collapsed";
+const sidebarEl = document.querySelector(".sidebar");
+const collapseBtn = document.getElementById("collapseBtn");
+if (sidebarEl && collapseBtn) {
+  if (localStorage.getItem(SIDEBAR_COLLAPSE_KEY) === "1") sidebarEl.classList.add("collapsed");
+  collapseBtn.addEventListener("click", () => {
+    sidebarEl.classList.toggle("collapsed");
+    localStorage.setItem(SIDEBAR_COLLAPSE_KEY, sidebarEl.classList.contains("collapsed") ? "1" : "0");
+  });
+}
 
 applyTheme();
