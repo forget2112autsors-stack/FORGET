@@ -613,9 +613,22 @@ function computeTotals() {
   const kreditorlik = asOfKirim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi ? a + toNum(r.jamiSumma) : a), 0);
   const debitorlik = asOfChiqim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi ? a + toNum(r.jamiSumma) : a), 0);
 
+  // Kalkulyatsiya (chiqim_tafsil) asosida davr uchun sotilgan mahsulotlarning
+  // xomashyo tannarxi — F2/Foyda solig'ida "Sotilgan mahsulot tannarxi"
+  // (020-qator) manbai sifatida ishlatiladi (avvalgi "kirim fakturalar
+  // summasi" taxminidan aniqroq, chunki faqat HAQIQATDA sotilgan mahsulotning
+  // o'zi uchun ketgan xomashyo hisoblanadi). Kalkulyatsiya bilan bog'lanmagan
+  // (mahsulotId=null) qatorlar hisobga olinmaydi.
+  const periodChiqimTafsil = getFilteredRows(STORE.chiqimTafsil);
+  const kalkulyatsiyaTannarx = periodChiqimTafsil.reduce((sum, t) => {
+    const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
+    if (!mahsulot) return sum;
+    return sum + computeMahsulotConsumption(mahsulot, t.miqdor).tannarx;
+  }, 0);
+
   // ---- F2: Moliyaviy natijalar ----
   const revenue = chiqimBase;
-  const tannarx = s.tannarxManual !== null && s.tannarxManual !== undefined && s.tannarxManual !== "" ? toNum(s.tannarxManual) : kirimBase;
+  const tannarx = s.tannarxManual !== null && s.tannarxManual !== undefined && s.tannarxManual !== "" ? toNum(s.tannarxManual) : kalkulyatsiyaTannarx;
   const yalpiFoyda = revenue - tannarx;
   const davrXarajati = toNum(s.davrXarajati);
   const asosiyFaoliyatFoyda = yalpiFoyda - davrXarajati;
@@ -657,7 +670,7 @@ function computeTotals() {
     chiqimBase, chiqimQQS, chiqimJami,
     bankKirim, bankChiqim, bankOpening, bankQoldiq,
     kreditorlik, debitorlik,
-    revenue, tannarx, yalpiFoyda, davrXarajati, asosiyFaoliyatFoyda,
+    revenue, tannarx, kalkulyatsiyaTannarx, yalpiFoyda, davrXarajati, asosiyFaoliyatFoyda,
     moliyaviyXarajat, soliqqachaFoyda, foydaSoligi, sofFoyda,
     jamiDaromad, chegiriladiXarajat, soliqqaTortiladiganFoyda, imtiyozlar, soliqBazasi, foydaStavka,
     qqsInput, qqsOutput, qqsToPay,
@@ -2418,6 +2431,26 @@ const CHIQIM_TAFSIL_MOS_LABEL = {
   qolda: "&#9998; Qo'lda tanlangan", none: "&#9898; Mos kelmadi"
 };
 
+// Bitta chiqim fakturaning kalkulyatsiya bo'yicha aniqlangan sotuv summasi,
+// xomashyo tannarxi, foydasi va undan hisoblangan taxminiy foyda solig'i
+// ulushi (STORE.settings.foydaStavka bo'yicha). Faqat kalkulyatsiya bilan
+// bog'langan (mahsulotId mavjud) qatorlar tannarxga qo'shiladi — bog'lanmagan
+// qatorlarning sotuv summasi baribir hisoblanadi, lekin tannarxi noma'lum
+// bo'lgani uchun ularning "foydasi" haqiqatdan kattaroq ko'rinishi mumkin.
+function computeChiqimKalkulyatsiyaFoyda(chiqimId) {
+  const rows = STORE.chiqimTafsil.filter((t) => t.chiqimId === chiqimId);
+  let savdo = 0, tannarx = 0;
+  rows.forEach((t) => {
+    savdo += toNum(t.summa) || toNum(t.miqdor) * toNum(t.narx);
+    const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
+    if (mahsulot) tannarx += computeMahsulotConsumption(mahsulot, t.miqdor).tannarx;
+  });
+  const foyda = savdo - tannarx;
+  const foydaStavka = toNum(STORE.settings.foydaStavka);
+  const soligi = Math.max(foyda, 0) * (foydaStavka / 100);
+  return { savdo, tannarx, foyda, foydaStavka, soligi };
+}
+
 // Bitta chiqim fakturaning sotilgan mahsulot qatorlarini va ularning
 // kalkulyatsiya bilan bog'lanishini ko'rsatadigan/tahrirlaydigan oyna
 // ("blanka"). "Kalkulyatsiya" ustunidagi <select> o'zgartirilganda darhol
@@ -2449,10 +2482,21 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
     </div>
   ` : `<p class="modal-sub">Bu faktura uchun mahsulot qatorlari topilmadi — fayl import qilinganda mahsulot ustunlari aniqlanmagan bo'lishi mumkin (masalan faylda faqat hujjat jami summasi bo'lgan, mahsulot nomi/miqdori bo'lmagan).</p>`;
 
+  const foydaInfo = computeChiqimKalkulyatsiyaFoyda(chiqimId);
+  const foydaHtml = rows.length ? `
+    <div class="note" style="margin-top:12px;">
+      <div class="report-line"><span class="label">Sotuv summasi</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.savdo)}</span></div>
+      <div class="report-line"><span class="label">Xomashyo tannarxi</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.tannarx)}</span></div>
+      <div class="report-line"><span class="label"><b>Foyda</b></span><span class="code"></span><span class="val"><b>${fmtSum(foydaInfo.foyda)}</b></span></div>
+      <div class="report-line"><span class="label">Taxminiy foyda solig'i (${fmt(foydaInfo.foydaStavka)}%)</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.soligi)}</span></div>
+    </div>
+  ` : "";
+
   openModal(`
     <h3>Kalkulyatsiya — faktura ${escapeHtml(chiqimRow.hujjatRaqami || "")}</h3>
     <p class="modal-sub">${escapeHtml(chiqimRow.sana || "")} &middot; ${escapeHtml(chiqimRow.kontragentNomi || "")}. Kalkulyatsiya ustunini o'zgartirsangiz, eski ombor sarfi bekor qilinib, yangisiga qarab qayta hisoblanadi.</p>
     ${bodyHtml}
+    ${foydaHtml}
     <div class="modal-actions">
       <button class="btn" id="mCancel">Yopish</button>
       ${rows.length ? `<button class="btn btn-primary" id="mPrint">Chop etish</button>` : ""}
@@ -2531,6 +2575,12 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
     `;
   }).join("");
 
+  // 3-bo'lim: shu ikki jamidan hisoblangan foyda va undan taxminiy foyda
+  // solig'i ulushi (STORE.settings.foydaStavka bo'yicha) — computeTotals()
+  // orqali Foyda solig'i hisobotidagi umumiy soliq bilan bir xil stavka.
+  const foydaInfo = { foyda: productsTotal - materialsTotal, foydaStavka: toNum(s.foydaStavka) };
+  foydaInfo.soligi = Math.max(foydaInfo.foyda, 0) * (foydaInfo.foydaStavka / 100);
+
   const html = `
     <!doctype html>
     <html lang="uz">
@@ -2581,6 +2631,16 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
         <tbody>${materialRows || `<tr><td colspan="5" style="text-align:center;">Kalkulyatsiya qilingan xomashyo topilmadi</td></tr>`}</tbody>
       </table>
       <div class="jami">JAMI: xomashyo tannarxi — ${fmtSum(materialsTotal)}</div>
+
+      <div class="section-title">3. Natija</div>
+      <table>
+        <tbody>
+          <tr><td>Sotilgan mahsulotlar summasi</td><td class="num">${fmtSum(productsTotal)}</td></tr>
+          <tr><td>Xomashyo tannarxi</td><td class="num">${fmtSum(materialsTotal)}</td></tr>
+          <tr><td><b>Foyda</b></td><td class="num"><b>${fmtSum(foydaInfo.foyda)}</b></td></tr>
+          <tr><td>Foyda solig'i (${fmt(foydaInfo.foydaStavka)}%)</td><td class="num">${fmtSum(foydaInfo.soligi)}</td></tr>
+        </tbody>
+      </table>
 
       <div class="sign">
         <div>Tuzdi (buxgalter)<div class="line"></div></div>
@@ -3462,11 +3522,11 @@ function renderF2() {
       <div class="card">
         <div class="card-title">Manba ma'lumotlari</div>
         <div class="report-line"><span class="label">Chiqim fakturalar (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(t.chiqimBase)}</span></div>
-        <div class="report-line"><span class="label">Kirim fakturalar (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(t.kirimBase)}</span></div>
+        <div class="report-line"><span class="label">Kalkulyatsiya bo'yicha xomashyo tannarxi</span><span class="code"></span><span class="val">${fmtSum(t.kalkulyatsiyaTannarx)}</span></div>
         <div class="note" style="margin-top:14px;">
           <b>Hisoblash mantig'i:</b><br>
           Sof tushum = tasdiqlangan <b>chiqim fakturalar</b> summasi (QQSsiz).<br>
-          Tannarx = tasdiqlangan <b>kirim fakturalar</b> summasi (QQSsiz) — taxminiy, "Sozlamalar"da qo'lda tuzatish mumkin.<br>
+          Tannarx = shu davrda sotilgan mahsulotlarning <b>Kalkulyatsiya</b> (Faktura chiqim'dagi 🧮 tugmasi) orqali aniqlangan xomashyo tannarxi yig'indisi — "Sozlamalar"da qo'lda tuzatish (ustidan yozish) mumkin.<br>
           Davr va moliyaviy xarajatlar — "Sozlamalar" bo'limida qo'lda kiritiladi.<br>
           Foyda solig'i shu yerda va "Foyda solig'i" hisobotida bitta manbadan (bir xil) hisoblanadi.
         </div>
