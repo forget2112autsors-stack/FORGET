@@ -1,0 +1,9 @@
+{
+  "name": "forget-migration-tools",
+  "private": true,
+  "type": "module",
+  "description": "Bir martalik migratsiya skripti uchun (asosiy ilova hech qanday npm paketiga bog'liq emas, shu sabab bu alohida, faqat 'supabase/' papkasiga tegishli).",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  }
+}

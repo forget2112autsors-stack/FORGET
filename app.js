@@ -12,11 +12,21 @@ const FILTERS_KEY = "bux2112_filters";
 
 const STATUS_INVALID = ["Отказ", "Bekor qilingan", "Отменён", "Отменен", "Rad etilgan", "Не настоящий"];
 
-// Har bir "baza" (BAZALAR ro'yxati, index.html'da) mustaqil Supabase loyihasi.
-// Foydalanuvchi auth ekranida qaysi bazani tanlasa, shu loyihaga ulanadigan
-// client shu yerga o'rnatiladi — shu sabab "const" emas, "let".
+// Bitta umumiy Supabase loyihasiga ulanadigan client (index.html'dagi
+// SUPABASE_URL/SUPABASE_ANON_KEY orqali) — initSupabaseClient() ishga
+// tushiradi, script yuklanganda bir marta.
 let sbClient = null;
-let ACTIVE_BAZA_ID = null;
+
+// Foydalanuvchi login qilgandan keyin ruxsat berilgan firmalar orasida
+// (chiqmasdan) almashtiradigan "joriy firma" holati. Bitta bazada bir nechta
+// firmaning ma'lumotlari firma_id ustuni orqali ajratiladi — RLS foydalanuvchi
+// a'zo bo'lgan HAR QANDAY firmaga ruxsat beradi, shu sabab "joriy firma"
+// tushunchasi faqat mijoz (client) tomonida bo'ladi va har bir o'qish/yozishda
+// aniq firma_id filtri sifatida qo'llanadi — qarang: switchFirma, toDbRow,
+// fetchAllRows.
+let ACTIVE_FIRMA_ID = null;
+const ACTIVE_FIRMA_KEY = "bux2112_active_firma";
+let AVAILABLE_FIRMALAR = []; // [{id, nomi}] — joriy foydalanuvchi kira oladigan firmalar
 
 /* ---------------------------- DB <-> JS maydon moslashtirish ---------------------------- */
 
@@ -133,6 +143,11 @@ function toDbRow(map, obj) {
     if (obj[k] === undefined) return;
     out[map[k]] = typeof obj[k] === "string" ? stripLoneSurrogates(obj[k]) : obj[k];
   });
+  // Yagona joy — har bir insert/update shu orqali o'tadi, shu sabab har bir
+  // qatorga joriy firma avtomat biriktiriladi (alohida-alohida call site'larda
+  // qo'lda qo'shish shart emas). settings jadvali bundan mustasno — u
+  // saveSettingsToDb() orqali, alohida (SETTINGS_DB_MAP bilan) yoziladi.
+  if (ACTIVE_FIRMA_ID) out.firma_id = ACTIVE_FIRMA_ID;
   return out;
 }
 
@@ -161,7 +176,7 @@ async function saveSettingsToDb(partial) {
   // urinamiz — qolgan maydonlar baribir saqlanadi.
   let attempt = dbPartial;
   for (let i = 0; i < 5; i++) {
-    const { error } = await sbClient.from("settings").update(attempt).eq("id", 1);
+    const { error } = await sbClient.from("settings").update(attempt).eq("firma_id", ACTIVE_FIRMA_ID);
     if (!error) return;
     const missingCol = isMissingColumnError(error) && extractMissingColumnName(error);
     if (missingCol && attempt[missingCol] !== undefined) {
@@ -181,7 +196,12 @@ async function saveSettingsToDb(partial) {
 function pushFieldsUpdate(type, id, partial) {
   const dbPartial = toDbRow(TABLE_MAPS[type], partial);
   if (!Object.keys(dbPartial).length) return;
-  sbClient.from(TABLE_NAMES[type]).update(dbPartial).eq("id", id).then(({ error }) => {
+  // toDbRow() har bir qatorga ACTIVE_FIRMA_ID'ni avtomat stamplaydi — shu
+  // sabab yozuv aniq JORIY firmaga tegishli bo'lgandagina yangilanishi
+  // uchun ".eq(\"firma_id\", ...)" ham qo'shiladi (aks holda, nazariy jihatdan,
+  // boshqa firmaga tegishli qator RLS orqali o'tib, joriy firmaga "ko'chib"
+  // qolishi mumkin edi).
+  sbClient.from(TABLE_NAMES[type]).update(dbPartial).eq("id", id).eq("firma_id", ACTIVE_FIRMA_ID).then(({ error }) => {
     if (error) { console.error(error); toast("Saqlashda xatolik", "err"); }
   });
 }
@@ -206,7 +226,7 @@ async function deleteRowSafe(table, type, id, rerender) {
   STORE[type] = STORE[type].filter((r) => r.id !== id);
   updateNavBadges();
   if (rerender) rerender();
-  const { error } = await sbClient.from(table).delete().eq("id", id);
+  const { error } = await sbClient.from(table).delete().eq("id", id).eq("firma_id", ACTIVE_FIRMA_ID);
   if (error) {
     console.error(error);
     RECENTLY_DELETED.delete(id);
@@ -325,11 +345,15 @@ async function forceReauth() {
   try { await sbClient.auth.signOut(); } catch (e) { console.error(e); }
 }
 
+// Har doim faqat JORIY firmaning qatorlarini o'qiydi. RLS foydalanuvchi
+// a'zo bo'lgan HAR QANDAY firmaga ruxsat berishi mumkin (bir nechta firmaga
+// kirish huquqi bo'lsa) — shu sabab bu aniq filtr shart, RLS'ning o'ziga
+// tayanib bo'lmaydi (qarang: ACTIVE_FIRMA_ID izohi, yuqorida).
 async function fetchAllRows(table) {
   let all = [];
   let from = 0;
   while (true) {
-    const { data, error } = await sbClient.from(table).select("*").range(from, from + SUPABASE_PAGE_SIZE - 1);
+    const { data, error } = await sbClient.from(table).select("*").eq("firma_id", ACTIVE_FIRMA_ID).range(from, from + SUPABASE_PAGE_SIZE - 1);
     if (error) { if (isAuthExpiredError(error)) forceReauth(); throw error; }
     all = all.concat(data || []);
     if (!data || data.length < SUPABASE_PAGE_SIZE) break;
@@ -357,7 +381,7 @@ async function insertRowsChunked(table, dbRows) {
 
 async function loadAllData() {
   const [settingsRes, kirim, chiqim, bank, ishHaqi, ombor, mahsulotlar, ishlabChiqarish, fayllar, kontragentlar, asosiyVositalar] = await Promise.all([
-    sbClient.from("settings").select("*").eq("id", 1).single(),
+    sbClient.from("settings").select("*").eq("firma_id", ACTIVE_FIRMA_ID).single(),
     fetchAllRows("kirim"),
     fetchAllRows("chiqim"),
     fetchAllRows("bank"),
@@ -408,7 +432,7 @@ function saveStore() {
   const pushes = [];
   ["kirim", "chiqim"].forEach((type) => STORE[type].forEach((r) => {
     if (prevTolandi[type + ":" + r.id] !== r.tolandi) {
-      pushes.push(sbClient.from(TABLE_NAMES[type]).update({ tolandi: r.tolandi }).eq("id", r.id));
+      pushes.push(sbClient.from(TABLE_NAMES[type]).update({ tolandi: r.tolandi }).eq("id", r.id).eq("firma_id", ACTIVE_FIRMA_ID));
     }
   }));
   if (pushes.length) Promise.allSettled(pushes);
@@ -724,7 +748,8 @@ const PAGES = {
   sverka: { render: renderSverka },
   sverkaDetail: { render: renderSverkaDetail },
   settings: { render: renderSettings },
-  audit: { render: renderAudit }
+  audit: { render: renderAudit },
+  firmalar: { render: renderFirmalar }
 };
 
 function navigate(page) {
@@ -4907,7 +4932,7 @@ async function renderAudit() {
   `;
   document.getElementById("searchBox").addEventListener("input", (e) => filterAuditRows(e.target.value));
 
-  const { data, error } = await sbClient.from("audit_log").select("*").order("created_at", { ascending: false }).limit(300);
+  const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).limit(300);
   if (error) { console.error(error); toast("Tarixni yuklashda xatolik", "err"); return; }
   AUDIT_ROWS = data || [];
   document.getElementById("auditCount").textContent = `${AUDIT_ROWS.length} ta yozuv`;
@@ -4956,6 +4981,157 @@ function openAuditDetailModal(row) {
     </div>
   `);
   document.getElementById("mCancel").addEventListener("click", closeModal);
+}
+
+/* --------------------------------- Firmalar --------------------------------- */
+// Firma yaratish va xodimlarga (email bo'yicha) kirish huquqi berish/olib
+// tashlash — faqat admin uchun (RLS server tomonda ham shunday cheklaydi,
+// bu yerdagi IS_ADMIN tekshiruvi faqat UI/xabar uchun). "firmalar" va
+// "firma_foydalanuvchilari" jadvallari STORE'ning bir qismi emas (realtime
+// orqali sinxronlanmaydi) — sahifa har safar ochilganda qayta so'raladi,
+// chunki bu kamdan-kam o'zgaradigan, admin-only ma'lumot.
+
+async function renderFirmalar() {
+  const main = document.getElementById("main");
+  if (!IS_ADMIN) {
+    main.innerHTML = `<div class="empty-state"><div class="t">Ruxsat yo'q</div><div class="d">Firmalarni faqat admin boshqara oladi.</div></div>`;
+    return;
+  }
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Firmalar</h1>
+        <p class="page-desc">Har bir firmaning ma'lumotlari (kirim/chiqim/ombor va h.k.) bir-biridan to'liq ajratilgan. Xodim faqat o'ziga ruxsat berilgan firmalarni ilova ichida (chiqmasdan) tanlab ishlaydi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Nomi</th><th>Yaratilgan</th><th></th></tr></thead>
+        <tbody id="firmalarBody"><tr><td colspan="3" class="faint" style="text-align:center;padding:16px;">Yuklanmoqda…</td></tr></tbody>
+      </table>
+    </div>
+  `;
+  document.getElementById("btnAddFirma").addEventListener("click", () => openFirmaModal());
+
+  const { data, error } = await sbClient.from("firmalar").select("*").order("nomi");
+  if (error) { console.error(error); toast("Firmalarni yuklashda xatolik", "err"); return; }
+  const body = document.getElementById("firmalarBody");
+  body.innerHTML = data.length ? data.map(firmaRowHtml).join("") :
+    `<tr><td colspan="3" class="faint" style="text-align:center;padding:16px;">Hozircha firma yo'q</td></tr>`;
+  body.addEventListener("click", (e) => {
+    const editId = e.target.dataset.edit;
+    const accessId = e.target.dataset.access;
+    if (editId) openFirmaModal(editId, data.find((f) => f.id === editId));
+    else if (accessId) openFirmaAccessModal(accessId, data.find((f) => f.id === accessId)?.nomi || "");
+  });
+}
+
+function firmaRowHtml(f) {
+  return `
+    <tr data-id="${f.id}">
+      <td>${escapeHtml(f.nomi || "")}</td>
+      <td class="mono faint">${escapeHtml((f.created_at || "").slice(0, 10))}</td>
+      <td class="row-actions">
+        <button class="btn btn-sm" data-access="${f.id}">Xodimlar</button>
+        <button class="icon-btn" data-edit="${f.id}" title="Nomini o'zgartirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg></button>
+      </td>
+    </tr>
+  `;
+}
+
+function openFirmaModal(existingId, existing) {
+  openModal(`
+    <h3>${existingId ? "Firma nomini o'zgartirish" : "Yangi firma"}</h3>
+    <div class="field"><label>Nomi</label><input id="fNomi" value="${escapeHtml(existing ? existing.nomi : "")}" placeholder="masalan: &quot;Namuna Savdo&quot; MCHJ"></div>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mSave">Saqlash</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mSave").addEventListener("click", () => saveFirmaFromModal(existingId));
+}
+
+async function saveFirmaFromModal(existingId) {
+  const nomi = document.getElementById("fNomi").value.trim();
+  if (!nomi) { toast("Firma nomini kiriting", "err"); return; }
+
+  if (existingId) {
+    const { error } = await sbClient.from("firmalar").update({ nomi }).eq("id", existingId);
+    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+  } else {
+    const { data, error } = await sbClient.from("firmalar").insert({ nomi }).select().single();
+    if (error) { console.error(error); toast("Yaratishda xatolik", "err"); return; }
+    // Yangi firma darhol ishlatilishi uchun: sozlamalar qatori + yaratgan
+    // adminning o'ziga kirish huquqi ham shu yerda birga qo'shiladi — aks
+    // holda firma yaratilgan bo'lsa-da, hech kim (yaratgan admin ham) uni
+    // firma-almashtirgichda ko'ra olmaydi.
+    const { error: settingsErr } = await sbClient.from("settings").insert({ firma_id: data.id });
+    if (settingsErr) console.error(settingsErr);
+    const { error: accessErr } = await sbClient.from("firma_foydalanuvchilari").insert({ firma_id: data.id, email: CURRENT_USER_EMAIL });
+    if (accessErr) console.error(accessErr);
+    await loadAvailableFirmalar();
+    renderFirmaSwitcher();
+  }
+  closeModal();
+  renderFirmalar();
+  toast("Saqlandi");
+}
+
+async function openFirmaAccessModal(firmaId, firmaNomi) {
+  openModal(`
+    <h3>${escapeHtml(firmaNomi)} — xodimlar</h3>
+    <p class="modal-sub">Shu yerga qo'shilgan email'lar shu firmaga kira oladi (ilova ichida firma-tanlagichda ko'rinadi).</p>
+    <div id="firmaAccessList" class="faint">Yuklanmoqda…</div>
+    <div class="field" style="margin-top:14px;"><label>Email qo'shish</label>
+      <div style="display:flex;gap:8px;">
+        <input id="fAccessEmail" placeholder="xodim@masalan.uz" style="flex:1;">
+        <button class="btn btn-sm" id="btnAddAccess">Qo'shish</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Yopish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+
+  async function reloadAccessList() {
+    const { data, error } = await sbClient.from("firma_foydalanuvchilari").select("email").eq("firma_id", firmaId).order("email");
+    const listEl = document.getElementById("firmaAccessList");
+    if (!listEl) return;
+    if (error) { listEl.textContent = "Yuklashda xatolik"; return; }
+    listEl.className = "";
+    listEl.innerHTML = data.length
+      ? data.map((r) => `
+          <div class="report-line" style="grid-template-columns:1fr auto;">
+            <span>${escapeHtml(r.email)}</span>
+            <button class="icon-btn" data-remove-email="${escapeHtml(r.email)}" title="Kirish huquqini olib tashlash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+          </div>
+        `).join("")
+      : `<span class="faint">Hozircha hech kim qo'shilmagan</span>`;
+    listEl.querySelectorAll("[data-remove-email]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const email = btn.dataset.removeEmail;
+        const { error: delErr } = await sbClient.from("firma_foydalanuvchilari").delete().eq("firma_id", firmaId).eq("email", email);
+        if (delErr) { console.error(delErr); toast("Olib tashlashda xatolik", "err"); return; }
+        reloadAccessList();
+      });
+    });
+  }
+  await reloadAccessList();
+
+  document.getElementById("btnAddAccess").addEventListener("click", async () => {
+    const email = document.getElementById("fAccessEmail").value.trim().toLowerCase();
+    if (!email) { toast("Emailni kiriting", "err"); return; }
+    const { error } = await sbClient.from("firma_foydalanuvchilari").insert({ firma_id: firmaId, email });
+    if (error) { console.error(error); toast(error.code === "23505" ? "Bu email allaqachon qo'shilgan" : "Qo'shishda xatolik", "err"); return; }
+    document.getElementById("fAccessEmail").value = "";
+    reloadAccessList();
+    toast("Qo'shildi");
+  });
 }
 
 /* ------------------------------- Sozlamalar ------------------------------- */
@@ -5060,20 +5236,20 @@ function renderSettings() {
       const newSettings = Object.assign(defaultStore().settings, parsed.settings || {});
 
       const clearResults = await Promise.all([
-        sbClient.from("kirim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("chiqim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("bank").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("ish_haqi").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("ombor").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("ishlab_chiqarish").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("mahsulotlar").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("fayllar").delete().neq("id", "00000000-0000-0000-0000-000000000000")
+        sbClient.from("kirim").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("chiqim").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("bank").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("ish_haqi").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("ombor").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("ishlab_chiqarish").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("mahsulotlar").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("fayllar").delete().eq("firma_id", ACTIVE_FIRMA_ID)
       ]);
       const clearError = clearResults.find((r) => r.error);
       if (clearError) throw clearError.error;
       // "chiqim_tafsil" jadvali migratsiyasi hali ishga tushirilmagan bazalarda
       // ham tiklash to'liq davom etishi uchun bu jadval xatosi alohida (jim) ushlanadi.
-      try { await sbClient.from("chiqim_tafsil").delete().neq("id", "00000000-0000-0000-0000-000000000000"); } catch (e) { console.error(e); }
+      try { await sbClient.from("chiqim_tafsil").delete().eq("firma_id", ACTIVE_FIRMA_ID); } catch (e) { console.error(e); }
 
       // Eslatma: "fayllar" jadvali reset paytida bo'shatilib qayta yaratilgani
       // uchun eski fayl_id qiymatlari endi hech qanday faylga mos kelmaydi —
@@ -5117,14 +5293,14 @@ function renderSettings() {
     document.getElementById("mCancel").addEventListener("click", closeModal);
     document.getElementById("mConfirm").addEventListener("click", async () => {
       const results = await Promise.all([
-        sbClient.from("kirim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("chiqim").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("bank").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("ish_haqi").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("ombor").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("ishlab_chiqarish").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("mahsulotlar").delete().neq("id", "00000000-0000-0000-0000-000000000000"),
-        sbClient.from("fayllar").delete().neq("id", "00000000-0000-0000-0000-000000000000")
+        sbClient.from("kirim").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("chiqim").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("bank").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("ish_haqi").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("ombor").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("ishlab_chiqarish").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("mahsulotlar").delete().eq("firma_id", ACTIVE_FIRMA_ID),
+        sbClient.from("fayllar").delete().eq("firma_id", ACTIVE_FIRMA_ID)
       ]);
       const failed = results.find((r) => r.error);
       if (failed) {
@@ -5136,7 +5312,7 @@ function renderSettings() {
         toast(isPermissionError(failed.error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Tozalashda xatolik — ba'zi jadvallar tozalanmagan bo'lishi mumkin", "err");
         return;
       }
-      try { await sbClient.from("chiqim_tafsil").delete().neq("id", "00000000-0000-0000-0000-000000000000"); } catch (e) { console.error(e); }
+      try { await sbClient.from("chiqim_tafsil").delete().eq("firma_id", ACTIVE_FIRMA_ID); } catch (e) { console.error(e); }
       await saveSettingsToDb(defaultStore().settings);
       await loadAllData();
       closeModal();
@@ -5641,6 +5817,12 @@ function rerenderCurrentPage() {
 const RECENTLY_DELETED = new Set();
 
 function applyRemoteRowChange(type, payload) {
+  // Realtime kanal firma_id bo'yicha filtrlangan bo'lsa-da, switchFirma()
+  // eski kanalni yopish bilan yangi ma'lumotni yuklashni bir vaqtda (atomik)
+  // qilmaydi — shu oraliqda ESKI kanaldan kelib qolgan xabar YANGI firma
+  // STORE'siga noto'g'ri qo'shilib ketmasligi uchun qo'shimcha tekshiruv.
+  const fid = payload.new?.firma_id ?? payload.old?.firma_id;
+  if (fid && fid !== ACTIVE_FIRMA_ID) return;
   const map = TABLE_MAPS[type];
   if (payload.eventType === "INSERT") {
     if (RECENTLY_DELETED.has(payload.new.id)) return;
@@ -5669,19 +5851,24 @@ function setSyncStatus(connected) {
 
 function setupRealtime() {
   if (REALTIME_CHANNEL) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
-  REALTIME_CHANNEL = sbClient.channel("bux2112-sync")
-    .on("postgres_changes", { event: "*", schema: "public", table: "kirim" }, (p) => applyRemoteRowChange("kirim", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "chiqim" }, (p) => applyRemoteRowChange("chiqim", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "bank" }, (p) => applyRemoteRowChange("bank", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "ish_haqi" }, (p) => applyRemoteRowChange("ishHaqi", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "ombor" }, (p) => applyRemoteRowChange("ombor", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "mahsulotlar" }, (p) => applyRemoteRowChange("mahsulotlar", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "ishlab_chiqarish" }, (p) => applyRemoteRowChange("ishlabChiqarish", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "fayllar" }, (p) => applyRemoteRowChange("fayllar", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "kontragentlar" }, (p) => applyRemoteRowChange("kontragentlar", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "asosiy_vositalar" }, (p) => applyRemoteRowChange("asosiyVositalar", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "chiqim_tafsil" }, (p) => applyRemoteRowChange("chiqimTafsil", p))
-    .on("postgres_changes", { event: "*", schema: "public", table: "settings" }, (p) => {
+  const firmaFilter = { filter: `firma_id=eq.${ACTIVE_FIRMA_ID}` };
+  // Kanal nomiga firma id qo'shiladi — bir vaqtning o'zida bir nechta firma
+  // uchun (masalan ikkita brauzer oynasida) alohida kanal ochilishini
+  // ta'minlaydi va eski/yangi kanal chalkashib ketmasligini osonlashtiradi.
+  REALTIME_CHANNEL = sbClient.channel("bux2112-sync-" + ACTIVE_FIRMA_ID)
+    .on("postgres_changes", { event: "*", schema: "public", table: "kirim", ...firmaFilter }, (p) => applyRemoteRowChange("kirim", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "chiqim", ...firmaFilter }, (p) => applyRemoteRowChange("chiqim", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "bank", ...firmaFilter }, (p) => applyRemoteRowChange("bank", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "ish_haqi", ...firmaFilter }, (p) => applyRemoteRowChange("ishHaqi", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "ombor", ...firmaFilter }, (p) => applyRemoteRowChange("ombor", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "mahsulotlar", ...firmaFilter }, (p) => applyRemoteRowChange("mahsulotlar", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "ishlab_chiqarish", ...firmaFilter }, (p) => applyRemoteRowChange("ishlabChiqarish", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "fayllar", ...firmaFilter }, (p) => applyRemoteRowChange("fayllar", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "kontragentlar", ...firmaFilter }, (p) => applyRemoteRowChange("kontragentlar", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "asosiy_vositalar", ...firmaFilter }, (p) => applyRemoteRowChange("asosiyVositalar", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "chiqim_tafsil", ...firmaFilter }, (p) => applyRemoteRowChange("chiqimTafsil", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "settings", ...firmaFilter }, (p) => {
+      if (p.new?.firma_id && p.new.firma_id !== ACTIVE_FIRMA_ID) return;
       STORE.settings = Object.assign(STORE.settings, fromDbSettings(p.new), loadLocalFilters());
       rerenderCurrentPage();
     })
@@ -5752,9 +5939,21 @@ async function loadUserRole() {
 async function bootAfterAuth() {
   hideAuthGate();
   applyTheme();
-  renderTopbarPeriod();
   bindGlobalSearch();
   document.getElementById("topbarNotifBtn").addEventListener("click", () => navigate("ishlabchiqarish"));
+
+  await loadAvailableFirmalar();
+  renderFirmaSwitcher();
+  if (!AVAILABLE_FIRMALAR.length) {
+    document.getElementById("main").innerHTML = `<div class="empty-state"><div class="d">Sizga hali birorta firma biriktirilmagan — administratorga murojaat qiling.</div></div>`;
+    return;
+  }
+  const savedFirma = localStorage.getItem(ACTIVE_FIRMA_KEY);
+  ACTIVE_FIRMA_ID = AVAILABLE_FIRMALAR.some((f) => f.id === savedFirma) ? savedFirma : AVAILABLE_FIRMALAR[0].id;
+  localStorage.setItem(ACTIVE_FIRMA_KEY, ACTIVE_FIRMA_ID);
+  renderFirmaSwitcher();
+
+  renderTopbarPeriod();
   navigate("dashboard");
   try {
     await Promise.all([loadAllData(), loadUserRole()]);
@@ -5765,10 +5964,68 @@ async function bootAfterAuth() {
   }
   setupRealtime();
   updateNavBadges();
+  const navFirmalarEl = document.getElementById("navFirmalar");
+  if (navFirmalarEl) navFirmalarEl.style.display = IS_ADMIN ? "" : "none";
   // "loadAllData" tugashi bir necha yuz millisekund cho'zilishi mumkin — shu oraliqda
   // foydalanuvchi allaqachon boshqa bo'limga o'tgan bo'lishi mumkin. Shu sabab uni
   // majburan "dashboard"ga qaytarmaymiz, aksincha HOZIRGI turgan sahifasini yangi
   // (endi yuklangan) ma'lumot bilan qayta chizamiz.
+  PAGES[CURRENT_PAGE].render();
+}
+
+// Login qilgan foydalanuvchi ruxsat berilgan firmalar ro'yxatini (nomi bilan)
+// yuklaydi — bu FIRMA MA'LUMOTLARIGA emas, balki "firma_foydalanuvchilari"
+// jadvaliga (kim qaysi firmaga kira oladi) so'rov, shu sabab ataylab
+// firma_id bo'yicha filtrlanmagan.
+async function loadAvailableFirmalar() {
+  AVAILABLE_FIRMALAR = [];
+  if (!CURRENT_USER_EMAIL) return;
+  try {
+    const { data, error } = await sbClient
+      .from("firma_foydalanuvchilari")
+      .select("firma_id, firmalar(id, nomi)")
+      .eq("email", CURRENT_USER_EMAIL);
+    if (error) { console.error(error); return; }
+    AVAILABLE_FIRMALAR = (data || [])
+      .filter((r) => r.firmalar)
+      .map((r) => ({ id: r.firmalar.id, nomi: r.firmalar.nomi }))
+      .sort((a, b) => a.nomi.localeCompare(b.nomi));
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderFirmaSwitcher() {
+  const sel = document.getElementById("firmaSwitcher");
+  if (!sel) return;
+  if (!AVAILABLE_FIRMALAR.length) { sel.innerHTML = ""; sel.style.display = "none"; return; }
+  sel.style.display = "";
+  sel.innerHTML = AVAILABLE_FIRMALAR.map((f) => `<option value="${f.id}">${escapeHtml(f.nomi)}</option>`).join("");
+  sel.value = ACTIVE_FIRMA_ID;
+}
+
+// Foydalanuvchi tizimdan chiqmasdan, ilova ichida boshqa firmaga o'tadi:
+// realtime kanalni yopadi, STORE'ni tozalaydi, yangi firma bo'yicha
+// ma'lumotlarni qayta yuklaydi va kanalni qayta ochadi — auth sessiyasiga
+// umuman tegmaydi.
+async function switchFirma(firmaId) {
+  if (!firmaId || firmaId === ACTIVE_FIRMA_ID) return;
+  if (REALTIME_CHANNEL) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
+  STORE = defaultStore();
+  ACTIVE_FIRMA_ID = firmaId;
+  localStorage.setItem(ACTIVE_FIRMA_KEY, firmaId);
+  try {
+    await Promise.all([loadAllData(), loadUserRole()]);
+  } catch (err) {
+    console.error(err);
+    if (isAuthExpiredError(err)) forceReauth();
+    else toast("Ma'lumotlarni yuklashda xatolik", "err");
+  }
+  setupRealtime();
+  updateNavBadges();
+  renderFirmaSwitcher();
+  const navFirmalarEl = document.getElementById("navFirmalar");
+  if (navFirmalarEl) navFirmalarEl.style.display = IS_ADMIN ? "" : "none";
   PAGES[CURRENT_PAGE].render();
 }
 
@@ -5779,32 +6036,20 @@ async function bootAfterAuth() {
 // turgan sahifasidan kutilmaganda "Bosh sahifa"ga uloqtirilib qolardi.
 let hasBooted = false;
 
-const ACTIVE_BAZA_KEY = "bux2112_active_baza";
 const LAST_EMAIL_KEY = "bux2112_last_email";
 let CURRENT_USER_EMAIL = "";
 
-function getBaza(id) {
-  return BAZALAR.find((b) => b.id === id) || BAZALAR[0];
-}
-
-// Tanlangan bazaga mos Supabase client'ni yaratadi va shu client uchun
-// auth-hodisalarini tinglashni o'rnatadi. Har bir baza — butunlay alohida
-// Supabase loyihasi (o'z URL/key/sessiyasi bilan), shu sabab baza
-// almashtirilganda eskisi bilan bog'liq kanal/holat tozalanadi.
-function connectBaza(bazaId) {
-  if (REALTIME_CHANNEL && sbClient) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
-  const cfg = getBaza(bazaId);
-  ACTIVE_BAZA_ID = cfg.id;
-  // persistSession: false — sessiya brauzer xotirasida saqlanmaydi, shu sabab
-  // har safar sahifa ochilganda avvalgi bazaga avtomat kirib ketmaydi va
-  // foydalanuvchi har doim bazani tanlab, parolni qayta kiritishi kerak bo'ladi.
-  sbClient = window.supabase.createClient(cfg.url, cfg.anonKey, { auth: { persistSession: false } });
-  hasBooted = false;
+// Bitta umumiy Supabase loyihasiga bir marta ulanadi (index.html'dagi
+// SUPABASE_URL/SUPABASE_ANON_KEY) va auth-hodisalarini tinglashni o'rnatadi.
+// persistSession: false — sessiya brauzer xotirasida saqlanmaydi, shu sabab
+// sahifa qayta ochilganda foydalanuvchi har doim login/parolini qayta
+// kiritadi (firma tanlovi esa localStorage'da saqlanadi, qarang ACTIVE_FIRMA_KEY).
+function initSupabaseClient() {
+  sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
   sbClient.auth.onAuthStateChange((event, session) => {
     if (session) {
       if (!hasBooted) {
         hasBooted = true;
-        localStorage.setItem(ACTIVE_BAZA_KEY, ACTIVE_BAZA_ID);
         CURRENT_USER_EMAIL = session.user.email || "";
         localStorage.setItem(LAST_EMAIL_KEY, CURRENT_USER_EMAIL);
         const label = document.getElementById("currentUserLabel");
@@ -5815,6 +6060,8 @@ function connectBaza(bazaId) {
       hasBooted = false;
       CURRENT_USER_EMAIL = "";
       IS_ADMIN = false;
+      ACTIVE_FIRMA_ID = null;
+      AVAILABLE_FIRMALAR = [];
       const label = document.getElementById("currentUserLabel");
       if (label) label.textContent = "";
       if (REALTIME_CHANNEL) { sbClient.removeChannel(REALTIME_CHANNEL); REALTIME_CHANNEL = null; }
@@ -5824,14 +6071,10 @@ function connectBaza(bazaId) {
   });
 }
 
-const authBazaEl = document.getElementById("authBaza");
-authBazaEl.innerHTML = BAZALAR.map((b) => `<option value="${b.id}">${b.nomi}</option>`).join("");
-authBazaEl.value = localStorage.getItem(ACTIVE_BAZA_KEY) || BAZALAR[0].id;
-
 const authEmailEl = document.getElementById("authEmail");
 authEmailEl.value = localStorage.getItem(LAST_EMAIL_KEY) || "";
 
-connectBaza(authBazaEl.value);
+initSupabaseClient();
 
 document.getElementById("authSubmit").addEventListener("click", async () => {
   const emailEl = document.getElementById("authEmail");
@@ -5843,7 +6086,6 @@ document.getElementById("authSubmit").addEventListener("click", async () => {
   errEl.textContent = "";
   if (!email) { errEl.textContent = "Emailni kiriting"; return; }
   if (!pwd) { errEl.textContent = "Parolni kiriting"; return; }
-  if (authBazaEl.value !== ACTIVE_BAZA_ID) connectBaza(authBazaEl.value);
   btn.disabled = true;
   btn.textContent = "Tekshirilmoqda…";
   const { error } = await sbClient.auth.signInWithPassword({ email, password: pwd });
@@ -5879,6 +6121,11 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 document.querySelectorAll(".nav-item").forEach((item) => {
   item.addEventListener("click", () => navigate(item.dataset.page));
 });
+
+const firmaSwitcherEl = document.getElementById("firmaSwitcher");
+if (firmaSwitcherEl) {
+  firmaSwitcherEl.addEventListener("change", () => switchFirma(firmaSwitcherEl.value));
+}
 
 const SIDEBAR_COLLAPSE_KEY = "bux2112_sidebar_collapsed";
 const sidebarEl = document.querySelector(".sidebar");

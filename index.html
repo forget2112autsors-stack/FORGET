@@ -60,10 +60,12 @@
     <div class="nav-group-label">Tizim</div>
     <div class="nav-item" data-page="fayllar"><svg class="ic" viewBox="0 0 24 24"><use href="#i-folder"/></svg><span class="label">Fayl yuklamalari</span><span class="badge" id="navFayllarCount">0</span></div>
     <div class="nav-item" data-page="audit"><svg class="ic" viewBox="0 0 24 24"><use href="#i-history"/></svg><span class="label">O'zgarishlar tarixi</span></div>
+    <div class="nav-item" id="navFirmalar" data-page="firmalar" style="display:none;"><svg class="ic" viewBox="0 0 24 24"><use href="#i-building"/></svg><span class="label">Firmalar</span></div>
     <div class="nav-item" data-page="settings"><svg class="ic" viewBox="0 0 24 24"><use href="#i-settings"/></svg><span class="label">Sozlamalar</span></div>
 
     <div class="sidebar-foot">
       <div class="faint" id="currentUserLabel" style="font-size:11px;padding:0 4px 6px;"></div>
+      <select id="firmaSwitcher" style="width:100%;margin-bottom:8px;" title="Firma"></select>
       <div class="theme-toggle" id="themeToggle">
         <span id="themeLabel">Yorug' rejim</span>
         <span id="themeIcon"><svg class="ic" viewBox="0 0 24 24"><use href="#i-sun"/></svg></span>
@@ -145,33 +147,22 @@
         <line x1="65" y1="140" x2="135" y2="140" stroke="#2f6f5e" stroke-width="4" stroke-linecap="round"/>
       </svg>
     </div>
-    <p class="faint">Bazani va shaxsiy login/parolingizni kiriting</p>
-    <select id="authBaza" style="width:100%;margin-bottom:10px;"></select>
+    <p class="faint">Shaxsiy login/parolingizni kiriting</p>
     <input type="email" id="authEmail" placeholder="Email" autocomplete="username" style="margin-bottom:10px;">
     <input type="password" id="authPassword" placeholder="Parol" autocomplete="current-password">
     <button class="btn btn-primary" id="authSubmit" style="width:100%;margin-top:10px;">Kirish</button>
     <div class="auth-error" id="authError"></div>
-    <div class="auth-status">Har bir xodim o'z shaxsiy login/parol bilan kiradi. Ma'lumotlar butun jamoa uchun umumiy — real vaqtda sinxronlanadi. Ikkala baza bir-biriga bog'liq emas.</div>
+    <div class="auth-status">Har bir xodim o'z shaxsiy login/parol bilan kiradi. Kirgandan so'ng, ruxsat berilgan firmalar orasida ilova ichida (chiqmasdan) almashtirish mumkin.</div>
   </div>
 </div>
 
 <script>
-  // Har biri mustaqil Supabase loyihasiga ulanadigan bazalar ro'yxati.
-  // Ochiq kalitlar (anon key) — xavfsizlik server tomonda RLS orqali ta'minlanadi.
-  const BAZALAR = [
-    {
-      id: "asosiy",
-      nomi: "1-baza",
-      url: "https://eyhkwjmzakwbwvqebjat.supabase.co",
-      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV5aGt3am16YWt3Ynd2cWViamF0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYyOTkxODIsImV4cCI6MjEwMTg3NTE4Mn0.udpUDozLxa3qu6SLcarBksVAybkz3KRqpLIQt-GN214"
-    },
-    {
-      id: "ikkinchi",
-      nomi: "2-baza",
-      url: "https://dtpwactsxnooqsnpgjrz.supabase.co",
-      anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR0cHdhY3RzeG5vb3FzbnBnanJ6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcwMTcyNTMsImV4cCI6MjEwMjU5MzI1M30.T3xqyPUvVl-8AP79zTePXjsjwi1VVvxtKoaowvSsHFk"
-    }
-  ];
+  // Yagona, bir nechta firmani xizmat qiladigan Supabase loyihasi.
+  // TODO: "schema_multi_firma.sql" ishga tushirilgan YANGI Supabase loyihaning
+  // haqiqiy "Project URL" va "anon public" kalitini shu yerga qo'ying
+  // (Supabase Dashboard -> Project Settings -> API).
+  const SUPABASE_URL = "https://REPLACE-ME.supabase.co";
+  const SUPABASE_ANON_KEY = "REPLACE-ME-ANON-KEY";
 </script>
 <script src="vendor/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>

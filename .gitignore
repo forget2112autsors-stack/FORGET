@@ -1,1 +1,3 @@
 .vercel
+supabase/node_modules
+supabase/.env
