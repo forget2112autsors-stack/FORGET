@@ -198,6 +198,9 @@ svg.ic{stroke:currentColor; fill:none; stroke-width:1.7; stroke-linecap:round; s
   display:flex;
   flex-direction:column;
   gap:8px;
+  position:sticky;
+  bottom:0;
+  background:var(--bg-elevated);
 }
 
 .theme-toggle{
