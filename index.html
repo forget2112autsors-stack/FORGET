@@ -61,8 +61,9 @@
         <span id="themeLabel">Yorug' rejim</span>
         <span id="themeIcon"><svg class="ic" viewBox="0 0 24 24"><use href="#i-sun"/></svg></span>
       </div>
-      <div class="theme-toggle" id="logoutBtn">
-        <span><span class="sync-dot" id="syncDot"></span><span id="syncLabel">Ulanmoqda…</span></span>
+      <div class="sync-status"><span class="sync-dot" id="syncDot"></span><span id="syncLabel">Ulanmoqda…</span></div>
+      <div class="theme-toggle" id="logoutBtn" title="Tizimdan chiqish">
+        <span>Chiqish</span>
         <span><svg class="ic" viewBox="0 0 24 24"><use href="#i-power"/></svg></span>
       </div>
     </div>
@@ -129,8 +130,14 @@
 
 <div class="auth-gate" id="authGate">
   <div class="auth-box">
-    <div class="brand-mark"><svg viewBox="0 0 100 100" width="55%" height="55%"><path d="M30 30 50 50 30 70 10 50Z M70 30 90 50 70 70 50 50Z" fill="none" stroke="#fff" stroke-width="9" stroke-linejoin="round"/></svg></div>
-    <h2>FORGET</h2>
+    <div class="brand-logo-full">
+      <svg viewBox="0 0 200 200" width="100%" height="100%">
+        <path d="M100 6 194 100 100 194 6 100Z" fill="none" stroke="#2f6f5e" stroke-width="8" stroke-linejoin="round"/>
+        <path d="M79 57 100 78 79 99 58 78Z M121 57 142 78 121 99 100 78Z" fill="none" stroke="#2f6f5e" stroke-width="6" stroke-linejoin="round"/>
+        <text x="100" y="126" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="25" letter-spacing="2.5" fill="#2f6f5e">FORGET</text>
+        <line x1="65" y1="140" x2="135" y2="140" stroke="#2f6f5e" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+    </div>
     <p class="faint">Bazani va shaxsiy login/parolingizni kiriting</p>
     <select id="authBaza" style="width:100%;margin-bottom:10px;"></select>
     <input type="email" id="authEmail" placeholder="Email" autocomplete="username" style="margin-bottom:10px;">
