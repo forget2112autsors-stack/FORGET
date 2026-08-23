@@ -138,7 +138,7 @@ button, input, select, textarea{font-family:inherit; font-size:inherit; color:in
 }
 .brand-mark{
   width:34px;height:34px;border-radius:9px;
-  background:linear-gradient(155deg, var(--accent), var(--accent-hover));
+  background:#2f6f5e;
   display:flex;align-items:center;justify-content:center;
   color:#fff;font-weight:700;font-size:13px;
   flex-shrink:0;

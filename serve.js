@@ -58,5 +58,5 @@ server.on('error', (err) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`BUX2112 server running at http://localhost:${PORT}/`);
+  console.log(`FORGET server running at http://localhost:${PORT}/`);
 });

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   BUX2112 — real vaqtda sinxronlanadigan buxgalteriya bazasi.
+   FORGET — real vaqtda sinxronlanadigan buxgalteriya bazasi.
    Ma'lumotlar Supabase (PostgreSQL) bulut bazasida saqlanadi va barcha
    ulangan brauzerlarda real vaqtda (realtime) sinxronlanadi. Kirish uchun
    umumiy parol (Supabase Auth) talab qilinadi.
@@ -1695,7 +1695,7 @@ function exportOmborQoldiqXlsx(qoldiq) {
   ws["!cols"] = [{ wch: 34 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 16 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Ombor qoldig'i");
-  XLSX.writeFile(wb, `BUX2112_ombor_qoldiq_${todayISO()}.xlsx`);
+  XLSX.writeFile(wb, `FORGET_ombor_qoldiq_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
 }
 
@@ -3523,7 +3523,7 @@ function exportIshHaqiXlsx() {
   ws["!cols"] = [{ wch: 12 }, { wch: 28 }, { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 16 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Ish haqi");
-  XLSX.writeFile(wb, `BUX2112_ish_haqi_${todayISO()}.xlsx`);
+  XLSX.writeFile(wb, `FORGET_ish_haqi_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
 }
 
@@ -3767,7 +3767,7 @@ function exportIshHaqiHisobotXlsx() {
   const s = STORE.settings;
   const t = computeIshHaqiTotals();
   const rows = getFilteredRows(STORE.ishHaqi).slice().sort((a, b) => (a.fio || "").localeCompare(b.fio || ""));
-  buildAndDownloadReportXlsx("BUX2112_ish_haqi_hisoboti", "Ish haqi hisoboti", [
+  buildAndDownloadReportXlsx("FORGET_ish_haqi_hisoboti", "Ish haqi hisoboti", [
     { code: "010", label: "Hisoblangan ish haqi jamg'armasi", value: t.oylikJami },
     { code: "030", label: "Soliqdan ozod qilingan summalar (imtiyozlar)", value: t.imtiyozJami },
     { code: "040", label: "Soliq bazasi", value: t.soliqBazasiJami },
@@ -3886,7 +3886,7 @@ function renderF2() {
 
 function exportF2Xlsx() {
   const t = computeTotals();
-  buildAndDownloadReportXlsx("BUX2112_F2", "F2 — Moliyaviy natijalar to'g'risida hisobot", [
+  buildAndDownloadReportXlsx("FORGET_F2", "F2 — Moliyaviy natijalar to'g'risida hisobot", [
     { code: "010", label: "Sof tushum (sotuvdan)", value: t.revenue },
     { code: "020", label: "Sotilgan mahsulot tannarxi", value: t.tannarx },
     { code: "030", label: "Yalpi foyda", value: t.yalpiFoyda },
@@ -3950,7 +3950,7 @@ function renderQQS() {
 
 function exportQQSXlsx() {
   const t = computeTotals();
-  buildAndDownloadReportXlsx("BUX2112_QQS", "QQS hisob-kitobi", [
+  buildAndDownloadReportXlsx("FORGET_QQS", "QQS hisob-kitobi", [
     { code: "010", label: "Zachyotga qabul qilinadigan QQS (xariddan)", value: t.qqsInput },
     { code: "020", label: "Sotuvdan QQS", value: t.qqsOutput },
     { code: "030", label: "Byudjetga to'lanadigan QQS", value: t.qqsToPay },
@@ -4026,7 +4026,7 @@ function renderFoyda() {
 
 function exportFoydaXlsx() {
   const t = computeTotals();
-  buildAndDownloadReportXlsx("BUX2112_foyda_soligi", "Foyda solig'i hisob-kitobi", [
+  buildAndDownloadReportXlsx("FORGET_foyda_soligi", "Foyda solig'i hisob-kitobi", [
     { code: "010", label: "Jami daromad", value: t.jamiDaromad },
     { code: "020", label: "Chegiriladigan xarajatlar", value: t.chegiriladiXarajat },
     { code: "030", label: "Soliqqa tortiladigan foyda", value: t.soliqqaTortiladiganFoyda },
@@ -4129,7 +4129,7 @@ function renderF1() {
 
 function exportF1Xlsx() {
   const t = computeTotals();
-  buildAndDownloadReportXlsx("BUX2112_F1", "F1 — Buxgalteriya balansi", [
+  buildAndDownloadReportXlsx("FORGET_F1", "F1 — Buxgalteriya balansi", [
     { code: "", label: "Asosiy vositalar", value: t.asosiyVositalar },
     { code: "", label: "Tovar-moddiy zaxiralar", value: t.tovarZaxira },
     { code: "", label: "Debitorlik qarzdorligi", value: t.debitorlik },
@@ -4180,7 +4180,7 @@ function computeReconciliationRows() {
   }
 
   // "Davr boshiga" = Kontragentlar bo'limida qo'lda kiritilgan boshlang'ich baza
-  // (odatda BUX2112'dan oldingi tarixni ifodalaydi) + tanlangan "Davr"ning
+  // (odatda FORGET'dan oldingi tarixni ifodalaydi) + tanlangan "Davr"ning
   // boshigacha ("from" sanasidan OLDIN) bo'lgan barcha faktura/bank harakati.
   // Shu sabab davr filtri o'zgarganda "Davr boshiga" ham to'g'ri qayta
   // hisoblanadi (masalan "Joriy chorak" tanlansa, o'sha chorakdan oldingi
@@ -4328,7 +4328,7 @@ function exportSverkaXlsx(rows, totalDebitor, totalKreditor) {
   ws["!cols"] = [{ wch: 32 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 16 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Sverka");
-  XLSX.writeFile(wb, `BUX2112_sverka_${todayISO()}.xlsx`);
+  XLSX.writeFile(wb, `FORGET_sverka_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
 }
 
@@ -4550,7 +4550,7 @@ function exportSverkaDetailXlsx(nomi, inn, ledger) {
   ws["!cols"] = [{ wch: 12 }, { wch: 42 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Akt sverka");
-  XLSX.writeFile(wb, `BUX2112_sverka_${inn}_${todayISO()}.xlsx`);
+  XLSX.writeFile(wb, `FORGET_sverka_${inn}_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
 }
 
@@ -5045,7 +5045,7 @@ function renderSettings() {
     const blob = new Blob([JSON.stringify(STORE, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `BUX2112_${todayISO()}.json`;
+    a.download = `FORGET_${todayISO()}.json`;
     a.click();
   });
 
