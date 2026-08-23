@@ -5859,7 +5859,19 @@ document.getElementById("authPassword").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("authSubmit").click();
 });
 document.getElementById("logoutBtn").addEventListener("click", () => {
-  sbClient.auth.signOut();
+  openModal(`
+    <h3>Tizimdan chiqish</h3>
+    <p class="modal-sub">Rostdan ham tizimdan chiqmoqchimisiz?</p>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-danger" id="mConfirm">Ha, chiqish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mConfirm").addEventListener("click", () => {
+    closeModal();
+    sbClient.auth.signOut();
+  });
 });
 
 /* --------------------------------- init --------------------------------- */
