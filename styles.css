@@ -137,10 +137,8 @@ button, input, select, textarea{font-family:inherit; font-size:inherit; color:in
   padding:6px 8px 18px;
 }
 .brand-mark{
-  width:34px;height:34px;border-radius:9px;
-  background:#2f6f5e;
+  width:52px;height:52px;
   display:flex;align-items:center;justify-content:center;
-  color:#fff;font-weight:700;font-size:13px;
   flex-shrink:0;
 }
 .brand-text{display:flex; flex-direction:column; line-height:1.2;}
