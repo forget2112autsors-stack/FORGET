@@ -345,9 +345,14 @@ function isAuthExpiredError(error) {
   return !!(error && /jwt|token/i.test(String(error.message || "")));
 }
 
+// scope: "local" — FAQAT shu tab/brauzerdagi sessiyani tugatadi. Standart
+// signOut() "global" scope bilan ishlaydi (refresh tokenni serverda ham bekor
+// qiladi) — persistSession: true bo'lgani uchun bitta tabda vaqtinchalik/tasodifiy
+// 401 xatosi butun foydalanuvchining BOSHQA barcha tab/qurilmalaridagi haqiqiy
+// sessiyasini ham o'chirib qo'yishi mumkin edi. Qarang: reconcileData.
 async function forceReauth() {
   toast("Sessiya muddati tugadi — qayta kiring", "err");
-  try { await sbClient.auth.signOut(); } catch (e) { console.error(e); }
+  try { await sbClient.auth.signOut({ scope: "local" }); } catch (e) { console.error(e); }
 }
 
 // Har doim faqat JORIY firmaning qatorlarini o'qiydi. RLS foydalanuvchi
@@ -6434,11 +6439,17 @@ async function reconcileData() {
   if (!hasBooted || RECONCILING) return;
   RECONCILING = true;
   try {
-    // Tab uzoq vaqt fon rejimida (yoki noutbuk uyquda) turgan bo'lsa, sessiya
-    // tokenini avtomatik yangilash kechikkan bo'lishi mumkin — foydalanuvchi
-    // qaytib import/saqlashga urinishidan OLDIN shu yerda majburan yangilab
-    // qo'yamiz, aks holda birinchi so'rov 401 bilan qaytishi mumkin edi.
-    try { await sbClient.auth.refreshSession(); } catch (e) { /* tokeni hali amal qiladi bo'lsa xatolik shart emas */ }
+    // Ilgari bu yerda "sbClient.auth.refreshSession()" ham majburan chaqirilardi
+    // (tab uzoq fon rejimida turgandan keyin token eskirmasligi uchun) — lekin
+    // persistSession: true bo'lgach (sessiya barcha tablarda bitta localStorage
+    // orqali ULASHILADI), bir nechta tab ochiq bo'lganda har biri o'z fokusida
+    // shu chaqiruvni alohida-alohida qilishi Supabase'ning refresh token
+    // ROTATSIYASI bilan poyga holatiga (race condition) olib kelardi — bitta
+    // tab eskirgan refresh tokendan foydalanib "allaqachon ishlatilgan" xatosini
+    // olib, forceReauth() orqali BARCHA tablardagi sessiyani buzib qo'yishi
+    // mumkin edi. SDK'ning o'zidagi autoRefreshToken (standart yoqilgan, tab
+    // fokusiga ham sezgir) buni allaqachon xavfsizroq bajaradi — shu sabab bu
+    // yerda alohida qo'lda yangilash endi shart emas.
     await loadAllData();
     rerenderCurrentPage();
   } catch (err) {
