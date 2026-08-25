@@ -381,7 +381,11 @@ async function insertRowsChunked(table, dbRows) {
 
 async function loadAllData() {
   const [settingsRes, kirim, chiqim, bank, ishHaqi, ombor, mahsulotlar, ishlabChiqarish, fayllar, kontragentlar, asosiyVositalar] = await Promise.all([
-    sbClient.from("settings").select("*").eq("firma_id", ACTIVE_FIRMA_ID).single(),
+    // .single() emas .maybeSingle() — "settings" qatori yo'q firma uchun (masalan
+    // eski/qo'lda yaratilgan firmalar) .single() 0-qatorda PGRST116 xatosi
+    // tashlaydi, bu esa Promise.all()dagi BARCHA jadvallarni (kirim/chiqim/ombor
+    // va h.k.) yuklashni to'xtatib qo'yardi — pastda shu holat o'zi tuzatiladi.
+    sbClient.from("settings").select("*").eq("firma_id", ACTIVE_FIRMA_ID).maybeSingle(),
     fetchAllRows("kirim"),
     fetchAllRows("chiqim"),
     fetchAllRows("bank"),
@@ -394,7 +398,13 @@ async function loadAllData() {
     fetchAllRows("asosiy_vositalar")
   ]);
   if (settingsRes.error) throw settingsRes.error;
-  STORE.settings = Object.assign(defaultStore().settings, fromDbSettings(settingsRes.data), loadLocalFilters());
+  let settingsRow = settingsRes.data;
+  if (!settingsRow) {
+    const { data, error } = await sbClient.from("settings").insert({ firma_id: ACTIVE_FIRMA_ID }).select().single();
+    if (error) throw error;
+    settingsRow = data;
+  }
+  STORE.settings = Object.assign(defaultStore().settings, fromDbSettings(settingsRow), loadLocalFilters());
   STORE.kirim = kirim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
   STORE.chiqim = chiqim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
   STORE.bank = bank.map((r) => fromDbRow(BANK_DB_MAP, r));
