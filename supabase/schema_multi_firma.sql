@@ -217,18 +217,25 @@ language plpgsql security definer as $$
 declare
   actor text := coalesce(auth.email(), 'noma''lum');
   fid uuid := nullif(coalesce(to_jsonb(new), to_jsonb(old))->>'firma_id', '')::uuid;
+  -- "settings" jadvalida "id" ustuni yo'q (PK'si "firma_id") — shu sabab
+  -- to'g'ridan-to'g'ri "new.id" o'rniga jsonb orqali olinadi, topilmasa
+  -- "firma_id"ga tushadi.
+  rid text := coalesce(
+    (coalesce(to_jsonb(new), to_jsonb(old))->>'id'),
+    (coalesce(to_jsonb(new), to_jsonb(old))->>'firma_id')
+  );
 begin
   if (tg_op = 'INSERT') then
     insert into public.audit_log(actor_email, jadval, amal, row_id, malumot, firma_id)
-    values (actor, tg_table_name, tg_op, new.id::text, to_jsonb(new), fid);
+    values (actor, tg_table_name, tg_op, rid, to_jsonb(new), fid);
     return new;
   elsif (tg_op = 'UPDATE') then
     insert into public.audit_log(actor_email, jadval, amal, row_id, malumot, firma_id)
-    values (actor, tg_table_name, tg_op, new.id::text, jsonb_build_object('oldi', to_jsonb(old), 'yangi', to_jsonb(new)), fid);
+    values (actor, tg_table_name, tg_op, rid, jsonb_build_object('oldi', to_jsonb(old), 'yangi', to_jsonb(new)), fid);
     return new;
   elsif (tg_op = 'DELETE') then
     insert into public.audit_log(actor_email, jadval, amal, row_id, malumot, firma_id)
-    values (actor, tg_table_name, tg_op, old.id::text, to_jsonb(old), fid);
+    values (actor, tg_table_name, tg_op, rid, to_jsonb(old), fid);
     return old;
   end if;
 end;
