@@ -5298,13 +5298,48 @@ function renderSettings() {
       const stripFaylId = (r) => ({ ...r, faylId: undefined });
       const inserts = [];
       if ((parsed.kirim || []).length) inserts.push(sbClient.from("kirim").insert(parsed.kirim.map((r) => toDbRow(INVOICE_DB_MAP, stripFaylId(r)))));
-      if ((parsed.chiqim || []).length) inserts.push(sbClient.from("chiqim").insert(parsed.chiqim.map((r) => toDbRow(INVOICE_DB_MAP, stripFaylId(r)))));
       if ((parsed.bank || []).length) inserts.push(sbClient.from("bank").insert(parsed.bank.map((r) => toDbRow(BANK_DB_MAP, stripFaylId(r)))));
       if ((parsed.ishHaqi || []).length) inserts.push(sbClient.from("ish_haqi").insert(parsed.ishHaqi.map((r) => toDbRow(ISHHAQI_DB_MAP, stripFaylId(r)))));
       if ((parsed.ombor || []).length) inserts.push(sbClient.from("ombor").insert(parsed.ombor.map((r) => toDbRow(OMBOR_DB_MAP, stripFaylId(r)))));
-      if ((parsed.mahsulotlar || []).length) inserts.push(sbClient.from("mahsulotlar").insert(parsed.mahsulotlar.map((r) => toDbRow(MAHSULOT_DB_MAP, r))));
       if ((parsed.ishlabChiqarish || []).length) inserts.push(sbClient.from("ishlab_chiqarish").insert(parsed.ishlabChiqarish.map((r) => toDbRow(ISHLAB_CHIQARISH_DB_MAP, r))));
-      await Promise.all(inserts);
+
+      // "chiqim" va "mahsulotlar" tiklanganda YANGI id bilan qayta yaratiladi
+      // (eski id'lar saqlanmaydi). Lekin "chiqim_tafsil" qatorlari aynan o'sha
+      // eski id'larga (chiqim_id, mahsulot_id — FOREIGN KEY orqali) bog'langan
+      // edi — shu sabab .select() bilan yangi id'larni qaytarib olib,
+      // eski->yangi xarita tuzamiz, aks holda kalkulyatsiya bog'lanishi
+      // (demak, bosh sahifadagi "Tannarx") tiklashdan keyin butunlay yo'qolib
+      // qoladi (avvalgi xato aynan shu edi).
+      const chiqimIdMap = new Map();
+      if ((parsed.chiqim || []).length) {
+        const { data, error } = await sbClient.from("chiqim").insert(parsed.chiqim.map((r) => toDbRow(INVOICE_DB_MAP, stripFaylId(r)))).select();
+        if (error) throw error;
+        parsed.chiqim.forEach((r, i) => { if (data[i]) chiqimIdMap.set(r.id, data[i].id); });
+      }
+      const mahsulotIdMap = new Map();
+      if ((parsed.mahsulotlar || []).length) {
+        const { data, error } = await sbClient.from("mahsulotlar").insert(parsed.mahsulotlar.map((r) => toDbRow(MAHSULOT_DB_MAP, r))).select();
+        if (error) throw error;
+        parsed.mahsulotlar.forEach((r, i) => { if (data[i]) mahsulotIdMap.set(r.id, data[i].id); });
+      }
+
+      const insertResults = await Promise.all(inserts);
+      const insertError = insertResults.find((r) => r.error);
+      if (insertError) throw insertError.error;
+
+      if ((parsed.chiqimTafsil || []).length) {
+        const tafsilRows = parsed.chiqimTafsil
+          .map((r) => ({ ...r, chiqimId: chiqimIdMap.get(r.chiqimId), mahsulotId: r.mahsulotId ? (mahsulotIdMap.get(r.mahsulotId) || null) : null, faylId: undefined }))
+          .filter((r) => r.chiqimId);
+        if (tafsilRows.length) {
+          const { error } = await sbClient.from("chiqim_tafsil").insert(tafsilRows.map((r) => toDbRow(CHIQIM_TAFSIL_DB_MAP, r)));
+          // Eski bazalarda "chiqim_tafsil" migratsiyasi hali ishga tushirilmagan
+          // bo'lishi mumkin — shu holatda ham qolgan tiklash muvaffaqiyatli
+          // yakunlanishi uchun bu xato tiklashni to'xtatmaydi, faqat log qilinadi.
+          if (error) console.error(error);
+        }
+      }
+
       await saveSettingsToDb(newSettings);
       await loadAllData();
       renderSettings();
