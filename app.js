@@ -5024,9 +5024,42 @@ async function renderFirmalar() {
   body.addEventListener("click", (e) => {
     const editId = e.target.dataset.edit;
     const accessId = e.target.dataset.access;
+    const delId = e.target.dataset.delFirma;
     if (editId) openFirmaModal(editId, data.find((f) => f.id === editId));
     else if (accessId) openFirmaAccessModal(accessId, data.find((f) => f.id === accessId)?.nomi || "");
+    else if (delId) deleteFirma(delId, data.find((f) => f.id === delId)?.nomi || "");
   });
+}
+
+// Firmani butunlay o'chiradi. "firma_foydalanuvchilari" va "settings"
+// yozuvlari bazada CASCADE bilan avtomatik o'chadi, lekin buxgalteriya
+// jadvallari (kirim, chiqim, bank va h.k.) ATAYLAB cascade qilinmagan —
+// shu sabab firmada allaqachon ma'lumot bo'lsa, bazadan FK xatosi (23503)
+// qaytadi va biz buni tushunarli xabarga aylantiramiz (tasodifan butun
+// firmaning buxgalteriya tarixini yo'qotib qo'yishning oldini olish uchun).
+async function deleteFirma(id, nomi) {
+  if (!confirm(`"${nomi}" firmasini butunlay o'chirmoqchimisiz?\n\nBu amalni ortga qaytarib bo'lmaydi.`)) return;
+  const { error } = await sbClient.from("firmalar").delete().eq("id", id);
+  if (error) {
+    console.error(error);
+    if (error.code === "23503") {
+      toast("Bu firmada buxgalteriya ma'lumotlari bor — avval ularni o'chiring", "err");
+    } else if (isPermissionError(error)) {
+      toast("Sizda firmani o'chirish huquqi yo'q (faqat admin)", "err");
+    } else {
+      toast("O'chirishda xatolik", "err");
+    }
+    return;
+  }
+  await loadAvailableFirmalar();
+  if (ACTIVE_FIRMA_ID === id) {
+    const next = AVAILABLE_FIRMALAR[0];
+    if (next) await switchFirma(next.id);
+  } else {
+    renderFirmaSwitcher();
+  }
+  renderFirmalar();
+  toast("Firma o'chirildi");
 }
 
 function firmaRowHtml(f) {
@@ -5037,6 +5070,7 @@ function firmaRowHtml(f) {
       <td class="row-actions">
         <button class="btn btn-sm" data-access="${f.id}">Xodimlar</button>
         <button class="icon-btn" data-edit="${f.id}" title="Nomini o'zgartirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg></button>
+        <button class="icon-btn" data-del-firma="${f.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
   `;
@@ -5062,6 +5096,11 @@ async function saveFirmaFromModal(existingId) {
   if (existingId) {
     const { error } = await sbClient.from("firmalar").update({ nomi }).eq("id", existingId);
     if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    // Pastdagi firma-almashtirgich (AVAILABLE_FIRMALAR) alohida so'rov bilan
+    // yuklanadi — shu sabab uni ham qayta yuklab, yangi nomni darhol
+    // ko'rsatish kerak, aks holda u eski nomni saqlab qoladi.
+    await loadAvailableFirmalar();
+    renderFirmaSwitcher();
   } else {
     const { data, error } = await sbClient.from("firmalar").insert({ nomi }).select().single();
     if (error) { console.error(error); toast("Yaratishda xatolik", "err"); return; }
