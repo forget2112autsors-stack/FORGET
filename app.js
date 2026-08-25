@@ -6589,11 +6589,16 @@ let CURRENT_USER_EMAIL = "";
 
 // Bitta umumiy Supabase loyihasiga bir marta ulanadi (index.html'dagi
 // SUPABASE_URL/SUPABASE_ANON_KEY) va auth-hodisalarini tinglashni o'rnatadi.
-// persistSession: false — sessiya brauzer xotirasida saqlanmaydi, shu sabab
-// sahifa qayta ochilganda foydalanuvchi har doim login/parolini qayta
-// kiritadi (firma tanlovi esa localStorage'da saqlanadi, qarang ACTIVE_FIRMA_KEY).
+// persistSession: true — sessiya brauzer localStorage'ida saqlanadi, shu sabab
+// sahifani yangilash (F5) yoki qayta ochish foydalanuvchini chiqarib yubormaydi;
+// Supabase JWT'ni fonda avtomatik yangilab turadi (autoRefreshToken, standart
+// yoqilgan). Umumiy/ofis kompyuterida ishlatilganda "Chiqish" tugmasi orqali
+// aniq chiqish shart — aks holda keyingi ochuvchi shu sessiyada qolib ketishi
+// mumkin. Aniq sessiya muddati (masalan "N kundan keyin" yoki "M soat
+// harakatsizlikdan keyin avtomat chiqarish") Supabase Dashboard -> Authentication
+// -> Sessions bo'limida sozlanadi, bu yerdagi koddan mustaqil.
 function initSupabaseClient() {
-  sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: false } });
+  sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { auth: { persistSession: true } });
   sbClient.auth.onAuthStateChange((event, session) => {
     if (session) {
       if (!hasBooted) {
