@@ -59,9 +59,9 @@ const OMBOR_DB_MAP = {
 // umumiy nom bilan almashtiriladi. Nomida quyidagi kalit so'zlardan birortasi
 // uchrasa (katta-kichik harfga qaramasdan), canonicalizeOmborNomi shu umumiy
 // nomni qaytaradi. Ombor kirimi Excel importida (parseOmborLineItems) avtomat
-// qo'llanadi; mavjud (import qilib bo'lingan) yozuvlar uchun Ombor kirimi
-// sahifasidagi "Nomlarni birlashtirish" tugmasi orqali bir martalik yangilash
-// qilinadi (unifyOmborPolymerNames).
+// qo'llanadi; mavjud (import qilib bo'lingan) yozuvlar esa Ombor kirimi
+// sahifasidagi "Nomlarni birlashtirish" tugmasi orqali qo'lda tanlab
+// birlashtiriladi (openOmborMergeNomiModal).
 const OMBOR_UNIFY_KEYWORDS = ["полиэтилен", "полипропилен", "поливинилхлорид", "пвх", "шпагат", "полиацетали"];
 const OMBOR_UNIFIED_NOMI = "Polietilen granula";
 
@@ -1587,7 +1587,7 @@ function renderOmborKirim() {
   bindOmborTabBar(main);
   document.getElementById("btnAddRow").addEventListener("click", () => addOmborRow());
   document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
-  document.getElementById("btnUnifyNomi").addEventListener("click", () => unifyOmborPolymerNames());
+  document.getElementById("btnUnifyNomi").addEventListener("click", () => openOmborMergeNomiModal());
   document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
 
   bindOmborRowEvents();
@@ -2011,37 +2011,57 @@ async function handleOmborImport(file) {
   }
 }
 
-// Ilgari import qilingan "Ombor kirimi" yozuvlaridagi turli polimer nomlarini
-// (canonicalizeOmborNomi mos keladiganlarini) bir martalik ravishda umumiy
-// OMBOR_UNIFIED_NOMI nomiga o'tkazadi — faqat "nomi" maydoni o'zgaradi,
-// miqdorlar/qatorlar birlashtirilmaydi. Yangi importlar allaqachon
-// parseOmborLineItems orqali avtomat normallashtiriladi, bu tugma faqat
-// o'zgartirishdan OLDIN yuklab bo'lingan eski yozuvlarni tuzatish uchun.
-async function unifyOmborPolymerNames() {
-  const targets = omborKirimRows().filter((r) => canonicalizeOmborNomi(r.nomi) !== r.nomi);
-  if (!targets.length) { toast("Birlashtiriladigan yozuv topilmadi — barcha nomlar allaqachon mos"); return; }
-  const preview = [...new Set(targets.map((r) => r.nomi))].slice(0, 8);
+// Ombordagi (kirim + chiqim) barcha mavjud mahsulot nomlarini ro'yxat qilib
+// ko'rsatadi, foydalanuvchi ulardan bir nechtasini belgilab yangi bitta nom
+// yozadi — "Birlashtirish" bosilganda belgilangan nomdagi barcha yozuvlarning
+// "nomi" maydoni shu yangi nomga o'zgaradi (miqdorlar/qatorlar alohida qoladi,
+// faqat nom bir xillashtiriladi).
+function omborUniqueNomiList() {
+  const map = new Map();
+  STORE.ombor.forEach((r) => {
+    if (!r.nomi) return;
+    map.set(r.nomi, (map.get(r.nomi) || 0) + 1);
+  });
+  return [...map.entries()]
+    .map(([nomi, count]) => ({ nomi, count }))
+    .sort((a, b) => a.nomi.localeCompare(b.nomi, "ru"));
+}
+
+function openOmborMergeNomiModal() {
+  const list = omborUniqueNomiList();
+  if (list.length < 2) { toast("Birlashtirish uchun ombordagi nomlar yetarli emas"); return; }
   openModal(`
     <h3>Nomlarni birlashtirish</h3>
-    <p class="modal-sub">${targets.length} ta "Ombor kirimi" yozuvida mahsulot nomi <b>"${escapeHtml(OMBOR_UNIFIED_NOMI)}"</b> ga o'zgartiriladi. Miqdorlar birlashtirilmaydi — har bir qator alohida saqlanadi, faqat nomi bir xillashtiriladi:</p>
-    <ul class="faint" style="margin:0 0 8px 18px;">
-      ${preview.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}
-      ${targets.length > preview.length ? `<li>... va yana ${targets.length - preview.length} xil nom</li>` : ""}
-    </ul>
+    <p class="modal-sub">Ombordagi nomlar ro'yxatidan birlashtiriladiganlarini belgilang, so'ng yangi nomni yozing — belgilangan nomdagi barcha yozuvlar shu yangi nomga o'tkaziladi:</p>
+    <div class="merge-nomi-list">
+      ${list.map((x) => `
+        <label class="merge-nomi-item">
+          <input type="checkbox" class="mMergeChk" value="${escapeHtml(x.nomi)}">
+          <span class="merge-nomi-name">${escapeHtml(x.nomi)}</span>
+          <span class="faint">${x.count} ta</span>
+        </label>
+      `).join("")}
+    </div>
+    <div class="field"><label>Yangi nom</label><input id="mMergeNewNomi" placeholder="Birlashtirilgan nom"></div>
     <div class="modal-actions">
       <button class="btn" id="mCancel">Bekor qilish</button>
-      <button class="btn btn-primary" id="mConfirm">Ha, birlashtirish</button>
+      <button class="btn btn-primary" id="mConfirm">Birlashtirish</button>
     </div>
   `);
   document.getElementById("mCancel").addEventListener("click", closeModal);
   document.getElementById("mConfirm").addEventListener("click", () => {
+    const selected = [...document.querySelectorAll(".mMergeChk:checked")].map((c) => c.value);
+    const newNomi = document.getElementById("mMergeNewNomi").value.trim();
+    if (selected.length < 2) { toast("Birlashtirish uchun kamida 2 ta nom belgilang", "err"); return; }
+    if (!newNomi) { toast("Yangi nomni kiriting", "err"); return; }
+    const targets = STORE.ombor.filter((r) => selected.includes(r.nomi));
     targets.forEach((r) => {
-      r.nomi = OMBOR_UNIFIED_NOMI;
+      r.nomi = newNomi;
       pushFieldsUpdate("ombor", r.id, { nomi: r.nomi });
     });
     closeModal();
     renderOmbor();
-    toast(`${targets.length} ta yozuv "${OMBOR_UNIFIED_NOMI}" nomiga birlashtirildi`);
+    toast(`${targets.length} ta yozuv "${newNomi}" nomiga birlashtirildi`);
   });
 }
 
