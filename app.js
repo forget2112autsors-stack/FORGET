@@ -771,7 +771,8 @@ const PAGES = {
   foyda: { render: renderFoyda },
   ishhaqihisobot: { render: renderIshHaqiHisoboti },
   f1: { render: renderF1 },
-  kreditorlik: { render: renderKreditorlikAging },
+  kreditorlik: { render: () => renderAgingReport("kirim") },
+  debitorlik: { render: () => renderAgingReport("chiqim") },
   sverka: { render: renderSverka },
   sverkaDetail: { render: renderSverkaDetail },
   settings: { render: renderSettings },
@@ -805,10 +806,14 @@ function updateNavBadges() {
 function computeAttentionSummary() {
   const kalkulyatsiyasiz = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
   const muddatiOtganKirim = computeKreditorlikAging().rows.filter((r) => r.daysOverdue > 30).length;
+  const muddatiOtganChiqim = computeDebitorlikAging().rows.filter((r) => r.daysOverdue > 30).length;
   const innsiz = ["kirim", "chiqim"].reduce((a, type) =>
     a + STORE[type].filter((r) => isValidStatus(r.status) && !(r.kontragentInn && String(r.kontragentInn).trim())).length, 0);
   const takrorlar = ["kirim", "chiqim"].reduce((a, type) => a + findDuplicateInvoiceIds(type).groupCount, 0);
-  return { kalkulyatsiyasiz, muddatiOtganKirim, innsiz, takrorlar, total: kalkulyatsiyasiz + muddatiOtganKirim + innsiz + takrorlar };
+  return {
+    kalkulyatsiyasiz, muddatiOtganKirim, muddatiOtganChiqim, innsiz, takrorlar,
+    total: kalkulyatsiyasiz + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar
+  };
 }
 
 function updateTopbarNotifBadge() {
@@ -828,6 +833,7 @@ function openAttentionModal() {
   const items = [
     { count: s.kalkulyatsiyasiz, label: "Kalkulyatsiya bilan bog'lanmagan sotuv qatorlari", desc: "Sotilgan mahsulot ombordan hali sarflanmagan — \"Ishlab chiqarish\" bo'limida bog'lang.", action: () => navigate("ishlabchiqarish") },
     { count: s.muddatiOtganKirim, label: "30 kundan ortiq to'lanmagan kirim fakturalar", desc: "Muddati o'tgan kreditorlik — \"Kreditorlik muddati\" hisobotida ko'ring.", action: () => navigate("kreditorlik") },
+    { count: s.muddatiOtganChiqim, label: "30 kundan ortiq to'lanmagan chiqim fakturalar", desc: "Muddati o'tgan debitorlik (xaridorlar qarzi) — \"Debitorlik muddati\" hisobotida ko'ring.", action: () => navigate("debitorlik") },
     { count: s.innsiz, label: "INN kiritilmagan kirim/chiqim yozuvlari", desc: "Bunday yozuvlarda to'lov holati avtomatik solishtirilmaydi, \"To'landi\" belgisi qo'lda qo'yiladi.", action: () => navigate("kirim") },
     { count: s.takrorlar, label: "Ehtimoliy takrorlangan hujjatlar", desc: "Hujjat №+sana+summa+kontragent bo'yicha bir xil yozuvlar — \"Faktura kirim/chiqim\" sahifasidagi \"Takrorlar\" tugmasi orqali tekshiring.", action: () => navigate("kirim") }
   ].filter((it) => it.count > 0);
@@ -2379,8 +2385,11 @@ function renderIshlabChiqarish() {
 
     ${uncostedRows.length ? `
     <div class="section">
-      <h2 class="section-title" style="color:var(--warn,#b8860b);"><svg class="ic" viewBox="0 0 24 24" style="width:17px;height:17px;vertical-align:-3px;margin-right:4px;"><use href="#i-warn"/></svg>Kalkulyatsiya qilinmagan sotuvlar (${uncostedRows.length})</h2>
-      <p class="page-desc">Chiqim fakturadan import qilingan bu mahsulotlar nomi yoki narxi bo'yicha hech qanday kalkulyatsiyaga mos kelmadi — ombordan hech narsa ayrilmagan. Mos mahsulot/kalkulyatsiya qo'shgach, "Yangilash" tugmasini bosing.</p>
+      <div class="page-header" style="margin-bottom:6px;">
+        <h2 class="section-title" style="margin:0;color:var(--warn,#b8860b);"><svg class="ic" viewBox="0 0 24 24" style="width:17px;height:17px;vertical-align:-3px;margin-right:4px;"><use href="#i-warn"/></svg>Kalkulyatsiya qilinmagan sotuvlar (${uncostedRows.length})</h2>
+        <div class="page-actions"><button class="btn btn-sm" id="btnRematchAll">Barchasini qayta moslashtirish</button></div>
+      </div>
+      <p class="page-desc">Chiqim fakturadan import qilingan bu mahsulotlar nomi yoki narxi bo'yicha hech qanday kalkulyatsiyaga mos kelmadi — ombordan hech narsa ayrilmagan. Mos mahsulot/kalkulyatsiya qo'shgach, "Yangilash" yoki "Barchasini qayta moslashtirish" tugmasini bosing.</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Sana</th><th>Hujjat</th><th>Nomi (facturada)</th><th class="num">Miqdor</th><th class="num">Narx</th><th></th></tr></thead>
@@ -2426,6 +2435,8 @@ function renderIshlabChiqarish() {
 
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
+  const rematchAllBtn = document.getElementById("btnRematchAll");
+  if (rematchAllBtn) rematchAllBtn.addEventListener("click", rematchAllChiqimTafsil);
   main.querySelectorAll("[data-edit-m]").forEach((b) => b.addEventListener("click", () => openMahsulotModal(b.dataset.editM)));
   main.querySelectorAll("[data-del-m]").forEach((b) => b.addEventListener("click", () => deleteMahsulot(b.dataset.delM)));
   const icBody = document.getElementById("icBody");
@@ -2922,6 +2933,27 @@ function openIshlabChiqarishModal() {
   document.getElementById("mSave").addEventListener("click", addIshlabChiqarishEntry);
 }
 
+// Har bir kerakli xomashyo (consumptions — computeMahsulotConsumption natijasi)
+// uchun ombordagi JORIY qoldiqni biriktirib qaytaradi ("qoldiq" va "yetarli"
+// maydonlari bilan). Ilgari bu tekshiruv faqat "Ishlab chiqarish" formasidagi
+// qo'lda kiritish oldindan ko'rish (preview)da bo'lgan — chiqim faktura import
+// qilinganda yoki kalkulyatsiya qo'lda qayta moslashtirilganda (avtomatik
+// yo'llar) HECH QANDAY tekshiruv yo'q edi, shu sabab import ombor zaxirasini
+// hech qanday ogohlantirishsiz manfiyga tushirib yuborishi mumkin edi. Qarang:
+// updateIshlabChiqarishPreview, applyChiqimTafsilConsumption.
+function annotateOmborShortages(consumptions) {
+  const qoldiqMap = {};
+  omborQoldiqList().forEach((q) => { qoldiqMap[q.nomi] = q.qoldiq; });
+  return consumptions.map((c) => {
+    const qoldiq = qoldiqMap[c.nomi] || 0;
+    return Object.assign({}, c, { qoldiq, yetarli: qoldiq >= c.miqdor - 0.0001 });
+  });
+}
+
+function checkOmborShortages(consumptions) {
+  return annotateOmborShortages(consumptions).filter((c) => !c.yetarli);
+}
+
 function updateIshlabChiqarishPreview() {
   const el = document.getElementById("icPreview");
   if (!el) return;
@@ -2930,18 +2962,11 @@ function updateIshlabChiqarishPreview() {
   const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
   if (!m || !miqdor) { el.innerHTML = `<span class="faint">Mahsulot va miqdorni kiriting</span>`; return; }
 
-  const qoldiqMap = {};
-  omborQoldiqList().forEach((q) => { qoldiqMap[q.nomi] = q.qoldiq; });
-
-  let tannarx = 0;
-  const tarkib = m.tarkib || [];
-  const lines = tarkib.map((t) => {
-    const need = toNum(t.norma) * miqdor;
-    tannarx += need * avgOmborNarx(t.nomi);
-    const qoldiq = qoldiqMap[t.nomi] || 0;
-    const yetarli = qoldiq >= need - 0.0001;
-    return `<div style="${yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(t.nomi)}: ${fmt(need, 3)} ${escapeHtml(t.birlik || "")} sarflanadi (qoldiq: ${fmt(qoldiq, 3)})${yetarli ? "" : " — YETARLI EMAS"}</div>`;
-  });
+  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor);
+  const annotated = annotateOmborShortages(consumptions);
+  const lines = annotated.map((c) =>
+    `<div style="${c.yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(c.nomi)}: ${fmt(c.miqdor, 3)} ${escapeHtml(c.birlik || "")} sarflanadi (qoldiq: ${fmt(c.qoldiq, 3)})${c.yetarli ? "" : " — YETARLI EMAS"}</div>`
+  );
   el.innerHTML = `${lines.join("") || `<span class="faint">Bu mahsulotda tarkib belgilanmagan</span>`}<div style="margin-top:8px;"><b>Taxminiy tannarx: ${fmtSum(tannarx)}</b></div>`;
 }
 
@@ -3003,7 +3028,13 @@ async function performMahsulotConsumption(m, miqdor, sana, izoh) {
 // bog'lanadi: avval nomi bo'yicha ANIQ moslik qidiriladi (katta-kichik harf va
 // bo'sh joylarga sezgir emas); topilmasa, mahsulot kartochkasida qo'lda
 // kiritilgan "Standart sotuv narxi" facturadagi narxga ENG YAQIN bo'lgani
-// tanlanadi; hech biri topilmasa "kalkulyatsiya qilinmagan" hisoblanadi.
+// tanlanadi — LEKIN faqat shu farq CHIQIM_NARX_MATCH_TOLERANCE doirasida
+// bo'lsa (aks holda "eng yaqini" baribir juda uzoq bo'lishi mumkin, masalan
+// katalogda atigi bitta mahsulot bo'lsa — bunda noto'g'ri mahsulotga bog'lab,
+// tannarx/foydani buzishdan ko'ra "mos kelmadi" deb qoldirib, odam tekshirsin
+// afzal). Hech biri topilmasa "kalkulyatsiya qilinmagan" hisoblanadi.
+const CHIQIM_NARX_MATCH_TOLERANCE = 0.2; // ±20%
+
 function matchMahsulotForChiqimLine(nomi, narx) {
   const norm = (s) => String(s || "").trim().toLowerCase();
   const targetNomi = norm(nomi);
@@ -3018,34 +3049,41 @@ function matchMahsulotForChiqimLine(nomi, narx) {
       const diff = Math.abs(toNum(m.standartNarxi) - narx);
       if (diff < bestDiff) { bestDiff = diff; best = m; }
     });
-    if (best) return { mahsulot: best, mosTuri: "narx" };
+    if (best && bestDiff <= narx * CHIQIM_NARX_MATCH_TOLERANCE) return { mahsulot: best, mosTuri: "narx" };
   }
   return { mahsulot: null, mosTuri: "none" };
 }
 
 // Bitta "chiqim_tafsil" qatoriga mos kalkulyatsiya asosida ombordan xomashyo
 // ayiradi (hujjatRaqami="CHT-<tafsil id>" — keyinchalik topish/bekor qilish
-// uchun). Faqat mahsulot topilganda chaqiriladi.
+// uchun). Faqat mahsulot topilganda chaqiriladi. Zaxira YETARLI bo'lmasa ham
+// yozuv baribir amalga oshiriladi (savdo/kalkulyatsiya to'xtatilmaydi) — faqat
+// qaysi xomashyolar yetarli emasligi qaytariladi, chaqiruvchi buni foydalanuvchiga
+// ko'rsatadi (qarang: checkOmborShortages, handleInvoiceImport, setChiqimTafsilMahsulot).
 async function applyChiqimTafsilConsumption(tafsilRow, mahsulot) {
   const { consumptions } = computeMahsulotConsumption(mahsulot, tafsilRow.miqdor);
+  const shortages = checkOmborShortages(consumptions);
   await insertOmborConsumptionRows(consumptions, tafsilRow.sana, `CHT-${tafsilRow.id}`, `Sotuv (kalkulyatsiya): ${mahsulot.nomi}`);
   updateNavBadges();
+  return shortages;
 }
 
 // Avval shu tafsil qatoriga tegishli "CHT-<id>" ombor qatorlari bo'lsa
 // o'chiradi (eski sarfni bekor qiladi/inventarni qaytaradi), so'ng
 // chiqim_tafsil.mahsulot_id'ni yangilaydi va (agar mahsulot berilgan bo'lsa)
 // yangisiga qarab qayta sarflaydi. Ham "Kalkulyatsiya" blankasidagi qo'lda
-// tanlash, ham rematchChiqimTafsil shu funksiyani ishlatadi.
+// tanlash, ham rematchChiqimTafsil/rematchAllChiqimTafsil shu funksiyani
+// ishlatadi. Qaytaradi: { ok, shortages } — shortages faqat mahsulot topilgan
+// va ombor zaxirasi yetarli bo'lmagan xomashyolar ro'yxati (bo'sh bo'lishi mumkin).
 async function setChiqimTafsilMahsulot(tafsilId, mahsulotId, mosTuri) {
   const tafsil = STORE.chiqimTafsil.find((t) => t.id === tafsilId);
-  if (!tafsil) return false;
+  if (!tafsil) return { ok: false, shortages: [] };
 
   const oldOmborRows = STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `CHT-${tafsilId}`);
   if (oldOmborRows.length) {
     const ids = oldOmborRows.map((r) => r.id);
     const { error } = await sbClient.from("ombor").delete().in("id", ids);
-    if (error) { console.error(error); toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Eski sarfni bekor qilishda xatolik", "err"); return false; }
+    if (error) { console.error(error); toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Eski sarfni bekor qilishda xatolik", "err"); return { ok: false, shortages: [] }; }
     STORE.ombor = STORE.ombor.filter((r) => !ids.includes(r.id));
   }
 
@@ -3053,13 +3091,18 @@ async function setChiqimTafsilMahsulot(tafsilId, mahsulotId, mosTuri) {
   const { data, error } = await sbClient.from("chiqim_tafsil")
     .update(toDbRow(CHIQIM_TAFSIL_DB_MAP, { mahsulotId: mahsulot ? mahsulot.id : null, mosTuri: mosTuri || (mahsulot ? "qolda" : "none") }))
     .eq("id", tafsilId).select().single();
-  if (error) { console.error(error); toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Saqlashda xatolik", "err"); return false; }
+  if (error) { console.error(error); toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Saqlashda xatolik", "err"); return { ok: false, shortages: [] }; }
   const idx = STORE.chiqimTafsil.findIndex((t) => t.id === tafsilId);
   if (idx >= 0) STORE.chiqimTafsil[idx] = fromDbRow(CHIQIM_TAFSIL_DB_MAP, data);
 
-  if (mahsulot) await applyChiqimTafsilConsumption(STORE.chiqimTafsil[idx], mahsulot);
+  let shortages = [];
+  if (mahsulot) shortages = await applyChiqimTafsilConsumption(STORE.chiqimTafsil[idx], mahsulot);
   updateNavBadges();
-  return true;
+  return { ok: true, shortages };
+}
+
+function shortageToastSuffix(shortages) {
+  return shortages.length ? ` — DIQQAT: ombor zaxirasi yetarli emas: ${shortages.map((s) => s.nomi).join(", ")}` : "";
 }
 
 // "Kalkulyatsiya qilinmagan" ro'yxatidagi "Yangilash" tugmasi — foydalanuvchi
@@ -3070,8 +3113,33 @@ async function rematchChiqimTafsil(tafsilId) {
   if (!tafsil) return;
   const { mahsulot, mosTuri } = matchMahsulotForChiqimLine(tafsil.nomi, tafsil.narx);
   if (!mahsulot) { toast("Hamon mos kalkulyatsiya topilmadi"); return; }
-  const ok = await setChiqimTafsilMahsulot(tafsilId, mahsulot.id, mosTuri);
-  if (ok) toast(`"${mahsulot.nomi}" kalkulyatsiyasi bilan bog'landi`);
+  const { ok, shortages } = await setChiqimTafsilMahsulot(tafsilId, mahsulot.id, mosTuri);
+  if (ok) toast(`"${mahsulot.nomi}" kalkulyatsiyasi bilan bog'landi${shortageToastSuffix(shortages)}`, shortages.length ? "err" : "ok");
+}
+
+// "Barchasini qayta moslashtirish" — Ishlab chiqarish sahifasidagi "Kalkulyatsiya
+// qilinmagan sotuvlar" ro'yxatidagi HAMMA qatorni bittalab bosish o'rniga bir
+// marta bosib, mavjud mahsulot katalogi bo'yicha qayta moslashtirishga urinadi
+// (masalan bir nechta yangi mahsulot/standart narx qo'shilgandan keyin).
+async function rematchAllChiqimTafsil() {
+  const uncosted = STORE.chiqimTafsil.filter((t) => !t.mahsulotId);
+  if (!uncosted.length) { toast("Kalkulyatsiya qilinmagan qator yo'q"); return; }
+  let matched = 0, shortageRows = 0;
+  for (const t of uncosted) {
+    const { mahsulot, mosTuri } = matchMahsulotForChiqimLine(t.nomi, t.narx);
+    if (!mahsulot) continue;
+    const { ok, shortages } = await setChiqimTafsilMahsulot(t.id, mahsulot.id, mosTuri);
+    if (ok) {
+      matched++;
+      if (shortages.length) shortageRows++;
+    }
+  }
+  renderIshlabChiqarish();
+  const stillUnmatched = uncosted.length - matched;
+  let msg = `${matched} ta bog'landi`;
+  if (stillUnmatched) msg += `, ${stillUnmatched} ta hali mos kelmadi`;
+  if (shortageRows) msg += `, ${shortageRows} ta qatorda ombor zaxirasi yetarli emas`;
+  toast(msg, shortageRows ? "err" : "ok");
 }
 
 const CHIQIM_TAFSIL_MOS_LABEL = {
@@ -3177,8 +3245,11 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
     sel.addEventListener("change", async () => {
       const tafsilId = sel.dataset.tafsilSelect;
       const mahsulotId = sel.value || null;
-      const ok = await setChiqimTafsilMahsulot(tafsilId, mahsulotId, mahsulotId ? "qolda" : "none");
-      if (ok) { openChiqimKalkulyatsiyaModal(chiqimId); toast("Yangilandi"); }
+      const { ok, shortages } = await setChiqimTafsilMahsulot(tafsilId, mahsulotId, mahsulotId ? "qolda" : "none");
+      if (ok) {
+        openChiqimKalkulyatsiyaModal(chiqimId);
+        toast(`Yangilandi${shortageToastSuffix(shortages)}`, shortages.length ? "err" : "ok");
+      }
     });
   });
   document.getElementById("btnAddTafsilRow").addEventListener("click", () => addChiqimTafsilRow(chiqimRow));
@@ -3209,10 +3280,10 @@ async function addChiqimTafsilRow(chiqimRow) {
     return;
   }
   STORE.chiqimTafsil.push(tafsilRow);
-  await applyChiqimTafsilConsumption(tafsilRow, mahsulot);
+  const shortages = await applyChiqimTafsilConsumption(tafsilRow, mahsulot);
   saveStore();
   openChiqimKalkulyatsiyaModal(chiqimRow.id);
-  toast("Qo'shildi");
+  toast(`Qo'shildi${shortageToastSuffix(shortages)}`, shortages.length ? "err" : "ok");
 }
 
 // openChiqimKalkulyatsiyaModal bilan bir xil ma'lumot, lekin rasmiy hujjat
@@ -4592,17 +4663,18 @@ function sverkaRowHtml(r) {
   `;
 }
 
-/* ------------------------------ Kreditorlik muddati (AP aging) ------------------------------ */
+/* ------------------------------ Kreditorlik/Debitorlik muddati (aging) ------------------------------ */
 // Solishtirma dalolatnoma "davr" bo'yicha kirim/chiqim/bank oqimini ko'rsatadi,
-// lekin "qaysi to'lanmagan kirim faktura QANCHA muddatdan buyon ochiq turibdi"
+// lekin "qaysi to'lanmagan faktura QANCHA muddatdan buyon ochiq turibdi"
 // degan savolga alohida javob bermaydi — shu sabab qo'shildi. Ataylab davr
 // filtridan (STORE.settings.filterFrom/filterTo) mustaqil: bu har doim
-// JORIY (bugungi kundagi) ochiq qarzdorlik holatini ko'rsatadi, "muddati o'tgan
-// bo'limlar" (0-30/31-60/61-90/90+ kun) F1/QQS hisobotlaridagi "kreditorlik"
-// yig'indisini kim tashkil qilayotganini ochib beradi.
-function computeKreditorlikAging() {
+// JORIY (bugungi kundagi) ochiq qarzdorlik holatini ko'rsatadi. Kirim uchun
+// "Kreditorlik" (biz kimga qarzdormiz), chiqim uchun "Debitorlik" (kim bizga
+// qarzdor) — ikkalasi ham renderInvoiceTable kabi BITTA umumiy funksiyaga
+// (renderAgingReport) asoslangan, faqat AGING_CONFIG orqali farqlanadi.
+function computeAgingReport(rows) {
   const today = todayISO();
-  const rows = STORE.kirim
+  const aged = rows
     .filter((r) => isValidStatus(r.status) && !r.tolandi && toNum(r.jamiSumma) > 0)
     .map((r) => {
       const daysOverdue = r.sana ? Math.round((new Date(today) - new Date(r.sana)) / 86400000) : 0;
@@ -4611,22 +4683,44 @@ function computeKreditorlikAging() {
     })
     .sort((a, b) => b.daysOverdue - a.daysOverdue);
   const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
-  rows.forEach((r) => { buckets[r.bucket] += toNum(r.jamiSumma); });
-  const total = rows.reduce((a, r) => a + toNum(r.jamiSumma), 0);
-  return { rows, buckets, total };
+  aged.forEach((r) => { buckets[r.bucket] += toNum(r.jamiSumma); });
+  const total = aged.reduce((a, r) => a + toNum(r.jamiSumma), 0);
+  return { rows: aged, buckets, total };
 }
+function computeKreditorlikAging() { return computeAgingReport(STORE.kirim); }
+function computeDebitorlikAging() { return computeAgingReport(STORE.chiqim); }
 
 const AGING_BUCKET_LABELS = [["0-30", "0–30 kun"], ["31-60", "31–60 kun"], ["61-90", "61–90 kun"], ["90+", "90+ kun"]];
 
-function renderKreditorlikAging() {
-  const { rows, buckets, total } = computeKreditorlikAging();
+const AGING_CONFIG = {
+  kirim: {
+    title: "Kreditorlik muddati", partyLabel: "Kontragent",
+    desc: "To'lanmagan kirim fakturalar — hujjat sanasidan buyon necha kun o'tgani bo'yicha (aging). Sahifa tepasidagi davr filtridan qat'i nazar, har doim joriy (bugungi) ochiq qarzdorlikni ko'rsatadi.",
+    totalLabel: "Jami kreditorlik", emptyTitle: "To'lanmagan kirim faktura yo'q",
+    emptyDesc: "Barcha kirim fakturalar to'langan (yoki INN kiritilmagani uchun qo'lda kuzatiladi).",
+    compute: computeKreditorlikAging, viewAction: (id) => openKirimDetailModal(id),
+    sheetTitle: "Kreditorlik muddati (to'lanmagan kirim fakturalar)", filePrefix: "kreditorlik_muddati"
+  },
+  chiqim: {
+    title: "Debitorlik muddati", partyLabel: "Xaridor",
+    desc: "To'lanmagan chiqim fakturalar (xaridorlar qarzi) — hujjat sanasidan buyon necha kun o'tgani bo'yicha (aging). Sahifa tepasidagi davr filtridan qat'i nazar, har doim joriy (bugungi) ochiq qarzdorlikni ko'rsatadi.",
+    totalLabel: "Jami debitorlik", emptyTitle: "To'lanmagan chiqim faktura yo'q",
+    emptyDesc: "Barcha chiqim fakturalar to'langan (yoki INN kiritilmagani uchun qo'lda kuzatiladi).",
+    compute: computeDebitorlikAging, viewAction: (id) => openChiqimKalkulyatsiyaModal(id),
+    sheetTitle: "Debitorlik muddati (to'lanmagan chiqim fakturalar)", filePrefix: "debitorlik_muddati"
+  }
+};
+
+function renderAgingReport(type) {
+  const cfg = AGING_CONFIG[type];
+  const { rows, buckets, total } = cfg.compute();
   const main = document.getElementById("main");
 
   main.innerHTML = `
     <div class="page-header">
       <div>
-        <h1 class="page-title">Kreditorlik muddati</h1>
-        <p class="page-desc">To'lanmagan kirim fakturalar — hujjat sanasidan buyon necha kun o'tgani bo'yicha (aging). Sahifa tepasidagi davr filtridan qat'i nazar, har doim joriy (bugungi) ochiq qarzdorlikni ko'rsatadi.</p>
+        <h1 class="page-title">${cfg.title}</h1>
+        <p class="page-desc">${cfg.desc}</p>
       </div>
       <div class="page-actions">
         <button class="btn" id="btnExportAging">Excel'ga eksport</button>
@@ -4635,10 +4729,10 @@ function renderKreditorlikAging() {
     <div class="grid grid-4 section">
       ${AGING_BUCKET_LABELS.map(([key, label]) => `<div class="card stat-card"><div class="stat-label">${label}</div><div class="stat-value">${fmtSum(buckets[key])}</div></div>`).join("")}
     </div>
-    <div class="note" style="margin:0 0 14px;">Jami kreditorlik: <b>${fmtSum(total)}</b> &middot; ${rows.length} ta to'lanmagan hujjat</div>
+    <div class="note" style="margin:0 0 14px;">${cfg.totalLabel}: <b>${fmtSum(total)}</b> &middot; ${rows.length} ta to'lanmagan hujjat</div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Kontragent</th><th>INN</th><th>Hujjat №</th><th>Sana</th><th class="num">Necha kun</th><th class="num">Summa</th><th></th></tr></thead>
+        <thead><tr><th>${cfg.partyLabel}</th><th>INN</th><th>Hujjat №</th><th>Sana</th><th class="num">Necha kun</th><th class="num">Summa</th><th></th></tr></thead>
         <tbody>
           ${rows.map((r) => `
             <tr>
@@ -4648,26 +4742,26 @@ function renderKreditorlikAging() {
               <td>${escapeHtml(r.sana || "")}</td>
               <td class="num">${r.daysOverdue}</td>
               <td class="num" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
-              <td class="row-actions"><button class="icon-btn" data-view-kirim="${r.id}" title="Hujjatni ko'rish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button></td>
+              <td class="row-actions"><button class="icon-btn" data-view="${r.id}" title="Hujjatni ko'rish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button></td>
             </tr>
           `).join("")}
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">To'lanmagan kirim faktura yo'q</div><div class="d">Barcha kirim fakturalar to'langan (yoki INN kiritilmagani uchun qo'lda kuzatiladi).</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">${cfg.emptyTitle}</div><div class="d">${cfg.emptyDesc}</div></div>` : ""}
   `;
-  document.getElementById("btnExportAging").addEventListener("click", () => exportKreditorlikAgingXlsx(rows, buckets, total));
-  main.querySelectorAll("[data-view-kirim]").forEach((b) => b.addEventListener("click", () => openKirimDetailModal(b.dataset.viewKirim)));
+  document.getElementById("btnExportAging").addEventListener("click", () => exportAgingXlsx(rows, buckets, total, cfg));
+  main.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => cfg.viewAction(b.dataset.view)));
 }
 
-function exportKreditorlikAgingXlsx(rows, buckets, total) {
+function exportAgingXlsx(rows, buckets, total, cfg) {
   const s = STORE.settings;
   const aoa = [
     [s.companyName],
     [`INN: ${s.inn}   Sana: ${todayISO()}`],
-    ["Kreditorlik muddati (to'lanmagan kirim fakturalar)"],
+    [cfg.sheetTitle],
     [],
-    ["Kontragent", "INN", "Hujjat №", "Sana", "Necha kun", "Summa"]
+    [cfg.partyLabel, "INN", "Hujjat №", "Sana", "Necha kun", "Summa"]
   ];
   rows.forEach((r) => aoa.push([r.kontragentNomi, r.kontragentInn, r.hujjatRaqami, r.sana, r.daysOverdue, r.jamiSumma]));
   aoa.push([]);
@@ -4677,8 +4771,8 @@ function exportKreditorlikAgingXlsx(rows, buckets, total) {
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = [{ wch: 32 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 18 }];
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Kreditorlik muddati");
-  XLSX.writeFile(wb, `FORGET_kreditorlik_muddati_${todayISO()}.xlsx`);
+  XLSX.utils.book_append_sheet(wb, ws, cfg.title);
+  XLSX.writeFile(wb, `FORGET_${cfg.filePrefix}_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
 }
 
@@ -6070,7 +6164,7 @@ async function handleInvoiceImport(file, type) {
     // Har bir yangi mahsulot qatorini "Mahsulotlar" kalkulyatsiyasi bilan
     // moslashtirib, chiqim_tafsil'ga yozamiz va topilganda ombordan avtomat
     // ayiramiz (qarang: matchMahsulotForChiqimLine, applyChiqimTafsilConsumption).
-    let tafsilMatched = 0, tafsilUnmatched = 0, tafsilFailed = 0;
+    let tafsilMatched = 0, tafsilUnmatched = 0, tafsilFailed = 0, tafsilShortageRows = 0;
     for (const it of newTafsilItems) {
       const chiqimRow = STORE.chiqim.find((r) => r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana);
       if (!chiqimRow) continue; // hujjat sarlavhasi topilmadi (masalan status noto'g'ri) — o'tkazib yuboriladi
@@ -6090,7 +6184,8 @@ async function handleInvoiceImport(file, type) {
 
       STORE.chiqimTafsil.push(tafsilRow);
       if (mahsulot) {
-        await applyChiqimTafsilConsumption(tafsilRow, mahsulot);
+        const shortages = await applyChiqimTafsilConsumption(tafsilRow, mahsulot);
+        if (shortages.length) tafsilShortageRows++;
         tafsilMatched++;
       } else {
         tafsilUnmatched++;
@@ -6144,7 +6239,8 @@ async function handleInvoiceImport(file, type) {
     if (omborFailed) msg += ` (ombor qatorlarini yozishda xatolik)`;
     if (tafsilMatched || tafsilUnmatched) msg += `, ${tafsilMatched} ta mahsulot qatori kalkulyatsiya bilan bog'landi${tafsilUnmatched ? `, ${tafsilUnmatched} ta kalkulyatsiya qilinmagan` : ""}`;
     if (tafsilFailed) msg += ` (${tafsilFailed} ta mahsulot qatorini yozishda xatolik — baza migratsiyasi ishga tushirilmagan bo'lishi mumkin)`;
-    toast(msg);
+    if (tafsilShortageRows) msg += `, ${tafsilShortageRows} ta qatorda ombor zaxirasi yetarli emas`;
+    toast(msg, tafsilShortageRows ? "err" : "ok");
   } catch (err) {
     console.error(err);
     toast("Faylni o'qishda xatolik", "err");
