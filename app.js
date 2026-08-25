@@ -2857,7 +2857,24 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
         </tbody>
       </table>
     </div>
-  ` : `<p class="modal-sub">Bu faktura uchun mahsulot qatorlari topilmadi — fayl import qilinganda mahsulot ustunlari aniqlanmagan bo'lishi mumkin (masalan faylda faqat hujjat jami summasi bo'lgan, mahsulot nomi/miqdori bo'lmagan).</p>`;
+  ` : `<p class="modal-sub">Bu faktura uchun mahsulot qatorlari topilmadi — fayl import qilinganda mahsulot ustunlari aniqlanmagan bo'lishi mumkin (masalan faylda faqat hujjat jami summasi bo'lgan, mahsulot nomi/miqdori bo'lmagan), yoki asl import faylidan alohida sabab bilan (masalan .json'dan tiklashda) yo'qolgan bo'lishi mumkin. Pastdan qo'lda qo'shishingiz mumkin.</p>`;
+
+  // Mahsulot qatori umuman topilmagan (yoki qo'shimcha qator kerak bo'lgan)
+  // hollarda — masalan asl import fayli yo'qolgan/topilmaydigan hujjatlar
+  // uchun — qo'lda qator qo'shish imkoni. addChiqimTafsilRow shu yerdagi
+  // maydonlardan o'qib, yangi chiqim_tafsil qatorini yaratadi va (mahsulot
+  // tanlangan bo'lsa) ombordan avtomat sarflaydi.
+  const addRowHtml = `
+    <div class="card section" style="margin-top:12px;">
+      <div class="card-title">Mahsulot qatorini qo'lda qo'shish</div>
+      <div class="field-row" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="field" style="flex:2;min-width:160px;"><label>Mahsulot</label><select id="newTafsilMahsulot">${mahsulotOptions()}</select></div>
+        <div class="field" style="flex:1;min-width:90px;"><label>Miqdor</label><input id="newTafsilMiqdor" type="number" step="any"></div>
+        <div class="field" style="flex:1;min-width:90px;"><label>Narx</label><input id="newTafsilNarx" type="number" step="any"></div>
+        <button class="btn btn-sm" id="btnAddTafsilRow">+ Qo'shish</button>
+      </div>
+    </div>
+  `;
 
   const foydaInfo = computeChiqimKalkulyatsiyaFoyda(chiqimId);
   const foydaHtml = rows.length ? `
@@ -2873,6 +2890,7 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
     <h3>Kalkulyatsiya — faktura ${escapeHtml(chiqimRow.hujjatRaqami || "")}</h3>
     <p class="modal-sub">${escapeHtml(chiqimRow.sana || "")} &middot; ${escapeHtml(chiqimRow.kontragentNomi || "")}. Kalkulyatsiya ustunini o'zgartirsangiz, eski ombor sarfi bekor qilinib, yangisiga qarab qayta hisoblanadi.</p>
     ${bodyHtml}
+    ${addRowHtml}
     ${foydaHtml}
     <div class="modal-actions">
       <button class="btn" id="mCancel">Yopish</button>
@@ -2890,6 +2908,38 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
       if (ok) { openChiqimKalkulyatsiyaModal(chiqimId); toast("Yangilandi"); }
     });
   });
+  document.getElementById("btnAddTafsilRow").addEventListener("click", () => addChiqimTafsilRow(chiqimRow));
+}
+
+async function addChiqimTafsilRow(chiqimRow) {
+  const mahsulotId = document.getElementById("newTafsilMahsulot").value;
+  const miqdor = toNum(document.getElementById("newTafsilMiqdor").value);
+  const narx = toNum(document.getElementById("newTafsilNarx").value);
+  if (!mahsulotId) { toast("Mahsulotni tanlang", "err"); return; }
+  if (!miqdor) { toast("Miqdorni kiriting", "err"); return; }
+  const mahsulot = STORE.mahsulotlar.find((m) => m.id === mahsulotId);
+  if (!mahsulot) return;
+
+  const tafsilPayload = {
+    chiqimId: chiqimRow.id, hujjatRaqami: chiqimRow.hujjatRaqami, sana: chiqimRow.sana,
+    nomi: mahsulot.nomi, birlik: mahsulot.birlik, miqdor, narx, summa: miqdor * narx,
+    mahsulotId: mahsulot.id, mosTuri: "qolda", faylId: null
+  };
+  let tafsilRow;
+  try {
+    const { data, error } = await sbClient.from("chiqim_tafsil").insert(toDbRow(CHIQIM_TAFSIL_DB_MAP, tafsilPayload)).select().single();
+    if (error) throw error;
+    tafsilRow = fromDbRow(CHIQIM_TAFSIL_DB_MAP, data);
+  } catch (error) {
+    console.error(error);
+    toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Qo'shishda xatolik", "err");
+    return;
+  }
+  STORE.chiqimTafsil.push(tafsilRow);
+  await applyChiqimTafsilConsumption(tafsilRow, mahsulot);
+  saveStore();
+  openChiqimKalkulyatsiyaModal(chiqimRow.id);
+  toast("Qo'shildi");
 }
 
 // openChiqimKalkulyatsiyaModal bilan bir xil ma'lumot, lekin rasmiy hujjat
