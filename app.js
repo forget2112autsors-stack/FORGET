@@ -34,7 +34,7 @@ const INVOICE_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami", status: "status",
   kontragentInn: "kontragent_inn", kontragentNomi: "kontragent_nomi",
   summaQQSsiz: "summa_qqssiz", qqsStavka: "qqs_stavka", qqsSumma: "qqs_summa",
-  jamiSumma: "jami_summa", tolandi: "tolandi", faylId: "fayl_id"
+  jamiSumma: "jami_summa", tolandi: "tolandi", tolandiOverride: "tolandi_override", faylId: "fayl_id"
 };
 const BANK_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami", kontragent: "kontragent",
@@ -50,7 +50,12 @@ const OMBOR_DB_MAP = {
   kontragentInn: "kontragent_inn", kontragentNomi: "kontragent_nomi",
   nomi: "nomi", birlik: "birlik", miqdor: "miqdor", narx: "narx",
   yetkazibBerishNarxi: "yetkazib_berish_narxi", qqsSumma: "qqs_summa",
-  yetkazibBerishNarxiQQSBilan: "yetkazib_berish_narxi_qqs_bilan", turi: "turi", faylId: "fayl_id"
+  yetkazibBerishNarxiQQSBilan: "yetkazib_berish_narxi_qqs_bilan", turi: "turi", faylId: "fayl_id",
+  // Bu qator qaysi "Faktura kirim" hujjatidan (handleInvoiceImport orqali,
+  // avtomatik) hosil bo'lganini bildiradi — eski (kirim_id'siz) yozuvlar yoki
+  // alohida "Ombor" sahifasidan qo'lda import qilinganlar uchun bo'sh (null)
+  // qoladi. Qarang: handleInvoiceImport, openKirimDetailModal.
+  kirimId: "kirim_id"
 };
 
 // Ombor kirimida turli polimer navlari (masalan "Полипропилен марки TPP D30S",
@@ -465,6 +470,12 @@ function recomputePaymentStatusForType(type) {
     const inn = (r.kontragentInn || "").trim();
     if (!inn) return; // INN yo'q qatorlar qo'lda boshqariladi
     if (!isValidStatus(r.status)) { r.tolandi = false; return; }
+    // Foydalanuvchi "To'landi" holatini qo'lda ustidan yozgan (tolandiOverride)
+    // qatorlar avtomatik FIFO hisobidan butunlay chiqarib tashlanadi — ular
+    // bank mablag'ini "band qilib qo'ymaydi" (qolgan mablag' boshqa fakturalarga
+    // to'liq tegishli bo'lib qoladi), qiymati esa bazadan o'qilganicha saqlanadi.
+    // Qarang: tolandiCellHtml, toggleTolandiOverride.
+    if (r.tolandiOverride) return;
     (byInn[inn] = byInn[inn] || []).push(r);
   });
 
@@ -755,6 +766,7 @@ const PAGES = {
   foyda: { render: renderFoyda },
   ishhaqihisobot: { render: renderIshHaqiHisoboti },
   f1: { render: renderF1 },
+  kreditorlik: { render: renderKreditorlikAging },
   sverka: { render: renderSverka },
   sverkaDetail: { render: renderSverkaDetail },
   settings: { render: renderSettings },
@@ -781,19 +793,66 @@ function updateNavBadges() {
   updateTopbarNotifBadge();
 }
 
-// Bildirishnoma qo'ng'irog'i — hozircha yagona "haqiqiy" signal: kalkulyatsiya
-// bilan bog'lanmagan (demak ombordan hech narsa yechilmagan) sotuvlar soni.
-// Bosilganda "Ishlab chiqarish" sahifasiga o'tkazadi (shu ro'yxat o'sha yerda).
+// Bildirishnoma qo'ng'irog'i — to'rtta manbadan yig'ilgan son: har biri
+// alohida sahifada ko'rilishi kerak bo'lgan, o'z-o'zidan "yashirin" qolib
+// ketishi mumkin bo'lgan holat. Bosilganda openAttentionModal ochilib, har
+// bir toifani mos sahifaga yo'naltiradi.
+function computeAttentionSummary() {
+  const kalkulyatsiyasiz = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
+  const muddatiOtganKirim = computeKreditorlikAging().rows.filter((r) => r.daysOverdue > 30).length;
+  const innsiz = ["kirim", "chiqim"].reduce((a, type) =>
+    a + STORE[type].filter((r) => isValidStatus(r.status) && !(r.kontragentInn && String(r.kontragentInn).trim())).length, 0);
+  const takrorlar = ["kirim", "chiqim"].reduce((a, type) => a + findDuplicateInvoiceIds(type).groupCount, 0);
+  return { kalkulyatsiyasiz, muddatiOtganKirim, innsiz, takrorlar, total: kalkulyatsiyasiz + muddatiOtganKirim + innsiz + takrorlar };
+}
+
 function updateTopbarNotifBadge() {
   const badge = document.getElementById("topbarNotifBadge");
   if (!badge) return;
-  const count = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
+  const count = computeAttentionSummary().total;
   if (count > 0) {
     badge.textContent = count > 99 ? "99+" : String(count);
     badge.style.display = "flex";
   } else {
     badge.style.display = "none";
   }
+}
+
+function openAttentionModal() {
+  const s = computeAttentionSummary();
+  const items = [
+    { count: s.kalkulyatsiyasiz, label: "Kalkulyatsiya bilan bog'lanmagan sotuv qatorlari", desc: "Sotilgan mahsulot ombordan hali sarflanmagan — \"Ishlab chiqarish\" bo'limida bog'lang.", action: () => navigate("ishlabchiqarish") },
+    { count: s.muddatiOtganKirim, label: "30 kundan ortiq to'lanmagan kirim fakturalar", desc: "Muddati o'tgan kreditorlik — \"Kreditorlik muddati\" hisobotida ko'ring.", action: () => navigate("kreditorlik") },
+    { count: s.innsiz, label: "INN kiritilmagan kirim/chiqim yozuvlari", desc: "Bunday yozuvlarda to'lov holati avtomatik solishtirilmaydi, \"To'landi\" belgisi qo'lda qo'yiladi.", action: () => navigate("kirim") },
+    { count: s.takrorlar, label: "Ehtimoliy takrorlangan hujjatlar", desc: "Hujjat №+sana+summa+kontragent bo'yicha bir xil yozuvlar — \"Faktura kirim/chiqim\" sahifasidagi \"Takrorlar\" tugmasi orqali tekshiring.", action: () => navigate("kirim") }
+  ].filter((it) => it.count > 0);
+
+  openModal(`
+    <h3>Diqqat talab qiladigan yozuvlar</h3>
+    ${items.length ? `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Nima</th><th class="num">Soni</th><th></th></tr></thead>
+          <tbody>
+            ${items.map((it, i) => `
+              <tr>
+                <td><div>${escapeHtml(it.label)}</div><div class="faint" style="font-size:11px;">${escapeHtml(it.desc)}</div></td>
+                <td class="num" style="font-weight:700;">${it.count}</td>
+                <td class="row-actions"><button class="btn btn-sm" data-attn-go="${i}">Ko'rish</button></td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+    ` : `<p class="modal-sub">Hozircha diqqat talab qiladigan yozuv yo'q.</p>`}
+    <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.querySelectorAll("[data-attn-go]").forEach((b) => b.addEventListener("click", () => {
+    const it = items[Number(b.dataset.attnGo)];
+    closeModal();
+    it.action();
+  }));
 }
 
 /* ------------------------------ global qidiruv ---------------------------- */
@@ -1327,6 +1386,7 @@ function invoiceRowHtml(type, r, isDup) {
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
       <td class="row-actions">
         ${type === "chiqim" ? `<button class="icon-btn" data-kalk="${r.id}" title="Kalkulyatsiya — sotilgan mahsulotlar va ombordan sarf"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>` : ""}
+        ${type === "kirim" ? `<button class="icon-btn" data-view="${r.id}" title="Hujjatni ko'rish — mahsulot tarkibi va chop etish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>` : ""}
         <button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
@@ -1346,11 +1406,43 @@ function refreshInvoiceSummary(type) {
   if (elJami) elJami.textContent = fmtSum(totalJami);
 }
 
+// "To'landi" avtomatik (bank bilan INN+summa solishtirib, recomputePaymentStatusForType
+// orqali) hisoblanadi, lekin avtomat xato moslashtirsa (masalan bir kontragentning
+// bir necha fakturasi bir xil summada bo'lganda) foydalanuvchi pillni bosib qo'lda
+// ustidan yozib qo'yishi (override) mumkin — shunda qator avtomatik hisobdan butunlay
+// chiqariladi (qarang: recomputePaymentStatusForType). "Avtomatga qaytarish" tugmasi
+// override'ni bekor qiladi. Qarang: setTolandiOverride, resetTolandiToAuto.
 function tolandiCellHtml(r) {
   const hasInn = !!(r.kontragentInn && String(r.kontragentInn).trim());
-  return hasInn
-    ? `<span class="pill ${r.tolandi ? "pill-ok" : "pill-muted"}" title="Bank harakati bilan avtomatik solishtirildi (INN + summa)">${r.tolandi ? "To'landi" : "Ochiq"}</span>`
-    : `<input type="checkbox" data-f="tolandi" ${r.tolandi ? "checked" : ""} title="INN kiritilmagani uchun qo'lda belgilanadi">`;
+  if (!hasInn) {
+    return `<input type="checkbox" data-f="tolandi" ${r.tolandi ? "checked" : ""} title="INN kiritilmagani uchun qo'lda belgilanadi">`;
+  }
+  if (r.tolandiOverride) {
+    return `
+      <span class="pill ${r.tolandi ? "pill-ok" : "pill-muted"}" data-tolandi-toggle="${r.id}" style="cursor:pointer;" title="Qo'lda belgilangan — bosib qiymatini almashtiring">${r.tolandi ? "To'landi" : "Ochiq"} <span class="faint" style="font-size:10px;">(qo'lda)</span></span>
+      <button class="icon-btn icon-btn-sync" data-tolandi-auto="${r.id}" title="Avtomatik (bank bilan solishtirish) rejimiga qaytarish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg></button>
+    `;
+  }
+  return `<span class="pill ${r.tolandi ? "pill-ok" : "pill-muted"}" data-tolandi-toggle="${r.id}" style="cursor:pointer;" title="Bank harakati bilan avtomatik solishtirildi (INN + summa). Bosib qo'lda ustidan yozish mumkin.">${r.tolandi ? "To'landi" : "Ochiq"}</span>`;
+}
+
+function setTolandiOverride(type, id, newTolandi) {
+  const row = STORE[type].find((r) => r.id === id);
+  if (!row) return;
+  row.tolandiOverride = true;
+  row.tolandi = newTolandi;
+  pushFieldsUpdate(type, id, { tolandiOverride: true, tolandi: newTolandi });
+  saveStore(); // boshqa qatorlarning avtomatik holatini ham qayta hisoblab, o'zgarganlarini bazaga yozadi
+  renderInvoiceTable(type);
+}
+
+function resetTolandiToAuto(type, id) {
+  const row = STORE[type].find((r) => r.id === id);
+  if (!row) return;
+  row.tolandiOverride = false;
+  pushFieldsUpdate(type, id, { tolandiOverride: false });
+  saveStore(); // avtomatik qiymatni qayta hisoblaydi va o'zgargan bo'lsa (shu qator ham) bazaga yozadi
+  renderInvoiceTable(type);
 }
 
 function refreshTolandiCellsForInn(type, inn) {
@@ -1422,7 +1514,17 @@ function bindInvoiceRowEvents(type) {
     const delId = e.target.dataset.del;
     if (delId) { deleteRowSafe(TABLE_NAMES[type], type, delId, () => renderInvoiceTable(type)); return; }
     const kalkId = e.target.dataset.kalk;
-    if (kalkId) openChiqimKalkulyatsiyaModal(kalkId);
+    if (kalkId) { openChiqimKalkulyatsiyaModal(kalkId); return; }
+    const viewId = e.target.dataset.view;
+    if (viewId) { openKirimDetailModal(viewId); return; }
+    const toggleBtn = e.target.closest("[data-tolandi-toggle]");
+    if (toggleBtn) {
+      const row = STORE[type].find((r) => r.id === toggleBtn.dataset.tolandiToggle);
+      if (row) setTolandiOverride(type, row.id, !row.tolandi);
+      return;
+    }
+    const autoBtn = e.target.closest("[data-tolandi-auto]");
+    if (autoBtn) { resetTolandiToAuto(type, autoBtn.dataset.tolandiAuto); return; }
   });
 }
 
@@ -1448,6 +1550,135 @@ async function addInvoiceRow(type) {
   saveStore();
   renderInvoiceTable(type);
   toast("Yangi qator qo'shildi");
+}
+
+/* ---------------------------- Faktura kirim: hujjat ko'rinishi ---------------------------- */
+// Jadvaldagi qator o'zi "hujjat" emas — shu sabab bitta kirim fakturasini
+// mahsulot tarkibi bilan birga ko'rish/chop etish uchun alohida modal.
+// Bog'langan mahsulot qatorlarini AVVAL kirim_id orqali (yangi, avtomatik
+// bog'langan importlar) qidiramiz; agar topilmasa (masalan migration_kirim_
+// yaxshilash.sql hali ishga tushirilmagan yoki hujjat eski, alohida "Ombor"
+// importi orqali qo'shilgan) — hujjat№+sana bo'yicha TAXMINIY moslikka
+// o'tamiz va buni foydalanuvchiga ochiq aytamiz.
+function findOmborLinesForKirim(kirimRow) {
+  const linked = STORE.ombor.filter((r) => r.kirimId === kirimRow.id);
+  if (linked.length) return { rows: linked, exact: true };
+  const guessed = STORE.ombor.filter((r) => !r.kirimId && r.turi !== "chiqim" &&
+    r.hujjatRaqami === kirimRow.hujjatRaqami && r.sana === kirimRow.sana);
+  return { rows: guessed, exact: false };
+}
+
+function openKirimDetailModal(kirimId) {
+  const kirimRow = STORE.kirim.find((r) => r.id === kirimId);
+  if (!kirimRow) return;
+  const { rows, exact } = findOmborLinesForKirim(kirimRow);
+
+  const lineItemsHtml = rows.length ? `
+    ${!exact ? `<div class="note" style="margin-bottom:10px;">Mahsulot qatorlari hujjat raqami+sana bo'yicha TAXMINIY moslashtirildi (aniq bog'lanish yo'q — ehtimol bu hujjat eski import orqali qo'shilgan).</div>` : ""}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Mahsulot nomi</th><th>Birlik</th><th class="num">Miqdor</th><th class="num">Narx</th><th class="num">Summa (QQSsiz)</th><th class="num">QQS</th><th class="num">Jami</th></tr></thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr>
+              <td>${escapeHtml(r.nomi)}</td>
+              <td>${escapeHtml(r.birlik || "")}</td>
+              <td class="num">${fmt(r.miqdor, 3)}</td>
+              <td class="num">${fmtSum(r.narx)}</td>
+              <td class="num">${fmtSum(r.yetkazibBerishNarxi)}</td>
+              <td class="num">${fmtSum(r.qqsSumma)}</td>
+              <td class="num">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  ` : `<p class="modal-sub">Bu hujjat uchun mahsulot tarkibi topilmadi — qo'lda kiritilgan hujjat bo'lishi yoki asl import faylida mahsulot ustunlari (nomi/miqdor/narx) bo'lmagan bo'lishi mumkin.</p>`;
+
+  openModal(`
+    <h3>Kirim fakturasi ${escapeHtml(kirimRow.hujjatRaqami || "")}</h3>
+    <p class="modal-sub">${escapeHtml(kirimRow.sana || "")} &middot; ${escapeHtml(kirimRow.kontragentNomi || "")} ${kirimRow.kontragentInn ? `(INN: ${escapeHtml(kirimRow.kontragentInn)})` : ""}</p>
+    <div class="note" style="margin-bottom:12px;">
+      <div class="report-line"><span class="label">Status</span><span class="code"></span><span class="val">${escapeHtml(kirimRow.status || "Подписан")}</span></div>
+      <div class="report-line"><span class="label">Summa (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(kirimRow.summaQQSsiz)}</span></div>
+      <div class="report-line"><span class="label">QQS (${fmt(kirimRow.qqsStavka)}%)</span><span class="code"></span><span class="val">${fmtSum(kirimRow.qqsSumma)}</span></div>
+      <div class="report-line"><span class="label"><b>Jami</b></span><span class="code"></span><span class="val"><b>${fmtSum(kirimRow.jamiSumma)}</b></span></div>
+      <div class="report-line"><span class="label">To'lov holati</span><span class="code"></span><span class="val">${kirimRow.tolandi ? "To'landi" : "Ochiq"}${kirimRow.tolandiOverride ? " (qo'lda belgilangan)" : ""}</span></div>
+    </div>
+    ${lineItemsHtml}
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Yopish</button>
+      <button class="btn btn-primary" id="mPrint">Chop etish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mPrint").addEventListener("click", () => printKirimBlanka(kirimId));
+}
+
+// openKirimDetailModal bilan bir xil ma'lumot, lekin chop etish uchun —
+// printSverkaPdf/printChiqimKalkulyatsiyaBlanka bilan bir xil window.open+print naqshi.
+function printKirimBlanka(kirimId) {
+  const kirimRow = STORE.kirim.find((r) => r.id === kirimId);
+  if (!kirimRow) return;
+  const { rows } = findOmborLinesForKirim(kirimRow);
+  const s = STORE.settings;
+
+  const bodyRows = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(r.nomi)}</td>
+      <td>${escapeHtml(r.birlik || "")}</td>
+      <td class="num">${fmt(r.miqdor, 3)}</td>
+      <td class="num">${fmtSum(r.narx)}</td>
+      <td class="num">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
+    </tr>
+  `).join("");
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Kirim fakturasi ${escapeHtml(kirimRow.hujjatRaqami || "")}</title>
+      <style>
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:28px; color:#1c2530;}
+        h1{font-size:18px; margin:0 0 4px;}
+        .sub{font-size:12px; color:#5b6b7b; margin:0 0 4px;}
+        .meta{font-size:12px; color:#5b6b7b; margin:0 0 18px;}
+        table{width:100%; border-collapse:collapse; font-size:11.5px;}
+        th, td{border:1px solid #ccd3da; padding:6px 8px; text-align:left;}
+        th{background:#eceff2;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        tfoot td{font-weight:700; border-top:2px solid #1c2530;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <h1>${escapeHtml(s.companyName)}</h1>
+      <div class="sub">INN: ${escapeHtml(s.inn)}</div>
+      <div class="meta">Kirim fakturasi &middot; № ${escapeHtml(kirimRow.hujjatRaqami || "—")} &middot; ${escapeHtml(kirimRow.sana || "")} &middot; Sotuvchi: ${escapeHtml(kirimRow.kontragentNomi || "")} (INN: ${escapeHtml(kirimRow.kontragentInn || "—")})</div>
+      ${rows.length ? `
+        <table>
+          <thead><tr><th class="num">№</th><th>Nomi</th><th>Birlik</th><th class="num">Miqdor</th><th class="num">Narx</th><th class="num">Jami</th></tr></thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      ` : ""}
+      <table style="margin-top:14px;">
+        <tfoot>
+          <tr><td colspan="3">Summa (QQSsiz)</td><td class="num" colspan="3">${fmtSum(kirimRow.summaQQSsiz)}</td></tr>
+          <tr><td colspan="3">QQS (${fmt(kirimRow.qqsStavka)}%)</td><td class="num" colspan="3">${fmtSum(kirimRow.qqsSumma)}</td></tr>
+          <tr><td colspan="3">Jami</td><td class="num" colspan="3">${fmtSum(kirimRow.jamiSumma)}</td></tr>
+        </tfoot>
+      </table>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
 }
 
 /* --------------------------------- Ombor --------------------------------- */
@@ -1870,7 +2101,7 @@ async function addOmborRow() {
 function openOmborImportModal() {
   openModal(`
     <h3>Ombor — Excel'dan import</h3>
-    <p class="modal-sub">didox.uz eksport qilgan "faktura kirim" .xlsx faylini yuklang (masalan: "kirim.xlsx"). Har bir hujjatdagi har bir mahsulot alohida qator sifatida qo'shiladi, takroriy qatorlar o'tkazib yuboriladi.</p>
+    <p class="modal-sub">Odatda bu alohida qadam shart emas — "Faktura kirim" sahifasidagi import shu faylni avtomatik o'qib, mahsulot qatorlarini bu yerga ham qo'shadi. Bu import faqat eski (kirim_id'siz) fayllarni orqaga qaytib qo'lda yuklash yoki "Faktura kirim" sahifasi orqali import qilinmagan faylni to'g'ridan-to'g'ri shu yerga qo'shish uchun qoldirilgan. didox.uz eksport qilgan "faktura kirim" .xlsx faylini yuklang (masalan: "kirim.xlsx"). Har bir hujjatdagi har bir mahsulot alohida qator sifatida qo'shiladi, takroriy qatorlar o'tkazib yuboriladi.</p>
     <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls</span></div>
     <input type="file" id="impFile" accept=".xlsx,.xls" style="display:none">
     <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
@@ -1983,7 +2214,12 @@ async function handleOmborImport(file) {
     for (const it of items) {
       const dupExists = STORE.ombor.some((r) => r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana && r.nomi === it.nomi && Math.abs(r.miqdor - it.miqdor) < 0.001);
       if (dupExists) { skipped++; continue; }
-      candidates.push(it);
+      // Agar shu hujjat "Faktura kirim" bo'limida allaqachon mavjud bo'lsa
+      // (masalan avval faqat hujjat sarlavhasi import qilingan bo'lsa),
+      // mahsulot qatorini o'sha kirim yozuviga bog'laymiz — qarang: kirimId,
+      // openKirimDetailModal.
+      const kirimRow = STORE.kirim.find((r) => r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana);
+      candidates.push(Object.assign({}, it, { kirimId: kirimRow ? kirimRow.id : null }));
     }
 
     if (candidates.length) {
@@ -1995,7 +2231,19 @@ async function handleOmborImport(file) {
     if (candidates.length) {
       let data;
       try {
-        data = await insertRowsChunked("ombor", candidates.map((r) => toDbRow(OMBOR_DB_MAP, r)));
+        try {
+          data = await insertRowsChunked("ombor", candidates.map((r) => toDbRow(OMBOR_DB_MAP, r)));
+        } catch (error) {
+          if (isMissingColumnError(error) && extractMissingColumnName(error) === "kirim_id") {
+            data = await insertRowsChunked("ombor", candidates.map((r) => {
+              const dbRow = toDbRow(OMBOR_DB_MAP, r);
+              delete dbRow.kirim_id;
+              return dbRow;
+            }));
+          } else {
+            throw error;
+          }
+        }
       } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
       data.forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
       added = data.length;
@@ -4339,6 +4587,96 @@ function sverkaRowHtml(r) {
   `;
 }
 
+/* ------------------------------ Kreditorlik muddati (AP aging) ------------------------------ */
+// Solishtirma dalolatnoma "davr" bo'yicha kirim/chiqim/bank oqimini ko'rsatadi,
+// lekin "qaysi to'lanmagan kirim faktura QANCHA muddatdan buyon ochiq turibdi"
+// degan savolga alohida javob bermaydi — shu sabab qo'shildi. Ataylab davr
+// filtridan (STORE.settings.filterFrom/filterTo) mustaqil: bu har doim
+// JORIY (bugungi kundagi) ochiq qarzdorlik holatini ko'rsatadi, "muddati o'tgan
+// bo'limlar" (0-30/31-60/61-90/90+ kun) F1/QQS hisobotlaridagi "kreditorlik"
+// yig'indisini kim tashkil qilayotganini ochib beradi.
+function computeKreditorlikAging() {
+  const today = todayISO();
+  const rows = STORE.kirim
+    .filter((r) => isValidStatus(r.status) && !r.tolandi && toNum(r.jamiSumma) > 0)
+    .map((r) => {
+      const daysOverdue = r.sana ? Math.round((new Date(today) - new Date(r.sana)) / 86400000) : 0;
+      const bucket = daysOverdue <= 30 ? "0-30" : daysOverdue <= 60 ? "31-60" : daysOverdue <= 90 ? "61-90" : "90+";
+      return Object.assign({}, r, { daysOverdue, bucket });
+    })
+    .sort((a, b) => b.daysOverdue - a.daysOverdue);
+  const buckets = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
+  rows.forEach((r) => { buckets[r.bucket] += toNum(r.jamiSumma); });
+  const total = rows.reduce((a, r) => a + toNum(r.jamiSumma), 0);
+  return { rows, buckets, total };
+}
+
+const AGING_BUCKET_LABELS = [["0-30", "0–30 kun"], ["31-60", "31–60 kun"], ["61-90", "61–90 kun"], ["90+", "90+ kun"]];
+
+function renderKreditorlikAging() {
+  const { rows, buckets, total } = computeKreditorlikAging();
+  const main = document.getElementById("main");
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Kreditorlik muddati</h1>
+        <p class="page-desc">To'lanmagan kirim fakturalar — hujjat sanasidan buyon necha kun o'tgani bo'yicha (aging). Sahifa tepasidagi davr filtridan qat'i nazar, har doim joriy (bugungi) ochiq qarzdorlikni ko'rsatadi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnExportAging">Excel'ga eksport</button>
+      </div>
+    </div>
+    <div class="grid grid-4 section">
+      ${AGING_BUCKET_LABELS.map(([key, label]) => `<div class="card stat-card"><div class="stat-label">${label}</div><div class="stat-value">${fmtSum(buckets[key])}</div></div>`).join("")}
+    </div>
+    <div class="note" style="margin:0 0 14px;">Jami kreditorlik: <b>${fmtSum(total)}</b> &middot; ${rows.length} ta to'lanmagan hujjat</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Kontragent</th><th>INN</th><th>Hujjat №</th><th>Sana</th><th class="num">Necha kun</th><th class="num">Summa</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr>
+              <td>${escapeHtml(r.kontragentNomi || "")}</td>
+              <td class="tag-inn">${escapeHtml(r.kontragentInn || "")}</td>
+              <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+              <td>${escapeHtml(r.sana || "")}</td>
+              <td class="num">${r.daysOverdue}</td>
+              <td class="num" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
+              <td class="row-actions"><button class="icon-btn" data-view-kirim="${r.id}" title="Hujjatni ko'rish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">To'lanmagan kirim faktura yo'q</div><div class="d">Barcha kirim fakturalar to'langan (yoki INN kiritilmagani uchun qo'lda kuzatiladi).</div></div>` : ""}
+  `;
+  document.getElementById("btnExportAging").addEventListener("click", () => exportKreditorlikAgingXlsx(rows, buckets, total));
+  main.querySelectorAll("[data-view-kirim]").forEach((b) => b.addEventListener("click", () => openKirimDetailModal(b.dataset.viewKirim)));
+}
+
+function exportKreditorlikAgingXlsx(rows, buckets, total) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Sana: ${todayISO()}`],
+    ["Kreditorlik muddati (to'lanmagan kirim fakturalar)"],
+    [],
+    ["Kontragent", "INN", "Hujjat №", "Sana", "Necha kun", "Summa"]
+  ];
+  rows.forEach((r) => aoa.push([r.kontragentNomi, r.kontragentInn, r.hujjatRaqami, r.sana, r.daysOverdue, r.jamiSumma]));
+  aoa.push([]);
+  AGING_BUCKET_LABELS.forEach(([key, label]) => aoa.push([label, "", "", "", "", buckets[key]]));
+  aoa.push(["Jami", "", "", "", "", total]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 32 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 18 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Kreditorlik muddati");
+  XLSX.writeFile(wb, `FORGET_kreditorlik_muddati_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
+}
+
 function renderSverka() {
   const rows = computeReconciliationRows();
   const totalDebitor = rows.reduce((a, r) => a + Math.max(r.oxiriga, 0), 0);
@@ -5557,9 +5895,10 @@ async function handleReportSettingsImport(file, fieldMap, rerender) {
 
 function openImportModal(type) {
   const info = INVOICE_LABELS[type];
+  const omborNote = type === "kirim" ? ` Fayldagi mahsulot ustunlari (nomi/miqdor/narx) bo'lsa, "Ombor" bo'limi ham shu bitta import bilan birga avtomatik to'ldiriladi — alohida qayta yuklash shart emas.` : "";
   openModal(`
     <h3>${info.title} — Excel'dan import</h3>
-    <p class="modal-sub">didox.uz eksport qilgan .xlsx faylni yuklang (masalan: "factura ${type === "kirim" ? "kirim" : "chiqim"}.xlsx"). Har bir hujjat bitta qator sifatida qo'shiladi, takroriy hujjatlar o'tkazib yuboriladi.</p>
+    <p class="modal-sub">didox.uz eksport qilgan .xlsx faylni yuklang (masalan: "factura ${type === "kirim" ? "kirim" : "chiqim"}.xlsx"). Har bir hujjat bitta qator sifatida qo'shiladi, takroriy hujjatlar o'tkazib yuboriladi.${omborNote}</p>
     <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls</span></div>
     <input type="file" id="impFile" accept=".xlsx,.xls" style="display:none">
     <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
@@ -5692,8 +6031,23 @@ async function handleInvoiceImport(file, type) {
         t.hujjatRaqami === it.hujjatRaqami && t.nomi === it.nomi && Math.abs(t.miqdor - it.miqdor) < 0.001));
     }
 
+    // "Ombor" (mahsulot darajasidagi) qatorlarini ham shu YAGONA importdan
+    // avtomatik to'ldiramiz — ilgari xuddi shu faylni "Ombor" sahifasida
+    // IKKINCHI marta, alohida import qilish kerak edi (aks holda moliyaviy
+    // summa bor-u, ombor miqdori yo'q holat yuzaga kelardi). Har bir mahsulot
+    // qatori ombor.kirim_id orqali shu hujjatga bog'lanadi — qarang:
+    // OMBOR_DB_MAP, openKirimDetailModal. Dedup mantig'i handleOmborImport
+    // bilan bir xil, shu sabab avval "Ombor" sahifasidan alohida import
+    // qilingan fayl bu yerdan qayta yuklansa ham takrorlanmaydi (va aksincha).
+    let newOmborItems = [];
+    if (type === "kirim" && col.nomi !== -1) {
+      const lineItems = parseOmborLineItems(rows, col);
+      newOmborItems = lineItems.filter((it) => !STORE.ombor.some((r) =>
+        r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana && r.nomi === it.nomi && Math.abs(r.miqdor - it.miqdor) < 0.001));
+    }
+
     let faylRow = null;
-    if (candidates.length || newTafsilItems.length) {
+    if (candidates.length || newTafsilItems.length || newOmborItems.length) {
       faylRow = await registerFaylUpload(type, file);
       if (faylRow) candidates.forEach((c) => { c.faylId = faylRow.id; });
     }
@@ -5739,10 +6093,50 @@ async function handleInvoiceImport(file, type) {
     }
     if (newTafsilItems.length) updateNavBadges();
 
+    // Kirim uchun mahsulot qatorlarini "ombor" jadvaliga yozamiz — chiqim_tafsil'dan
+    // farqli o'laroq bu yerda kalkulyatsiya moslashtirish shart emas (Ombor
+    // kirimi xomashyo/mahsulot nomini o'zicha, canonicalizeOmborNomi orqali
+    // saqlaydi), faqat qaysi hujjatga tegishli ekanini kirim_id bilan belgilaymiz.
+    let omborAdded = 0, omborFailed = false;
+    if (newOmborItems.length) {
+      const omborRows = newOmborItems.map((it) => {
+        const kirimRow = STORE.kirim.find((r) => r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana);
+        return Object.assign({}, it, { turi: "kirim", faylId: faylRow ? faylRow.id : null, kirimId: kirimRow ? kirimRow.id : null });
+      });
+      try {
+        let data;
+        try {
+          data = await insertRowsChunked("ombor", omborRows.map((r) => toDbRow(OMBOR_DB_MAP, r)));
+        } catch (error) {
+          // "kirim_id" ustuni hali qo'shilmagan (migration_kirim_yaxshilash.sql
+          // ishga tushirilmagan) eski bazalarda ham import ishlashda davom
+          // etishi uchun, shu ustunsiz qayta urinamiz — mahsulot qatorlari
+          // baribir qo'shiladi, faqat hujjatga bog'lanish (kirim_id) bo'lmaydi.
+          if (isMissingColumnError(error) && extractMissingColumnName(error) === "kirim_id") {
+            data = await insertRowsChunked("ombor", omborRows.map((r) => {
+              const dbRow = toDbRow(OMBOR_DB_MAP, r);
+              delete dbRow.kirim_id;
+              return dbRow;
+            }));
+          } else {
+            throw error;
+          }
+        }
+        data.forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+        omborAdded = data.length;
+      } catch (error) {
+        console.error(error);
+        omborFailed = true;
+      }
+    }
+    if (omborAdded) updateNavBadges();
+
     saveStore();
     closeModal();
     renderInvoiceTable(type);
     let msg = `Import: ${added} ta qo'shildi, ${skipped} ta takror o'tkazib yuborildi`;
+    if (omborAdded) msg += `, ${omborAdded} ta ombor qatori qo'shildi`;
+    if (omborFailed) msg += ` (ombor qatorlarini yozishda xatolik)`;
     if (tafsilMatched || tafsilUnmatched) msg += `, ${tafsilMatched} ta mahsulot qatori kalkulyatsiya bilan bog'landi${tafsilUnmatched ? `, ${tafsilUnmatched} ta kalkulyatsiya qilinmagan` : ""}`;
     if (tafsilFailed) msg += ` (${tafsilFailed} ta mahsulot qatorini yozishda xatolik — baza migratsiyasi ishga tushirilmagan bo'lishi mumkin)`;
     toast(msg);
@@ -6094,7 +6488,7 @@ async function bootAfterAuth() {
   hideAuthGate();
   applyTheme();
   bindGlobalSearch();
-  document.getElementById("topbarNotifBtn").addEventListener("click", () => navigate("ishlabchiqarish"));
+  document.getElementById("topbarNotifBtn").addEventListener("click", openAttentionModal);
 
   await loadAvailableFirmalar();
   renderFirmaSwitcher();
