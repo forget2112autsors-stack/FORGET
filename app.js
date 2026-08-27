@@ -730,7 +730,10 @@ function computeTotals() {
   // "Asosiy vositalar" sahifasidagi ro'yxat asosida, "to" (davr oxiri) sanasiga
   // nisbatan hisoblangan qoldiq qiymatlar yig'indisi — endi qo'lda kiritilmaydi.
   const asosiyVositalar = STORE.asosiyVositalar.reduce((sum, a) => sum + asosiyVositaQoldiqQiymati(a, to), 0);
-  const tovarZaxira = toNum(s.f1TovarZaxira);
+  // "Ombor" sahifasidagi kirim/chiqim yozuvlari asosida, "to" (davr oxiri)
+  // sanasiga nisbatan hisoblangan tovar-moddiy zaxiralar qiymati — endi
+  // qo'lda kiritilmaydi.
+  const tovarZaxira = omborQoldiqQiymatiAsOf(to);
   const aktivJami = asosiyVositalar + tovarZaxira + debitorlik + pulMablaglari;
 
   const ustavKapitali = toNum(s.f1UstavKapitali);
@@ -1730,6 +1733,29 @@ function avgOmborNarx(nomi) {
   if (!totalMiqdor) return 0;
   const totalBaza = rows.reduce((a, r) => a + toNum(r.yetkazibBerishNarxi), 0);
   return totalBaza / totalMiqdor;
+}
+
+// Ombordagi joriy tovar-moddiy zaxiralar qiymati (QQSsiz) — "asOfDate"
+// sanasiga nisbatan (F1 balans uchun). Har bir nom bo'yicha shu sanagacha
+// bo'lgan kirim/chiqim miqdorlari asosida qoldiq va o'rtacha xarid narxi
+// hisoblanadi, so'ng qoldiq * o'rtacha narx yig'indisi qaytariladi.
+function omborQoldiqQiymatiAsOf(asOfDate) {
+  const rows = !asOfDate ? STORE.ombor : STORE.ombor.filter((r) => !r.sana || r.sana <= asOfDate);
+  const map = {};
+  rows.forEach((r) => {
+    if (!r.nomi) return;
+    if (!map[r.nomi]) map[r.nomi] = { kirimMiqdor: 0, kirimBaza: 0, chiqimMiqdor: 0 };
+    if (r.turi === "chiqim") map[r.nomi].chiqimMiqdor += toNum(r.miqdor);
+    else {
+      map[r.nomi].kirimMiqdor += toNum(r.miqdor);
+      map[r.nomi].kirimBaza += toNum(r.yetkazibBerishNarxi);
+    }
+  });
+  return Object.values(map).reduce((sum, x) => {
+    const qoldiq = x.kirimMiqdor - x.chiqimMiqdor;
+    if (qoldiq <= 0 || !x.kirimMiqdor) return sum;
+    return sum + qoldiq * (x.kirimBaza / x.kirimMiqdor);
+  }, 0);
 }
 
 // Ombor sahifasi uch kichik bo'limga (tab) bo'lingan: "Ombor kirimi" (xarid
@@ -4479,7 +4505,7 @@ function renderF1() {
     <div class="page-header">
       <div>
         <h1 class="page-title">F1 — Buxgalteriya balansi (qisqartirilgan)</h1>
-        <p class="page-desc">Asosiy ko'rsatkichlar avtomatik (bank, debitor/kreditor), qolganlari qo'lda kiritiladi.</p>
+        <p class="page-desc">Asosiy ko'rsatkichlar avtomatik (bank, debitor/kreditor, asosiy vositalar, tovar-moddiy zaxiralar), qolganlari qo'lda kiritiladi.</p>
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportF1">Excel'dan import</button>
@@ -4493,7 +4519,7 @@ function renderF1() {
       <div class="card">
         <div class="card-title">Aktiv</div>
         <div class="report-line"><span class="label">Asosiy vositalar <span class="faint">("Asosiy vositalar" sahifasidan)</span></span><span class="code"></span><span class="val">${fmtSum(t.asosiyVositalar)}</span></div>
-        <div class="report-line"><span class="label">Tovar-moddiy zaxiralar</span><span class="code"></span><input class="val editable" id="f1Tmz" value="${fmt(STORE.settings.f1TovarZaxira)}"></div>
+        <div class="report-line"><span class="label">Tovar-moddiy zaxiralar <span class="faint">("Ombor" sahifasidan)</span></span><span class="code"></span><span class="val">${fmtSum(t.tovarZaxira)}</span></div>
         <div class="report-line"><span class="label">Debitorlik qarzdorligi <span class="faint">(to'lanmagan chiqim f.)</span></span><span class="code"></span><span class="val">${fmtSum(t.debitorlik)}</span></div>
         <div class="report-line"><span class="label">Kassa</span><span class="code"></span><input class="val editable" id="f1Kassa" value="${fmt(STORE.settings.f1Kassa)}"></div>
         <div class="report-line"><span class="label">Hisob raqamidagi pul <span class="faint">(bank qoldig'i)</span></span><span class="code"></span><span class="val">${fmtSum(t.bankQoldiq)}</span></div>
@@ -4516,20 +4542,18 @@ function renderF1() {
         <span class="label">Aktiv − Passiv farqi</span><span class="code"></span>
         <span class="val ${Math.abs(diff) < 1 ? "" : "neg"}">${fmtSum(diff)}</span>
       </div>
-      <div class="note">${Math.abs(diff) < 1 ? "Balans teng — aktiv va passiv mos keladi." : "Farq bor: qo'lda kiritiladigan maydonlarni (asosiy vositalar, ustav kapitali, zaxiralar va h.k.) haqiqiy holatga moslang."}</div>
+      <div class="note">${Math.abs(diff) < 1 ? "Balans teng — aktiv va passiv mos keladi." : "Farq bor: qo'lda kiritiladigan maydonlarni (kassa, ustav kapitali, uzoq muddatli majburiyatlar va h.k.) haqiqiy holatga moslang."}</div>
       <button class="btn btn-primary" id="btnSaveF1" style="margin-top:10px;">Saqlash</button>
     </div>
   `;
 
   document.getElementById("btnSaveF1").addEventListener("click", () => {
     if (!requireDataReady()) return;
-    STORE.settings.f1TovarZaxira = toNum(document.getElementById("f1Tmz").value);
     STORE.settings.f1Kassa = toNum(document.getElementById("f1Kassa").value);
     STORE.settings.f1UstavKapitali = toNum(document.getElementById("f1Uk").value);
     STORE.settings.f1OldingiFoyda = toNum(document.getElementById("f1Of").value);
     STORE.settings.f1UzoqMajburiyat = toNum(document.getElementById("f1Um").value);
     saveSettingsToDb({
-      f1TovarZaxira: STORE.settings.f1TovarZaxira,
       f1Kassa: STORE.settings.f1Kassa,
       f1UstavKapitali: STORE.settings.f1UstavKapitali,
       f1OldingiFoyda: STORE.settings.f1OldingiFoyda,
@@ -4543,10 +4567,9 @@ function renderF1() {
   document.getElementById("btnImportF1").addEventListener("click", () => {
     openGenericImportModal(
       "F1 — Excel'dan import",
-      `Ilgari eksport qilingan F1 faylidan qo'lda kiritiladigan barcha ko'rsatkichlar (asosiy vositalar, zaxiralar, kassa, ustav kapitali va h.k.) o'qib olinadi.`,
+      `Ilgari eksport qilingan F1 faylidan qo'lda kiritiladigan barcha ko'rsatkichlar (kassa, ustav kapitali va h.k.) o'qib olinadi.`,
       ".xlsx,.xls",
       (file) => handleReportSettingsImport(file, {
-        "Tovar-moddiy zaxiralar": "f1TovarZaxira",
         "Kassa": "f1Kassa",
         "Ustav kapitali": "f1UstavKapitali",
         "O'tgan davr jamg'argan foydasi": "f1OldingiFoyda",
