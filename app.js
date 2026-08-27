@@ -125,6 +125,7 @@ const SETTINGS_DB_MAP = {
   companyName: "company_name", inn: "inn", address: "address",
   qqsStavka: "qqs_stavka", foydaStavka: "foyda_stavka", period: "period",
   davrXarajati: "davr_xarajati", moliyaviyXarajat: "moliyaviy_xarajat",
+  ishHaqiAvtoXarajat: "ish_haqi_avto_xarajat",
   boshqaDaromad: "boshqa_daromad", imtiyozlar: "imtiyozlar", tannarxManual: "tannarx_manual",
   bankOpeningBalance: "bank_opening_balance",
   f1AsosiyVositalar: "f1_asosiy_vositalar", f1TovarZaxira: "f1_tovar_zaxira", f1Kassa: "f1_kassa",
@@ -258,6 +259,11 @@ function defaultStore() {
       period: "",
       davrXarajati: 0,
       moliyaviyXarajat: 0,
+      // Yoqilsa, "Ish haqi" bo'limidagi hisoblangan ish beruvchi xarajati
+      // (ish haqi + ijtimoiy soliq) F2'dagi "Davr xarajatlari"ga avtomatik
+      // qo'shiladi — qarang: computeTotals. Standart FALSE — mavjud
+      // firmalarning F2 raqamlarini o'zgartirib qo'ymaslik uchun.
+      ishHaqiAvtoXarajat: false,
       boshqaDaromad: 0,
       imtiyozlar: 0,
       tannarxManual: null,
@@ -704,7 +710,14 @@ function computeTotals() {
   const revenue = chiqimBase;
   const tannarx = s.tannarxManual !== null && s.tannarxManual !== undefined && s.tannarxManual !== "" ? toNum(s.tannarxManual) : kalkulyatsiyaTannarx;
   const yalpiFoyda = revenue - tannarx;
-  const davrXarajati = toNum(s.davrXarajati);
+  // Ish haqi bo'limi (xodimlarga hisoblangan ish haqi + ijtimoiy soliq)
+  // standart holatda F2'ga kirmaydi — buxgalter buni ilgari alohida, qo'lda
+  // "Davr xarajatlari"ga qo'shishi kerak edi (yoki umuman unutib qo'yishi
+  // mumkin edi). Sozlamalardagi "ishHaqiAvtoXarajat" tumbler yoqilsa, shu
+  // joyning o'zida avtomatik qo'shiladi. Qarang: computeIshHaqiTotals,
+  // renderSettings.
+  const ishHaqiXarajati = s.ishHaqiAvtoXarajat ? computeIshHaqiTotals().ishBeruvchiXarajati : 0;
+  const davrXarajati = toNum(s.davrXarajati) + ishHaqiXarajati;
   const asosiyFaoliyatFoyda = yalpiFoyda - davrXarajati;
   const moliyaviyXarajat = toNum(s.moliyaviyXarajat);
   const soliqqachaFoyda = asosiyFaoliyatFoyda - moliyaviyXarajat;
@@ -747,7 +760,7 @@ function computeTotals() {
     chiqimBase, chiqimQQS, chiqimJami,
     bankKirim, bankChiqim, bankOpening, bankQoldiq,
     kreditorlik, debitorlik,
-    revenue, tannarx, kalkulyatsiyaTannarx, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, yalpiFoyda, davrXarajati, asosiyFaoliyatFoyda,
+    revenue, tannarx, kalkulyatsiyaTannarx, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, yalpiFoyda, davrXarajati, ishHaqiXarajati, asosiyFaoliyatFoyda,
     moliyaviyXarajat, soliqqachaFoyda, foydaSoligi, sofFoyda,
     jamiDaromad, chegiriladiXarajat, soliqqaTortiladiganFoyda, imtiyozlar, soliqBazasi, foydaStavka,
     qqsInput, qqsOutput, qqsToPay,
@@ -894,6 +907,11 @@ function computeGlobalSearchResults(query) {
   STORE.bank.forEach((r) => {
     if ((r.tavsif || "").toLowerCase().includes(q) || (r.kontragent || "").toLowerCase().includes(q) || (r.hujjatRaqami || "").toLowerCase().includes(q)) {
       results.push({ type: "Bank", label: `${r.kontragent || r.tavsif || "—"}`, page: "bank" });
+    }
+  });
+  STORE.ishHaqi.forEach((r) => {
+    if ((r.fio || "").toLowerCase().includes(q) || (r.lavozimi || "").toLowerCase().includes(q) || (r.pinfl || "").toLowerCase().includes(q)) {
+      results.push({ type: "Ish haqi", label: `${r.fio || "—"}${r.lavozimi ? " · " + r.lavozimi : ""}`, page: "ishhaqi" });
     }
   });
 
@@ -1147,6 +1165,7 @@ function renderDashboard() {
   const t = computeTotals();
   const trend = computeMonthlyTrend(6);
   const uncostedCount = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
+  const ihq = computeIshHaqiTotals();
   const main = document.getElementById("main");
   main.innerHTML = `
     <div class="page-header">
@@ -1186,7 +1205,7 @@ function renderDashboard() {
       </div>
     </div>
 
-    <div class="grid grid-3 section">
+    <div class="grid grid-4 section">
       <div class="card stat-card">
         <div class="stat-label">QQS (byudjetga)</div>
         <div class="stat-value">${fmtSum(t.qqsToPay)}</div>
@@ -1201,6 +1220,11 @@ function renderDashboard() {
         <div class="stat-label">Debitor / Kreditor</div>
         <div class="stat-value" style="font-size:16px">${fmtSum(t.debitorlik)} / ${fmtSum(t.kreditorlik)}</div>
         <div class="stat-sub">Mijozlar qarzi / bizning qarzimiz</div>
+      </div>
+      <div class="card stat-card" data-nav="ishhaqi" style="cursor:pointer;">
+        <div class="stat-label">Ish haqi (ish beruvchi xarajati)</div>
+        <div class="stat-value">${fmtSum(ihq.ishBeruvchiXarajati)}</div>
+        <div class="stat-sub">${ihq.count} ta xodim yozuvi${t.ishHaqiXarajati > 0 ? " · F2'ga avtomatik qo'shilyapti" : ""}</div>
       </div>
     </div>
 
@@ -1231,6 +1255,8 @@ function renderDashboard() {
           <b>Qanday ishlaydi:</b> Faktura kirim/chiqim va Bank bo'limlariga kiritilgan ma'lumotlar avtomatik ravishda
           <b>QQS</b>, <b>F2 (moliyaviy natija)</b>, <b>Foyda solig'i</b> va <b>F1 (balans)</b> hisobotlariga integratsiya bo'ladi —
           alohida qayta kiritish shart emas. Faqat har bir hujjatning holati (status) "Отказ/Bekor qilingan" bo'lmasa, hisobga olinadi.
+          <b>Ish haqi</b> bo'limi doim <b>Ish haqi hisoboti</b>ga (NDFL/ijtimoiy soliq) avtomatik integratsiya bo'ladi; <b>F2</b>'ga esa
+          faqat "Sozlamalar"da yoqilsa qo'shiladi (standart holatda o'chirilgan — mavjud hisob-kitoblarni o'zgartirib qo'ymaslik uchun).
         </div>
       </div>
     </div>
@@ -3947,9 +3973,36 @@ function computeIshHaqiTotals() {
   return totals;
 }
 
+// Faktura kirim/chiqimdagi "Takrorlar" filtri bilan bir xil naqsh (qarang:
+// invoiceDuplicateKey, findDuplicateInvoiceIds) — PINFL+sana+F.I.O+summa
+// bo'yicha bir xil yozuvlarni KO'RSATISH uchun, hech narsani avtomat
+// o'chirmaydi. Import vaqtidagi dedup tekshiruvi bilan bir xil mezon.
+function ishHaqiDuplicateKey(r) {
+  const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return `${norm(r.pinfl)}|${r.sana || ""}|${norm(r.fio)}|${Math.round(toNum(r.oyliqSumma))}`;
+}
+
+function findDuplicateIshHaqiIds() {
+  const groups = new Map();
+  STORE.ishHaqi.forEach((r) => {
+    if (!r.fio) return;
+    const key = ishHaqiDuplicateKey(r);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+  const ids = new Set();
+  let groupCount = 0;
+  groups.forEach((list) => { if (list.length > 1) { groupCount++; list.forEach((r) => ids.add(r.id)); } });
+  return { ids, groupCount };
+}
+
+let ISHHAQI_DUP_FILTER = false;
+
 function renderIshHaqi() {
   const filtered = getFilteredRows(STORE.ishHaqi);
-  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const { ids: dupIds, groupCount: dupGroupCount } = findDuplicateIshHaqiIds();
+  const visibleRows = ISHHAQI_DUP_FILTER ? filtered.filter((r) => dupIds.has(r.id)) : filtered;
+  const rows = visibleRows.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
   const main = document.getElementById("main");
   const t = computeIshHaqiTotals();
 
@@ -3957,7 +4010,7 @@ function renderIshHaqi() {
     <div class="page-header">
       <div>
         <h1 class="page-title">Ish haqi</h1>
-        <p class="page-desc">Xodimlarga hisoblangan ish haqi — "Ish haqi hisoboti"ga avtomatik integratsiya bo'ladi, alohida qayta kiritish shart emas.</p>
+        <p class="page-desc">Xodimlarga hisoblangan ish haqi — "Ish haqi hisoboti"ga (NDFL/ijtimoiy soliq) doim avtomatik integratsiya bo'ladi. F2 (moliyaviy natija)ga qo'shish ixtiyoriy — "Sozlamalar"da yoqing.</p>
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportIshHaqi">Excel'dan import</button>
@@ -3974,8 +4027,11 @@ function renderIshHaqi() {
 
     <div class="toolbar">
       <input class="search-input" id="searchBox" placeholder="Qidirish: F.I.O, lavozim, PINFL...">
+      <button class="btn ${ISHHAQI_DUP_FILTER ? "btn-primary" : ""}" id="btnDupToggle" title="PINFL+sana+F.I.O+summa bo'yicha bir xil yozuvlarni ko'rsatadi">
+        <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;vertical-align:-2px;margin-right:3px;"><use href="#i-copy"/></svg>Takrorlar${dupGroupCount ? ` (${dupGroupCount})` : ""}
+      </button>
       <div class="spacer"></div>
-      <span class="faint">${rows.length} ta yozuv</span>
+      <span class="faint">${rows.length} ta yozuv${ISHHAQI_DUP_FILTER ? " (faqat takrorlar)" : ""}</span>
     </div>
 
     <div class="table-wrap">
@@ -3998,11 +4054,11 @@ function renderIshHaqi() {
           </tr>
         </thead>
         <tbody id="ishHaqiBody">
-          ${rows.length ? rows.map(ishHaqiRowHtml).join("") : ""}
+          ${rows.length ? rows.map((r) => ishHaqiRowHtml(r, dupIds.has(r.id))).join("") : ""}
         </tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg><div class="t">Xodimlar yo'q</div><div class="d">"+ Xodim yozuvi qo'shish" tugmasi orqali har oy uchun har bir xodimning hisoblangan ish haqini kiriting.</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-users"/></svg><div class="t">${ISHHAQI_DUP_FILTER ? "Takrorlangan yozuv topilmadi" : "Xodimlar yo'q"}</div><div class="d">${ISHHAQI_DUP_FILTER ? "PINFL+sana+F.I.O+summa bo'yicha bir xil yozuv yo'q." : `"+ Xodim yozuvi qo'shish" tugmasi orqali har oy uchun har bir xodimning hisoblangan ish haqini kiriting.`}</div></div>` : ""}
     <div class="note">Ijtimoiy soliq (${fmt(STORE.settings.ijtimoiySoliqStavka)}%) — ish beruvchi xarajati, ish haqidan ushlanmaydi. NDFL (${fmt(STORE.settings.ndflStavka)}%) va INPS (${fmt(STORE.settings.inpsStavka, 1)}%) — xodim ish haqidan ushlab qolinadi. Stavkalarni "Sozlamalar" bo'limida o'zgartirish mumkin.</div>
   `;
 
@@ -4010,6 +4066,10 @@ function renderIshHaqi() {
   document.getElementById("searchBox").addEventListener("input", (e) => filterIshHaqiRows(e.target.value));
   document.getElementById("btnExportIshHaqi").addEventListener("click", exportIshHaqiXlsx);
   document.getElementById("btnImportIshHaqi").addEventListener("click", openIshHaqiImportModal);
+  document.getElementById("btnDupToggle").addEventListener("click", () => {
+    ISHHAQI_DUP_FILTER = !ISHHAQI_DUP_FILTER;
+    renderIshHaqi();
+  });
   bindIshHaqiRowEvents();
 }
 
@@ -4094,10 +4154,10 @@ async function handleIshHaqiImport(file) {
   }
 }
 
-function ishHaqiRowHtml(r) {
+function ishHaqiRowHtml(r, isDup) {
   const c = computeIshHaqiRow(r, STORE.settings);
   return `
-    <tr data-id="${r.id}">
+    <tr data-id="${r.id}" style="${isDup ? "background:var(--warn-soft);" : ""}" title="${isDup ? "Diqqat: bu yozuv PINFL+sana+F.I.O+summa bo'yicha boshqa yozuv(lar) bilan bir xil bo'lishi mumkin" : ""}">
       <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
       <td><input class="cell-input" data-f="fio" value="${escapeHtml(r.fio || "")}" style="min-width:170px"></td>
       <td><input class="cell-input" data-f="lavozimi" value="${escapeHtml(r.lavozimi || "")}" style="min-width:120px"></td>
@@ -4342,6 +4402,7 @@ function renderF2() {
         ${reportLine("020", "Sotilgan mahsulot tannarxi", t.tannarx, { code: "020" })}
         ${reportLine("030", "Yalpi foyda", t.yalpiFoyda, { code: "030", total: true })}
         ${reportLine("040", "Davr xarajatlari", t.davrXarajati, { code: "040" })}
+        ${t.ishHaqiXarajati > 0 ? `<div class="report-line" style="opacity:.7;font-size:12px;"><span class="label">— shundan, Ish haqi bo'limidan avtomatik</span><span class="code"></span><span class="val">${fmtSum(t.ishHaqiXarajati)}</span></div>` : ""}
         ${reportLine("100", "Asosiy faoliyatdan foyda", t.asosiyFaoliyatFoyda, { code: "100", total: true })}
 
         <div class="report-block-title">Moliyaviy faoliyat</div>
@@ -5782,7 +5843,11 @@ function renderSettings() {
         <div class="card-title">Soliq stavkalari</div>
         <div class="field"><label>QQS stavkasi (%)</label><input id="sQqs" value="${fmt(s.qqsStavka)}"></div>
         <div class="field"><label>Foyda solig'i stavkasi (%)</label><input id="sFoyda" value="${fmt(s.foydaStavka)}"></div>
-        <div class="field"><label>Davr xarajatlari (F2, qo'lda)</label><input id="sDavr" value="${fmt(s.davrXarajati)}"></div>
+        <div class="field"><label>Davr xarajatlari (F2, qo'lda — ish haqidan tashqari boshqa xarajatlar)</label><input id="sDavr" value="${fmt(s.davrXarajati)}"></div>
+        <div class="field" style="flex-direction:row;align-items:center;gap:8px;">
+          <input type="checkbox" id="sIshHaqiAvto" style="width:auto;flex-shrink:0;" ${s.ishHaqiAvtoXarajat ? "checked" : ""}>
+          <label for="sIshHaqiAvto" style="margin:0;">Ish haqi bo'limidan hisoblangan xarajatni (ish haqi + ijtimoiy soliq) yuqoridagi "Davr xarajatlari"ga avtomatik qo'shish</label>
+        </div>
         <div class="field"><label>Moliyaviy xarajatlar (F2, qo'lda)</label><input id="sMoliya" value="${fmt(s.moliyaviyXarajat)}"></div>
         <div class="field">
           <label>Tannarxni qo'lda belgilash (bo'sh = avtomatik, kirim fakturalardan)</label>
@@ -5823,6 +5888,7 @@ function renderSettings() {
     s.qqsStavka = toNum(document.getElementById("sQqs").value);
     s.foydaStavka = toNum(document.getElementById("sFoyda").value);
     s.davrXarajati = toNum(document.getElementById("sDavr").value);
+    s.ishHaqiAvtoXarajat = document.getElementById("sIshHaqiAvto").checked;
     s.moliyaviyXarajat = toNum(document.getElementById("sMoliya").value);
     const tannarxVal = document.getElementById("sTannarx").value.trim();
     s.tannarxManual = tannarxVal === "" ? null : toNum(tannarxVal);
@@ -5832,6 +5898,7 @@ function renderSettings() {
     saveSettingsToDb({
       companyName: s.companyName, inn: s.inn, address: s.address, period: s.period, rahbar: s.rahbar,
       qqsStavka: s.qqsStavka, foydaStavka: s.foydaStavka, davrXarajati: s.davrXarajati,
+      ishHaqiAvtoXarajat: s.ishHaqiAvtoXarajat,
       moliyaviyXarajat: s.moliyaviyXarajat, tannarxManual: s.tannarxManual,
       ijtimoiySoliqStavka: s.ijtimoiySoliqStavka, ndflStavka: s.ndflStavka, inpsStavka: s.inpsStavka
     });
