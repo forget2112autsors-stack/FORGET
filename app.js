@@ -1855,7 +1855,7 @@ function renderOmborKirim() {
   bindOmborTabBar(main);
   document.getElementById("btnAddRow").addEventListener("click", () => addOmborRow());
   document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
-  document.getElementById("btnUnifyNomi").addEventListener("click", () => openOmborMergeNomiModal());
+  document.getElementById("btnUnifyNomi").addEventListener("click", () => openOmborMergeNomiModal("kirim"));
   document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
 
   bindOmborRowEvents();
@@ -1894,6 +1894,7 @@ function renderOmborChiqim() {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportChiqim">Excel'dan import</button>
+        <button class="btn" id="btnUnifyNomiChiqim">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddChiqim">+ Chiqim qo'shish</button>
       </div>
     </div>
@@ -1925,6 +1926,7 @@ function renderOmborChiqim() {
   bindOmborTabBar(main);
   document.getElementById("btnAddChiqim").addEventListener("click", () => openOmborChiqimModal());
   document.getElementById("btnImportChiqim").addEventListener("click", () => openOmborChiqimImportModal());
+  document.getElementById("btnUnifyNomiChiqim").addEventListener("click", () => openOmborMergeNomiModal("chiqim"));
   const body = document.getElementById("omborChiqimBody");
   if (body) body.addEventListener("click", (e) => {
     const delId = e.target.dataset.delChiqim;
@@ -2301,9 +2303,17 @@ async function handleOmborImport(file) {
 // yozadi — "Birlashtirish" bosilganda belgilangan nomdagi barcha yozuvlarning
 // "nomi" maydoni shu yangi nomga o'zgaradi (miqdorlar/qatorlar alohida qoladi,
 // faqat nom bir xillashtiriladi).
-function omborUniqueNomiList() {
+// "turi" — "kirim" yoki "chiqim": faqat shu turdagi ombor qatorlari hisobga
+// olinadi, shunda "Ombor kirimi"da qilingan birlashtirish faqat kirim
+// qatorlariga, "Ombor chiqimi"da qilingani esa faqat chiqim qatorlariga
+// tegishli bo'ladi (ikkisi bir-biriga aralashmaydi).
+function omborRowsByTuri(turi) {
+  return STORE.ombor.filter((r) => (turi === "chiqim" ? r.turi === "chiqim" : r.turi !== "chiqim"));
+}
+
+function omborUniqueNomiList(turi) {
   const map = new Map();
-  STORE.ombor.forEach((r) => {
+  omborRowsByTuri(turi).forEach((r) => {
     if (!r.nomi) return;
     map.set(r.nomi, (map.get(r.nomi) || 0) + 1);
   });
@@ -2312,12 +2322,12 @@ function omborUniqueNomiList() {
     .sort((a, b) => a.nomi.localeCompare(b.nomi, "ru"));
 }
 
-function openOmborMergeNomiModal() {
-  const list = omborUniqueNomiList();
+function openOmborMergeNomiModal(turi) {
+  const list = omborUniqueNomiList(turi);
   if (list.length < 2) { toast("Birlashtirish uchun ombordagi nomlar yetarli emas"); return; }
   openModal(`
     <h3>Nomlarni birlashtirish</h3>
-    <p class="modal-sub">Ombordagi nomlar ro'yxatidan birlashtiriladiganlarini belgilang, so'ng yangi nomni yozing — belgilangan nomdagi barcha yozuvlar shu yangi nomga o'tkaziladi:</p>
+    <p class="modal-sub">${turi === "chiqim" ? "Ombor chiqimi" : "Ombor kirimi"} ro'yxatidagi nomlardan birlashtiriladiganlarini belgilang, so'ng yangi nomni yozing — belgilangan nomdagi barcha yozuvlar shu yangi nomga o'tkaziladi:</p>
     <div class="merge-nomi-list">
       ${list.map((x) => `
         <label class="merge-nomi-item">
@@ -2339,7 +2349,7 @@ function openOmborMergeNomiModal() {
     const newNomi = document.getElementById("mMergeNewNomi").value.trim();
     if (selected.length < 2) { toast("Birlashtirish uchun kamida 2 ta nom belgilang", "err"); return; }
     if (!newNomi) { toast("Yangi nomni kiriting", "err"); return; }
-    const targets = STORE.ombor.filter((r) => selected.includes(r.nomi));
+    const targets = omborRowsByTuri(turi).filter((r) => selected.includes(r.nomi));
     targets.forEach((r) => {
       r.nomi = newNomi;
       pushFieldsUpdate("ombor", r.id, { nomi: r.nomi });
