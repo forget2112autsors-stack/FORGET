@@ -2510,6 +2510,39 @@ function resolveKontragentByNomi(nomi) {
   return STORE.kontragentlar.find((k) => String(k.nomi || "").trim().toLowerCase() === q) || null;
 }
 
+// Bank ko'chirmasida ba'zi operatsiya turlari uchun kontragent INN'i
+// "000000000" kabi PLACEHOLDER (haqiqiy emas) bo'lib keladi. Bunday INN'ni
+// bo'sh bilan bir xil deb hisoblaymiz — "hammasi nol" yoki "bitta raqam
+// takrorlangan" (masalan 111111111) qatorlari. Qarang: resolveRealInnByNomi.
+function isPlaceholderInn(inn) {
+  const s = String(inn || "").trim();
+  if (!s) return true;
+  return /^0+$/.test(s) || /^(\d)\1+$/.test(s);
+}
+
+function normalizeKontragentNomi(s) {
+  return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// Berilgan kontragent nomi uchun HAQIQIY (placeholder bo'lmagan) INN'ni
+// quyidagi manbalardan, shu tartibda birinchi topilganini qaytaradi:
+// 1) joriy import partiyasidagi boshqa qatorlar (masalan bitta faylda bir
+//    xil kontragentning bir operatsiyasida INN bor, boshqasida yo'q);
+// 2) bazadagi mavjud Bank yozuvlari; 3) Kontragentlar spravochnigi.
+// Hech qayerda topilmasa null — soxta INN o'ylab topilmaydi, chaqiruvchi
+// (handleBankImport) buni foydalanuvchidan so'raydi.
+function resolveRealInnByNomi(nomi, batchCandidates) {
+  const key = normalizeKontragentNomi(nomi);
+  if (!key) return null;
+  const inBatch = (batchCandidates || []).find((c) => normalizeKontragentNomi(c.kontragent) === key && !isPlaceholderInn(c.kontragentInn));
+  if (inBatch) return String(inBatch.kontragentInn).trim();
+  const inBank = STORE.bank.find((b) => normalizeKontragentNomi(b.kontragent) === key && !isPlaceholderInn(b.kontragentInn));
+  if (inBank) return String(inBank.kontragentInn).trim();
+  const kontragent = STORE.kontragentlar.find((k) => normalizeKontragentNomi(k.nomi) === key && !isPlaceholderInn(k.inn));
+  if (kontragent) return String(kontragent.inn).trim();
+  return null;
+}
+
 // Faktura kirim, Faktura chiqim va Bank harakati bo'limlarida kontragent nomi/INN
 // kiritilganda (qo'lda yozilganda ham, fayldan import qilinganda ham) Kontragentlar
 // spravochnigini avtomatik to'ldiradi: agar shu INN (yoki, INN bo'lmasa, shu nom)
@@ -6416,6 +6449,26 @@ async function handleBankImport(file) {
       await saveSettingsToDb({ bankOpeningBalance: newOpening });
     }
 
+    // Placeholder INN'larni ("000000000" va h.k.) xuddi shu kontragent
+    // nomidagi HAQIQIY INN bilan avtomat to'ldiramiz (qarang: isPlaceholderInn,
+    // resolveRealInnByNomi). Bu shunchaki kosmetika emas — placeholder INN
+    // bazada saqlanib qolsa, recomputePaymentStatusForType uni "haqiqiy INN"
+    // sifatida guruhlab, turli (aslida bir-biriga aloqasi yo'q) kontragentlarni
+    // bitta soxta guruhga qo'shib, to'lov moslashtirishni buzishi mumkin edi.
+    // Hech qayerda topilmasa — bo'sh qoldiramiz (soxta INN o'ylab topmaymiz)
+    // va importdan keyin foydalanuvchidan so'raymiz (openBankInnPromptModal).
+    const unresolvedNomi = new Set();
+    candidates.forEach((c) => {
+      if (!isPlaceholderInn(c.kontragentInn)) return;
+      const real = resolveRealInnByNomi(c.kontragent, candidates);
+      if (real) {
+        c.kontragentInn = real;
+      } else {
+        c.kontragentInn = "";
+        if (c.kontragent) unresolvedNomi.add(c.kontragent);
+      }
+    });
+
     if (candidates.length) {
       const seenKontragents = new Set();
       for (const c of candidates) {
@@ -6446,10 +6499,66 @@ async function handleBankImport(file) {
     closeModal();
     renderBank();
     toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}`);
+    if (unresolvedNomi.size) openBankInnPromptModal([...unresolvedNomi]);
   } catch (err) {
     console.error(err);
     toast("Faylni o'qishda xatolik", "err");
   }
+}
+
+// Import paytida placeholder INN'i xuddi shu nomdagi boshqa qatordan/mavjud
+// ma'lumotdan topilmagan kontragentlar uchun — foydalanuvchidan qo'lda INN
+// so'raydi (qarang: handleBankImport). Kiritilgan INN shu nomdagi BARCHA
+// (yangi import qilingan va avvaldan mavjud, hali placeholder/bo'sh INN'li)
+// Bank yozuvlariga, hamda Kontragentlar spravochnigiga qo'llaniladi — shunda
+// keyingi importlar ham avtomat moslashadi.
+function openBankInnPromptModal(names) {
+  openModal(`
+    <h3>Ba'zi kontragentlar uchun INN aniqlanmadi</h3>
+    <p class="modal-sub">Bank ko'chirmasida quyidagi kontragentlarning INN'i noma'lum (masalan "000000000") edi va boshqa hech qanday yozuvda haqiqiy INN topilmadi. Xohlasangiz shu yerda kiriting — barcha tegishli bank yozuvlariga va Kontragentlar spravochnigiga qo'llaniladi. Bo'sh qoldirsangiz, keyinroq jadvalning o'zida qo'lda to'ldirishingiz mumkin.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Kontragent</th><th>INN</th></tr></thead>
+        <tbody>
+          ${names.map((n, i) => `
+            <tr>
+              <td>${escapeHtml(n)}</td>
+              <td><input class="cell-input" data-inn-input="${i}" placeholder="INN kiriting"></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Keyinroq</button>
+      <button class="btn btn-primary" id="mSave">Saqlash</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mSave").addEventListener("click", async () => {
+    const inputs = document.querySelectorAll("[data-inn-input]");
+    const pairs = [];
+    inputs.forEach((inp, i) => {
+      const inn = inp.value.trim();
+      if (inn) pairs.push({ nomi: names[i], inn });
+    });
+    if (!pairs.length) { closeModal(); return; }
+    closeModal();
+    let updated = 0;
+    for (const { nomi, inn } of pairs) {
+      const key = normalizeKontragentNomi(nomi);
+      const rows = STORE.bank.filter((b) => normalizeKontragentNomi(b.kontragent) === key && isPlaceholderInn(b.kontragentInn));
+      for (const row of rows) {
+        row.kontragentInn = inn;
+        pushFieldsUpdate("bank", row.id, { kontragentInn: inn });
+        updated++;
+      }
+      await ensureKontragentAutoAdded(inn, nomi);
+    }
+    saveStore();
+    renderBank();
+    toast(`${updated} ta bank yozuviga INN qo'llanildi`);
+  });
 }
 
 /* --------------------------------- theme --------------------------------- */
