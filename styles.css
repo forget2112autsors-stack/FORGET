@@ -402,6 +402,7 @@ tfoot td{
 .cell-input:hover{border-color:var(--border);}
 .cell-input:focus{outline:none; border-color:var(--accent); background:var(--bg-elevated);}
 .cell-input.num{text-align:right; font-variant-numeric:tabular-nums; font-family:var(--font-mono);}
+.cell-input.cell-invalid{border-color:var(--danger); background:var(--danger-soft);}
 
 .row-actions{display:flex; gap:4px;}
 .icon-btn{

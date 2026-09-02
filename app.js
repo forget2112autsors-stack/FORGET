@@ -250,6 +250,104 @@ function guardSettingsPartial(partial) {
   return false;
 }
 
+/* --------- Umumiy maydon validatsiyasi (butun ilova bo'ylab) --------- */
+// Bitta qiymatni turi bo'yicha tekshiradi. -> { ok, msg, warn }
+// warn=true bo'lsa: xato emas, faqat ogohlantirish (saqlashni bloklamaydi).
+function validateField(kind, value) {
+  const raw = value === undefined || value === null ? "" : String(value).trim();
+  switch (kind) {
+    case "inn":
+      if (!raw) return { ok: true };
+      return /^\d{9}$/.test(raw) ? { ok: true } : { ok: false, msg: "INN 9 ta raqamdan iborat bo'lishi kerak" };
+    case "pinfl":
+      if (!raw) return { ok: true };
+      return /^\d{14}$/.test(raw) ? { ok: true } : { ok: false, msg: "PINFL 14 ta raqamdan iborat bo'lishi kerak" };
+    case "amount": {
+      if (raw === "") return { ok: true };
+      if (!/^-?[\d\s.,]+$/.test(raw)) return { ok: false, msg: "Faqat son kiriting" };
+      const n = toNum(value);
+      if (!Number.isFinite(n)) return { ok: false, msg: "Son kiriting" };
+      if (n < 0) return { ok: false, msg: "Manfiy bo'lmagan son bo'lishi kerak" };
+      return { ok: true };
+    }
+    case "percent": {
+      if (raw === "") return { ok: true };
+      if (!/^-?[\d\s.,]+$/.test(raw)) return { ok: false, msg: "Faqat son kiriting" };
+      const n = toNum(value);
+      if (!Number.isFinite(n) || n < 0 || n > 100) return { ok: false, msg: "0 dan 100 gacha bo'lishi kerak" };
+      return { ok: true };
+    }
+    case "sana": {
+      if (!raw) return { ok: true };
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(raw) || isNaN(Date.parse(raw))) return { ok: false, msg: "Sana noto'g'ri (YYYY-MM-DD)" };
+      const { filterFrom, filterTo } = STORE.settings;
+      if ((filterFrom && raw < filterFrom) || (filterTo && raw > filterTo)) {
+        return { ok: true, warn: true, msg: "Sana tanlangan davr oralig'idan tashqarida" };
+      }
+      return { ok: true };
+    }
+    default:
+      return { ok: true };
+  }
+}
+
+// Modal/forma maydoniga (`.field > input`) xato/ogohlantirish belgisini qo'yadi
+// yoki tozalaydi (msg bo'sh bo'lsa).
+function markFieldError(inputEl, msg, isWarn) {
+  if (!inputEl) return;
+  const field = inputEl.closest(".field") || inputEl.parentElement;
+  if (!field) return;
+  field.classList.remove("invalid", "warned");
+  field.querySelectorAll(".field-error").forEach((n) => n.remove());
+  if (!msg) return;
+  field.classList.add(isWarn ? "warned" : "invalid");
+  const d = document.createElement("div");
+  d.className = "field-error" + (isWarn ? " warn" : "");
+  d.textContent = msg;
+  field.appendChild(d);
+}
+
+// Jadval katagi (`input.cell-input`) uchun: xato bo'lsa qizil belgilaydi,
+// toast chiqaradi, qiymatni prevValue'ga qaytaradi va false qaytaradi
+// (chaqiruvchi bazaga yozmasligi kerak). Ogohlantirish bloklamaydi.
+function guardCell(inputEl, kind, prevValue) {
+  const res = validateField(kind, inputEl.value);
+  if (res.ok && !res.warn) { inputEl.classList.remove("cell-invalid"); return true; }
+  if (res.warn) {
+    inputEl.classList.remove("cell-invalid");
+    toast(res.msg, "err");
+    return true;
+  }
+  inputEl.classList.add("cell-invalid");
+  toast(res.msg, "err");
+  if (prevValue !== undefined) inputEl.value = prevValue;
+  return false;
+}
+
+// Jadval katagi `data-f` maydon nomi -> validateField turi. Xaritada bo'lmagan
+// maydon (matn: nomi, lavozimi, tavsif, ...) tekshirilmaydi.
+const CELL_VALIDATION_KIND = {
+  // faktura kirim/chiqim
+  summaQQSsiz: "amount", qqsSumma: "amount", qqsStavka: "percent", jamiSumma: "amount",
+  kontragentInn: "inn", sana: "sana",
+  // ish haqi
+  oyliqSumma: "amount", imtiyozSumma: "amount", pinfl: "pinfl",
+  // bank
+  kirim: "amount", chiqim: "amount"
+};
+
+// Katak `change` ishlovchisi boshida chaqiriladi: tahrirlanган maydon turi bo'yicha
+// tekshiriladi. Xato bo'lsa katakни qizil qiladi, oldingi qiymatni qaytaradi (row'dan)
+// va false qaytaradi — chaqiruvchi shu yerda return qilishi kerak.
+function guardRowCell(inputEl, field, row) {
+  const kind = CELL_VALIDATION_KIND[field];
+  if (!kind) return true;
+  let prev;
+  if (kind === "inn" || kind === "pinfl" || kind === "sana") prev = row[field] == null ? "" : String(row[field]);
+  else prev = fmt(row[field]);
+  return guardCell(inputEl, kind, prev);
+}
+
 // Sozlama o'zgarishini YAGONA yo'l orqali qo'llaydi: STORE'ni yangilaydi, bazaga
 // yozadi, keshni saqlaydi va (rerender=true bo'lsa) joriy sahifani qayta chizadi —
 // shu orqali ochiq turgan hisobot darhol yangi qiymat bilan qayta hisoblanadi.
@@ -1590,6 +1688,7 @@ function bindInvoiceRowEvents(type) {
     if (!row) return;
     const field = e.target.dataset.f;
     if (!field) return;
+    if (field !== "tolandi" && !guardRowCell(e.target, field, row)) return;
     if (field === "tolandi") {
       row.tolandi = e.target.checked;
       pushFieldsUpdate(type, id, { tolandi: row.tolandi });
@@ -2901,11 +3000,19 @@ function openKontragentModal(existingId) {
 }
 
 async function saveKontragentFromModal(existingId) {
-  const nomi = document.getElementById("kNomi").value.trim();
-  if (!nomi) { toast("Kontragent nomini kiriting", "err"); return; }
+  const nomiEl = document.getElementById("kNomi");
+  const innEl = document.getElementById("kInn");
+  const qarzEl = document.getElementById("kBoshlangichQarz");
+  const nomi = nomiEl.value.trim();
+  markFieldError(nomiEl, ""); markFieldError(innEl, ""); markFieldError(qarzEl, "");
+  if (!nomi) { markFieldError(nomiEl, "Kontragent nomini kiriting"); toast("Kontragent nomini kiriting", "err"); return; }
+  const innCheck = validateField("inn", innEl.value);
+  if (!innCheck.ok) { markFieldError(innEl, innCheck.msg); toast(innCheck.msg, "err"); return; }
+  const qarzRaw = qarzEl.value.trim();
+  if (qarzRaw && !Number.isFinite(toNum(qarzRaw))) { markFieldError(qarzEl, "Son kiriting"); toast("Boshlang'ich qarz — son bo'lishi kerak", "err"); return; }
   const payload = {
     nomi,
-    inn: document.getElementById("kInn").value.trim(),
+    inn: innEl.value.trim(),
     turi: document.getElementById("kTuri").value,
     telefon: document.getElementById("kTelefon").value.trim(),
     manzil: document.getElementById("kManzil").value.trim(),
@@ -3986,6 +4093,7 @@ function bindBankRowEvents() {
     if (!row) return;
     const field = e.target.dataset.f;
     if (!field) return;
+    if (!guardRowCell(e.target, field, row)) return;
     row[field] = field === "kirim" || field === "chiqim" ? toNum(e.target.value) : e.target.value;
     pushFieldsUpdate("bank", row.id, { [field]: row[field] });
     saveStore();
@@ -4195,6 +4303,7 @@ async function handleIshHaqiImport(file) {
 
     const candidates = [];
     let skipped = 0;
+    let invalid = 0;
     for (let i = start; i < rows.length; i++) {
       const row = rows[i];
       if (!row.length || row.every((c) => c === "")) continue;
@@ -4207,6 +4316,7 @@ async function handleIshHaqiImport(file) {
       const oyliqSumma = toNum(row[6]);
       const imtiyozSumma = toNum(row[7]);
       if (!fio && !oyliqSumma) continue;
+      if ((pinfl && !/^\d{14}$/.test(pinfl)) || oyliqSumma < 0 || imtiyozSumma < 0) { invalid++; continue; }
 
       const dup = STORE.ishHaqi.some((r) => r.pinfl === pinfl && r.sana === sana && r.fio === fio && Math.abs(toNum(r.oyliqSumma) - oyliqSumma) < 1);
       if (dup) { skipped++; continue; }
@@ -4232,7 +4342,7 @@ async function handleIshHaqiImport(file) {
     saveStore();
     closeModal();
     renderIshHaqi();
-    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}`);
+    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror` : ""}${invalid ? `, ${invalid} ta noto'g'ri (PINFL/summa) o'tkazib yuborildi` : ""}`);
   } catch (err) {
     console.error(err);
     toast("Faylni o'qishda xatolik", "err");
@@ -4301,6 +4411,7 @@ function bindIshHaqiRowEvents() {
     if (!row) return;
     const field = e.target.dataset.f;
     if (!field) return;
+    if (!guardRowCell(e.target, field, row)) return;
     row[field] = field === "oyliqSumma" || field === "imtiyozSumma" ? toNum(e.target.value) : e.target.value;
     pushFieldsUpdate("ishHaqi", row.id, { [field]: row[field] });
     saveStore();
