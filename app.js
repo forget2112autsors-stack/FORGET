@@ -1058,9 +1058,12 @@ function computeAttentionSummary() {
   const innsiz = ["kirim", "chiqim"].reduce((a, type) =>
     a + STORE[type].filter((r) => isValidStatus(r.status) && !(r.kontragentInn && String(r.kontragentInn).trim())).length, 0);
   const takrorlar = ["kirim", "chiqim"].reduce((a, type) => a + findDuplicateInvoiceIds(type).groupCount, 0);
+  const yaqinlashayotganKirim = computeUpcomingKreditorlik().length;
+  const yaqinlashayotganChiqim = computeUpcomingDebitorlik().length;
   return {
     kalkulyatsiyasiz, muddatiOtganKirim, muddatiOtganChiqim, innsiz, takrorlar,
-    total: kalkulyatsiyasiz + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar
+    yaqinlashayotganKirim, yaqinlashayotganChiqim,
+    total: kalkulyatsiyasiz + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar + yaqinlashayotganKirim + yaqinlashayotganChiqim
   };
 }
 
@@ -1082,6 +1085,8 @@ function openAttentionModal() {
     { count: s.kalkulyatsiyasiz, label: "Kalkulyatsiya bilan bog'lanmagan sotuv qatorlari", desc: "Sotilgan mahsulot ombordan hali sarflanmagan — \"Ishlab chiqarish\" bo'limida bog'lang.", action: () => navigate("ishlabchiqarish") },
     { count: s.muddatiOtganKirim, label: "30 kundan ortiq to'lanmagan kirim fakturalar", desc: "Muddati o'tgan kreditorlik — \"Kreditorlik muddati\" hisobotida ko'ring.", action: () => navigate("kreditorlik") },
     { count: s.muddatiOtganChiqim, label: "30 kundan ortiq to'lanmagan chiqim fakturalar", desc: "Muddati o'tgan debitorlik (xaridorlar qarzi) — \"Debitorlik muddati\" hisobotida ko'ring.", action: () => navigate("debitorlik") },
+    { count: s.yaqinlashayotganKirim, label: "Kreditorlik: to'lov muddati yaqinlashmoqda", desc: `${REMINDER_LOOKAHEAD_DAYS} kun ichida 30 kunlik chegaraga yetadigan, hali to'lanmagan kirim fakturalar.`, action: () => navigate("kreditorlik") },
+    { count: s.yaqinlashayotganChiqim, label: "Debitorlik: to'lov muddati yaqinlashmoqda", desc: `${REMINDER_LOOKAHEAD_DAYS} kun ichida 30 kunlik chegaraga yetadigan, hali to'lanmagan chiqim fakturalar.`, action: () => navigate("debitorlik") },
     { count: s.innsiz, label: "INN kiritilmagan kirim/chiqim yozuvlari", desc: "Bunday yozuvlarda to'lov holati avtomatik solishtirilmaydi, \"To'landi\" belgisi qo'lda qo'yiladi.", action: () => navigate("kirim") },
     { count: s.takrorlar, label: "Ehtimoliy takrorlangan hujjatlar", desc: "Hujjat №+sana+summa+kontragent bo'yicha bir xil yozuvlar — \"Faktura kirim/chiqim\" sahifasidagi \"Takrorlar\" tugmasi orqali tekshiring.", action: () => navigate("kirim") }
   ].filter((it) => it.count > 0);
@@ -5352,6 +5357,16 @@ function computeAgingReport(rows) {
 }
 function computeKreditorlikAging() { return computeAgingReport(STORE.kirim); }
 function computeDebitorlikAging() { return computeAgingReport(STORE.chiqim); }
+
+// Muddat aniq maydon (to'lov muddati) yo'qligi sababli, mavjud 30-kunlik
+// "muddati o'tgan" konventsiyasidan (computeAttentionSummary) foydalanib,
+// shu chegaraga yaqinlashayotgan (lekin hali o'tmagan) hujjatlarni topadi.
+const REMINDER_LOOKAHEAD_DAYS = 7;
+function computeUpcomingDueRows(rows) {
+  return computeAgingReport(rows).rows.filter((r) => r.daysOverdue > 30 - REMINDER_LOOKAHEAD_DAYS && r.daysOverdue <= 30);
+}
+function computeUpcomingKreditorlik() { return computeUpcomingDueRows(STORE.kirim); }
+function computeUpcomingDebitorlik() { return computeUpcomingDueRows(STORE.chiqim); }
 
 const AGING_BUCKET_LABELS = [["0-30", "0–30 kun"], ["31-60", "31–60 kun"], ["61-90", "61–90 kun"], ["90+", "90+ kun"]];
 
