@@ -588,3 +588,42 @@ tfoot td{
   margin-right:6px; vertical-align:middle;
 }
 .sync-dot.off{background:var(--text-faint);}
+
+/* ---- Sozlamalar sahifasi ---- */
+.settings-section{display:none;}
+.settings-section.active{display:block;}
+
+.settings-actionbar{
+  position:sticky; bottom:0; z-index:5;
+  display:flex; align-items:center; gap:12px; justify-content:flex-end;
+  margin-top:18px; padding:12px 0 10px;
+  background:linear-gradient(to top, var(--bg) 68%, transparent);
+}
+.settings-actionbar .dirty-note{
+  margin-right:auto; font-size:12px; color:var(--warn); font-weight:600;
+}
+
+.field.invalid input, .field.invalid select{border-color:var(--danger); background:var(--danger-soft);}
+.field.warned input, .field.warned select{border-color:var(--warn);}
+.field .field-error{font-size:11.5px; color:var(--danger); font-weight:600;}
+.field .field-error.warn{color:var(--warn);}
+
+.switch{position:relative; display:inline-flex; align-items:center; flex-shrink:0; width:38px; height:22px;}
+.switch input{position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer;}
+.switch .track{width:38px; height:22px; border-radius:11px; background:var(--border-strong); transition:background .15s;}
+.switch .track::after{
+  content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%;
+  background:#fff; transition:transform .15s;
+}
+.switch input:checked + .track{background:var(--accent);}
+.switch input:checked + .track::after{transform:translateX(16px);}
+.switch-row{display:flex; align-items:flex-start; gap:10px; margin-bottom:12px;}
+.switch-row label{font-size:12.5px; color:var(--text-muted); font-weight:600; cursor:pointer; line-height:1.4;}
+
+.mirror-field{
+  display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+  padding:8px 0; border-bottom:1px solid var(--border);
+}
+.mirror-field:last-child{border-bottom:none;}
+.mirror-field .m-label{font-size:12.5px; color:var(--text-muted);}
+.mirror-field .m-val{font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap;}

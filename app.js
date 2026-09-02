@@ -198,6 +198,68 @@ async function saveSettingsToDb(partial) {
   }
 }
 
+// Sozlama qiymatlariga qo'yiladigan cheklovlar. "Stavka" maydonlari 0..100
+// oralig'ida, "summa" maydonlari manfiy bo'lmasligi kerak. INN va korxona nomi
+// faqat ogohlantiradi (saqlashni bloklamaydi).
+const SETTINGS_RATE_FIELDS = ["qqsStavka", "foydaStavka", "ijtimoiySoliqStavka", "ndflStavka", "inpsStavka"];
+const SETTINGS_AMOUNT_FIELDS = [
+  "davrXarajati", "moliyaviyXarajat", "boshqaDaromad", "imtiyozlar", "bankOpeningBalance",
+  "f1AsosiyVositalar", "f1TovarZaxira", "f1Kassa", "f1UstavKapitali", "f1OldingiFoyda", "f1UzoqMajburiyat"
+];
+
+function isBlank(v) {
+  return v === undefined || v === null || v === "";
+}
+
+// Sozlamalarning to'liq yoki qisman obyektini tekshiradi.
+// -> { ok, errors: {maydon: xabar}, warnings: {maydon: xabar} }
+function validateSettings(s) {
+  const errors = {};
+  const warnings = {};
+  SETTINGS_RATE_FIELDS.forEach((k) => {
+    if (isBlank(s[k])) return;
+    const n = Number(s[k]);
+    if (!Number.isFinite(n) || n < 0 || n > 100) errors[k] = "0 dan 100 gacha bo'lgan son bo'lishi kerak";
+  });
+  SETTINGS_AMOUNT_FIELDS.forEach((k) => {
+    if (isBlank(s[k])) return;
+    const n = Number(s[k]);
+    if (!Number.isFinite(n) || n < 0) errors[k] = "Manfiy bo'lmagan son bo'lishi kerak";
+  });
+  if (!isBlank(s.tannarxManual)) {
+    const n = Number(s.tannarxManual);
+    if (!Number.isFinite(n) || n < 0) errors.tannarxManual = "Bo'sh qoldiring yoki manfiy bo'lmagan son kiriting";
+  }
+  if (s.inn !== undefined && String(s.inn).trim() && !/^\d{9}$/.test(String(s.inn).trim())) {
+    warnings.inn = "Odatda INN 9 ta raqamdan iborat bo'ladi";
+  }
+  if (s.companyName !== undefined && !String(s.companyName).trim()) {
+    warnings.companyName = "Korxona nomi kiritilmagan — hisobot sarlavhalarida bo'sh ko'rinadi";
+  }
+  return { ok: Object.keys(errors).length === 0, errors, warnings };
+}
+
+// Hisobot ichidagi tez tahrirlagichlar (Foyda, F1, Bank) uchun: berilgan qisman
+// o'zgarish sozlamalar cheklovini buzmasligini tekshiradi. Buzsa — toast + false.
+function guardSettingsPartial(partial) {
+  // Faqat shu o'zgarish tekshiriladi (validateSettings bo'sh maydonlarni o'tkazib
+  // yuboradi, cross-field qoida yo'q) — begona eski qiymat saqlashni bloklamaydi.
+  const { ok, errors } = validateSettings(partial);
+  if (ok) return true;
+  toast(errors[Object.keys(errors)[0]] || "Qiymat noto'g'ri", "err");
+  return false;
+}
+
+// Sozlama o'zgarishini YAGONA yo'l orqali qo'llaydi: STORE'ni yangilaydi, bazaga
+// yozadi, keshni saqlaydi va (rerender=true bo'lsa) joriy sahifani qayta chizadi —
+// shu orqali ochiq turgan hisobot darhol yangi qiymat bilan qayta hisoblanadi.
+function applySettingsChange(partial, { rerender = true } = {}) {
+  Object.assign(STORE.settings, partial);
+  saveSettingsToDb(partial);
+  saveStore();
+  if (rerender && PAGES[CURRENT_PAGE]) PAGES[CURRENT_PAGE].render();
+}
+
 // Bitta qatordagi bir yoki bir nechta maydonni bazaga yozadi (fire-and-forget).
 function pushFieldsUpdate(type, id, partial) {
   const dbPartial = toDbRow(TABLE_MAPS[type], partial);
@@ -301,6 +363,9 @@ function defaultStore() {
 let STORE = defaultStore();
 let THEME = localStorage.getItem(THEME_KEY) || "light";
 let CURRENT_PAGE = "dashboard";
+// Sozlamalar sahifasida saqlanmagan tahrir bor-yo'qligi — navigate() va
+// beforeunload shu bayroq bo'yicha ogohlantiradi.
+let SETTINGS_DIRTY = false;
 
 // Kirishdan keyingi birinchi "loadAllData" tugaguncha CRUD amallar (masalan,
 // Excel import'dagi takror tekshiruvi yoki Sozlamalarni saqlash) STORE hali
@@ -793,15 +858,28 @@ const PAGES = {
   sverkaDetail: { render: renderSverkaDetail },
   settings: { render: renderSettings },
   audit: { render: renderAudit },
-  firmalar: { render: renderFirmalar }
+  // "Firmalar" endi Sozlamalar ichidagi bo'lim — eski havolalar sinmasligi
+  // uchun alias sifatida qoldiriladi (navigate() uni "settings"ga yo'naltiradi).
+  firmalar: { render: renderSettings }
 };
 
 function navigate(page) {
+  // Firma boshqaruvi Sozlamalar ichiga ko'chirildi.
+  if (page === "firmalar") page = "settings";
+  // Sozlamalarda saqlanmagan o'zgarish bo'lsa, chiqishdan oldin tasdiqlatamiz.
+  if (CURRENT_PAGE === "settings" && page !== "settings" && SETTINGS_DIRTY) {
+    if (!confirm("Sozlamalarda saqlanmagan o'zgarishlar bor. Ularni tashlab chiqilsinmi?")) return;
+    SETTINGS_DIRTY = false;
+  }
   CURRENT_PAGE = page;
   if (page === "sverka") SVERKA_STATUS_FILTER = null;
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === page));
   PAGES[page].render();
 }
+
+window.addEventListener("beforeunload", (e) => {
+  if (SETTINGS_DIRTY) { e.preventDefault(); e.returnValue = ""; }
+});
 
 function updateNavBadges() {
   document.getElementById("navKirimCount").textContent = STORE.kirim.length;
@@ -1293,8 +1371,14 @@ function recentList(type) {
   `;
 }
 
+// data-nav="sahifa" bosilganda o'sha sahifaga o'tadi. Ixtiyoriy
+// data-nav-section="..." bo'lsa (faqat "settings" uchun) — o'sha bo'limni ochadi.
+let SETTINGS_TARGET_SECTION = null;
 function bindNavShortcuts(scope) {
-  scope.querySelectorAll("[data-nav]").forEach((b) => b.addEventListener("click", () => navigate(b.dataset.nav)));
+  scope.querySelectorAll("[data-nav]").forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.nav === "settings" && b.dataset.navSection) SETTINGS_TARGET_SECTION = b.dataset.navSection;
+    navigate(b.dataset.nav);
+  }));
 }
 
 /* ---------------------------- Faktura kirim/chiqim ---------------------------- */
@@ -3855,9 +3939,10 @@ function renderBank() {
   document.getElementById("btnAddRow").addEventListener("click", addBankRow);
   document.getElementById("btnImport").addEventListener("click", openBankImportModal);
   document.getElementById("inOpening").addEventListener("change", (e) => {
-    STORE.settings.bankOpeningBalance = toNum(e.target.value);
-    saveSettingsToDb({ bankOpeningBalance: STORE.settings.bankOpeningBalance });
-    saveStore();
+    const partial = { bankOpeningBalance: toNum(e.target.value) };
+    if (!guardSettingsPartial(partial)) { e.target.value = fmt(STORE.settings.bankOpeningBalance); return; }
+    // rerender:false — jadvalni to'liq qayta chizmasdan faqat yig'indini yangilaymiz.
+    applySettingsChange(partial, { rerender: false });
     refreshBankSummary();
   });
   bindBankRowEvents();
@@ -4259,10 +4344,11 @@ function renderIshHaqiHisoboti() {
       <div>
         <h1 class="page-title">Ish haqi hisoboti</h1>
         <p class="page-desc">Jismoniy shaxslardan olinadigan daromad solig'i va ijtimoiy soliq hisob-kitobi — "Ish haqi" bo'limi ma'lumotlaridan avtomatik hisoblanadi.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnExportIshHaqiHisobot">Excel'ga eksport</button>
-        <button class="btn" data-nav="settings">Stavkalarni sozlash</button>
+        <button class="btn" data-nav="settings" data-nav-section="ishhaqi">Stavkalarni sozlash</button>
       </div>
     </div>
 
@@ -4364,6 +4450,19 @@ function ishHaqiReportRowHtml(r, n) {
 
 /* ------------------------------- F2 hisobot ------------------------------- */
 
+// Hisobot sarlavhasi ostida korxona rekvizitlarini bir xil ko'rinishda chiqaradi:
+// "Korxona nomi · INN 123456789 · Davr". Barcha hisobotlar (F2, QQS, Foyda,
+// Ish haqi hisoboti, F1) shu bitta yordamchidan foydalanadi.
+function reportRequisiteLine() {
+  const s = STORE.settings;
+  const bits = [
+    String(s.companyName || "").trim(),
+    s.inn ? "INN " + String(s.inn).trim() : "",
+    String(s.period || "").trim()
+  ].filter(Boolean);
+  return bits.length ? `<p class="page-desc">${escapeHtml(bits.join(" · "))}</p>` : "";
+}
+
 function reportLine(codeOrLabel, label, value, opts = {}) {
   const isTotal = opts.total;
   const neg = toNum(value) < 0;
@@ -4384,11 +4483,12 @@ function renderF2() {
       <div>
         <h1 class="page-title">F2 — Moliyaviy natijalar to'g'risida hisobot</h1>
         <p class="page-desc">Vazirlar Mahkamasi shakli asosida, Faktura kirim/chiqim ma'lumotlaridan avtomatik hisoblanadi.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportF2">Excel'dan import</button>
         <button class="btn" id="btnExportF2">Excel'ga eksport</button>
-        <button class="btn" data-nav="settings">Xarajatlarni sozlash</button>
+        <button class="btn" data-nav="settings" data-nav-section="soliq">Xarajatlarni sozlash</button>
       </div>
     </div>
 
@@ -4468,6 +4568,7 @@ function renderQQS() {
       <div>
         <h1 class="page-title">Qo'shilgan qiymat solig'i (QQS) hisob-kitobi</h1>
         <p class="page-desc">Kirim va chiqim fakturalardagi QQS summalaridan avtomatik hisoblanadi.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportQQS">Excel'dan import</button>
@@ -4527,6 +4628,7 @@ function renderFoyda() {
       <div>
         <h1 class="page-title">Foyda solig'i hisob-kitobi</h1>
         <p class="page-desc">Yuridik shaxslardan olinadigan foyda solig'i, F2 bilan bir xil manbadan hisoblanadi.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportFoyda">Excel'dan import</button>
@@ -4560,12 +4662,13 @@ function renderFoyda() {
 
   document.getElementById("btnSaveFoyda").addEventListener("click", () => {
     if (!requireDataReady()) return;
-    STORE.settings.boshqaDaromad = toNum(document.getElementById("inBoshqaDaromad").value);
-    STORE.settings.imtiyozlar = toNum(document.getElementById("inImtiyozlar").value);
-    STORE.settings.foydaStavka = toNum(document.getElementById("inFoydaStavka").value);
-    saveSettingsToDb({ boshqaDaromad: STORE.settings.boshqaDaromad, imtiyozlar: STORE.settings.imtiyozlar, foydaStavka: STORE.settings.foydaStavka });
-    saveStore();
-    renderFoyda();
+    const partial = {
+      boshqaDaromad: toNum(document.getElementById("inBoshqaDaromad").value),
+      imtiyozlar: toNum(document.getElementById("inImtiyozlar").value),
+      foydaStavka: toNum(document.getElementById("inFoydaStavka").value)
+    };
+    if (!guardSettingsPartial(partial)) return;
+    applySettingsChange(partial); // STORE + baza + kesh + joriy sahifani qayta chizadi
     toast("Saqlandi");
   });
   document.getElementById("btnExportFoyda").addEventListener("click", () => exportFoydaXlsx());
@@ -4610,6 +4713,7 @@ function renderF1() {
       <div>
         <h1 class="page-title">F1 — Buxgalteriya balansi (qisqartirilgan)</h1>
         <p class="page-desc">Asosiy ko'rsatkichlar avtomatik (bank, debitor/kreditor, asosiy vositalar, tovar-moddiy zaxiralar), qolganlari qo'lda kiritiladi.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportF1">Excel'dan import</button>
@@ -4653,18 +4757,14 @@ function renderF1() {
 
   document.getElementById("btnSaveF1").addEventListener("click", () => {
     if (!requireDataReady()) return;
-    STORE.settings.f1Kassa = toNum(document.getElementById("f1Kassa").value);
-    STORE.settings.f1UstavKapitali = toNum(document.getElementById("f1Uk").value);
-    STORE.settings.f1OldingiFoyda = toNum(document.getElementById("f1Of").value);
-    STORE.settings.f1UzoqMajburiyat = toNum(document.getElementById("f1Um").value);
-    saveSettingsToDb({
-      f1Kassa: STORE.settings.f1Kassa,
-      f1UstavKapitali: STORE.settings.f1UstavKapitali,
-      f1OldingiFoyda: STORE.settings.f1OldingiFoyda,
-      f1UzoqMajburiyat: STORE.settings.f1UzoqMajburiyat
-    });
-    saveStore();
-    renderF1();
+    const partial = {
+      f1Kassa: toNum(document.getElementById("f1Kassa").value),
+      f1UstavKapitali: toNum(document.getElementById("f1Uk").value),
+      f1OldingiFoyda: toNum(document.getElementById("f1Of").value),
+      f1UzoqMajburiyat: toNum(document.getElementById("f1Um").value)
+    };
+    if (!guardSettingsPartial(partial)) return;
+    applySettingsChange(partial); // STORE + baza + kesh + joriy sahifani qayta chizadi
     toast("Saqlandi");
   });
   document.getElementById("btnExportF1").addEventListener("click", () => exportF1Xlsx());
@@ -5635,22 +5735,27 @@ function openAuditDetailModal(row) {
 // orqali sinxronlanmaydi) — sahifa har safar ochilganda qayta so'raladi,
 // chunki bu kamdan-kam o'zgaradigan, admin-only ma'lumot.
 
-async function renderFirmalar() {
-  const main = document.getElementById("main");
+// Firma boshqaruvi endi Sozlamalar ichidagi "Firmalar" bo'limi. Shu funksiya
+// istalgan konteynerga render qiladi (Sozlamalardagi host yoki, alias orqali,
+// alohida sahifa). withHeader — alohida sahifa uchun sarlavha + izoh chiqaradi.
+async function renderFirmaManager(container, { withHeader = false } = {}) {
+  if (!container) return;
   if (!IS_ADMIN) {
-    main.innerHTML = `<div class="empty-state"><div class="t">Ruxsat yo'q</div><div class="d">Firmalarni faqat admin boshqara oladi.</div></div>`;
+    container.innerHTML = `<div class="empty-state"><div class="t">Ruxsat yo'q</div><div class="d">Firmalarni faqat admin boshqara oladi.</div></div>`;
     return;
   }
-  main.innerHTML = `
+  container.innerHTML = `
+    ${withHeader ? `
     <div class="page-header">
       <div>
         <h1 class="page-title">Firmalar</h1>
         <p class="page-desc">Har bir firmaning ma'lumotlari (kirim/chiqim/ombor va h.k.) bir-biridan to'liq ajratilgan. Xodim faqat o'ziga ruxsat berilgan firmalarni ilova ichida (chiqmasdan) tanlab ishlaydi.</p>
       </div>
-      <div class="page-actions">
-        <button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button>
-      </div>
-    </div>
+      <div class="page-actions"><button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button></div>
+    </div>` : `
+    <div class="card-title">Firmalar (multi-firma)</div>
+    <div class="note">Har bir firmaning ma'lumotlari bir-biridan to'liq ajratilgan. Xodim faqat o'ziga ruxsat berilgan firmalarni ilova ichida tanlab ishlaydi.</div>
+    <div class="page-actions" style="margin:12px 0;"><button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button></div>`}
     <div class="table-wrap">
       <table>
         <thead><tr><th>Nomi</th><th>Yaratilgan</th><th></th></tr></thead>
@@ -5658,11 +5763,12 @@ async function renderFirmalar() {
       </table>
     </div>
   `;
-  document.getElementById("btnAddFirma").addEventListener("click", () => openFirmaModal());
+  container.querySelector("#btnAddFirma").addEventListener("click", () => openFirmaModal());
 
   const { data, error } = await sbClient.from("firmalar").select("*").order("nomi");
   if (error) { console.error(error); toast("Firmalarni yuklashda xatolik", "err"); return; }
-  const body = document.getElementById("firmalarBody");
+  const body = container.querySelector("#firmalarBody");
+  if (!body) return;
   body.innerHTML = data.length ? data.map(firmaRowHtml).join("") :
     `<tr><td colspan="3" class="faint" style="text-align:center;padding:16px;">Hozircha firma yo'q</td></tr>`;
   body.addEventListener("click", (e) => {
@@ -5673,6 +5779,19 @@ async function renderFirmalar() {
     else if (accessId) openFirmaAccessModal(accessId, data.find((f) => f.id === accessId)?.nomi || "");
     else if (delId) deleteFirma(delId, data.find((f) => f.id === delId)?.nomi || "");
   });
+}
+
+// Firma qo'shilgach/o'chirilgach ro'yxatni joyida yangilaydi — Sozlamalar ichidagi
+// host bo'lsa o'shanga, aks holda butun sahifaga.
+function refreshFirmaManager() {
+  const host = document.getElementById("firmaManagerHost");
+  if (host) renderFirmaManager(host, { withHeader: false });
+  else if (CURRENT_PAGE === "settings") renderSettings();
+}
+
+// Eski kod / alias uchun moslik.
+async function renderFirmalar() {
+  return renderFirmaManager(document.getElementById("main"), { withHeader: true });
 }
 
 // Firmani butunlay o'chiradi. "firma_foydalanuvchilari" va "settings"
@@ -5702,7 +5821,7 @@ async function deleteFirma(id, nomi) {
   } else {
     renderFirmaSwitcher();
   }
-  renderFirmalar();
+  refreshFirmaManager();
   toast("Firma o'chirildi");
 }
 
@@ -5760,7 +5879,7 @@ async function saveFirmaFromModal(existingId) {
     renderFirmaSwitcher();
   }
   closeModal();
-  renderFirmalar();
+  refreshFirmaManager();
   toast("Saqlandi");
 }
 
@@ -5819,9 +5938,44 @@ async function openFirmaAccessModal(firmaId, firmaNomi) {
 
 /* ------------------------------- Sozlamalar ------------------------------- */
 
+// Sozlamalar maydon kaliti -> shu sahifadagi input id. Faqat shu sahifada
+// tahrirlanadigan maydonlar (mirror qiymatlar bu yerda tahrirlanmaydi).
+const SETTINGS_FIELD_INPUT_ID = {
+  companyName: "sCompany", inn: "sInn",
+  qqsStavka: "sQqs", foydaStavka: "sFoyda", davrXarajati: "sDavr", moliyaviyXarajat: "sMoliya", tannarxManual: "sTannarx",
+  ijtimoiySoliqStavka: "sIjtimoiy", ndflStavka: "sNdfl", inpsStavka: "sInps"
+};
+
+// validateSettings() natijasini sahifadagi maydonlarga bo'yaydi: xato -> qizil
+// (.invalid), ogohlantirish -> sariq (.warned), har biriga inline izoh.
+function applySettingsFieldMessages(errors, warnings) {
+  Object.values(SETTINGS_FIELD_INPUT_ID).forEach((id) => {
+    const inp = document.getElementById(id);
+    const field = inp && inp.closest(".field");
+    if (!field) return;
+    field.classList.remove("invalid", "warned");
+    field.querySelectorAll(".field-error").forEach((n) => n.remove());
+  });
+  const paint = (map, cls, extraClass) => {
+    Object.keys(map || {}).forEach((k) => {
+      const inp = document.getElementById(SETTINGS_FIELD_INPUT_ID[k]);
+      const field = inp && inp.closest(".field");
+      if (!field) return;
+      field.classList.add(cls);
+      const d = document.createElement("div");
+      d.className = "field-error" + (extraClass ? " " + extraClass : "");
+      d.textContent = map[k];
+      field.appendChild(d);
+    });
+  };
+  paint(errors, "invalid");
+  paint(warnings, "warned", "warn");
+}
+
 function renderSettings() {
   const s = STORE.settings;
   const main = document.getElementById("main");
+  const tannarxDisplay = s.tannarxManual === null || s.tannarxManual === undefined ? "" : fmt(s.tannarxManual);
   main.innerHTML = `
     <div class="page-header">
       <div>
@@ -5830,79 +5984,157 @@ function renderSettings() {
       </div>
     </div>
 
-    <div class="grid grid-2">
+    <div class="tabs" id="settingsTabs">
+      <button class="tab-btn active" data-sec="rekvizit">Rekvizitlar</button>
+      <button class="tab-btn" data-sec="soliq">Soliq stavkalari</button>
+      <button class="tab-btn" data-sec="ishhaqi">Ish haqi stavkalari</button>
+      <button class="tab-btn" data-sec="hisobot">Hisobot qiymatlari</button>
+      <button class="tab-btn" data-sec="malumot">Ma'lumotlar</button>
+      ${IS_ADMIN ? `<button class="tab-btn" data-sec="firmalar">Firmalar</button>` : ""}
+    </div>
+
+    <div class="settings-section active" data-sec="rekvizit">
       <div class="card">
         <div class="card-title">Korxona rekvizitlari</div>
         <div class="field"><label>Nomi</label><input id="sCompany" value="${escapeHtml(s.companyName)}"></div>
-        <div class="field"><label>INN</label><input id="sInn" value="${escapeHtml(s.inn)}"></div>
+        <div class="field"><label>INN</label><input id="sInn" value="${escapeHtml(s.inn)}" inputmode="numeric" placeholder="9 ta raqam"></div>
         <div class="field"><label>Manzil</label><input id="sAddress" value="${escapeHtml(s.address)}"></div>
         <div class="field"><label>Hisobot davri</label><input id="sPeriod" value="${escapeHtml(s.period)}"></div>
         <div class="field"><label>Rahbar F.I.Sh. (kalkulyatsiya blankasida "Tasdiqlayman" bandida)</label><input id="sRahbar" value="${escapeHtml(s.rahbar || "")}" placeholder="masalan: Karimov A.A."></div>
       </div>
+    </div>
+
+    <div class="settings-section" data-sec="soliq">
       <div class="card">
         <div class="card-title">Soliq stavkalari</div>
-        <div class="field"><label>QQS stavkasi (%)</label><input id="sQqs" value="${fmt(s.qqsStavka)}"></div>
-        <div class="field"><label>Foyda solig'i stavkasi (%)</label><input id="sFoyda" value="${fmt(s.foydaStavka)}"></div>
-        <div class="field"><label>Davr xarajatlari (F2, qo'lda — ish haqidan tashqari boshqa xarajatlar)</label><input id="sDavr" value="${fmt(s.davrXarajati)}"></div>
-        <div class="field" style="flex-direction:row;align-items:center;gap:8px;">
-          <input type="checkbox" id="sIshHaqiAvto" style="width:auto;flex-shrink:0;" ${s.ishHaqiAvtoXarajat ? "checked" : ""}>
-          <label for="sIshHaqiAvto" style="margin:0;">Ish haqi bo'limidan hisoblangan xarajatni (ish haqi + ijtimoiy soliq) yuqoridagi "Davr xarajatlari"ga avtomatik qo'shish</label>
+        <div class="field"><label>QQS stavkasi (%)</label><input id="sQqs" inputmode="decimal" value="${fmt(s.qqsStavka)}"></div>
+        <div class="field"><label>Foyda solig'i stavkasi (%)</label><input id="sFoyda" inputmode="decimal" value="${fmt(s.foydaStavka)}"></div>
+        <div class="field"><label>Davr xarajatlari (F2, qo'lda — ish haqidan tashqari boshqa xarajatlar)</label><input id="sDavr" inputmode="decimal" value="${fmt(s.davrXarajati)}"></div>
+        <div class="switch-row">
+          <span class="switch"><input type="checkbox" id="sIshHaqiAvto" ${s.ishHaqiAvtoXarajat ? "checked" : ""}><span class="track"></span></span>
+          <label for="sIshHaqiAvto">Ish haqi bo'limidan hisoblangan xarajatni (ish haqi + ijtimoiy soliq) yuqoridagi "Davr xarajatlari"ga avtomatik qo'shish</label>
         </div>
-        <div class="field"><label>Moliyaviy xarajatlar (F2, qo'lda)</label><input id="sMoliya" value="${fmt(s.moliyaviyXarajat)}"></div>
+        <div class="field"><label>Moliyaviy xarajatlar (F2, qo'lda)</label><input id="sMoliya" inputmode="decimal" value="${fmt(s.moliyaviyXarajat)}"></div>
         <div class="field">
           <label>Tannarxni qo'lda belgilash (bo'sh = avtomatik, kirim fakturalardan)</label>
-          <input id="sTannarx" value="${s.tannarxManual === null || s.tannarxManual === undefined ? "" : fmt(s.tannarxManual)}">
+          <input id="sTannarx" inputmode="decimal" value="${tannarxDisplay}">
         </div>
       </div>
+    </div>
+
+    <div class="settings-section" data-sec="ishhaqi">
       <div class="card">
         <div class="card-title">Ish haqi hisoboti stavkalari</div>
-        <div class="field"><label>Ijtimoiy soliq stavkasi (%)</label><input id="sIjtimoiy" value="${fmt(s.ijtimoiySoliqStavka)}"></div>
-        <div class="field"><label>NDFL stavkasi (%)</label><input id="sNdfl" value="${fmt(s.ndflStavka)}"></div>
-        <div class="field"><label>INPS stavkasi (%)</label><input id="sInps" value="${fmt(s.inpsStavka, 1)}"></div>
+        <div class="field"><label>Ijtimoiy soliq stavkasi (%)</label><input id="sIjtimoiy" inputmode="decimal" value="${fmt(s.ijtimoiySoliqStavka)}"></div>
+        <div class="field"><label>NDFL stavkasi (%)</label><input id="sNdfl" inputmode="decimal" value="${fmt(s.ndflStavka)}"></div>
+        <div class="field"><label>INPS stavkasi (%)</label><input id="sInps" inputmode="decimal" value="${fmt(s.inpsStavka, 1)}"></div>
       </div>
     </div>
 
-    <div class="card section">
-      <div class="card-title">Ma'lumotlar</div>
-      <div class="page-actions">
-        <button class="btn" id="btnExport">Barcha ma'lumotlarni yuklab olish (.json)</button>
-        <button class="btn" id="btnImportJson">.json fayldan tiklash</button>
-        <button class="btn btn-danger" id="btnReset">Hammasini tozalash</button>
+    <div class="settings-section" data-sec="hisobot">
+      <div class="card">
+        <div class="card-title">Hisobot sahifalarida kiritiladigan qiymatlar</div>
+        <div class="note">Quyidagilar tegishli hisobot sahifasida tahrirlanadi — bu yerda faqat joriy holat va tez o'tish havolasi ko'rsatiladi. Bir qiymat faqat bitta joyda tahrirlanadi (dublikat kiritish maydoni yo'q).</div>
+        <div style="margin-top:12px;">
+          <div class="mirror-field"><span class="m-label">Bank — boshlang'ich qoldiq</span><span class="m-val">${fmtSum(s.bankOpeningBalance)}</span></div>
+          <div class="mirror-field"><span class="m-label">Foyda solig'i — boshqa daromadlar (qo'lda)</span><span class="m-val">${fmtSum(s.boshqaDaromad)}</span></div>
+          <div class="mirror-field"><span class="m-label">Foyda solig'i — imtiyozlar summasi (qo'lda)</span><span class="m-val">${fmtSum(s.imtiyozlar)}</span></div>
+          <div class="mirror-field"><span class="m-label">F1 — kassa</span><span class="m-val">${fmtSum(s.f1Kassa)}</span></div>
+          <div class="mirror-field"><span class="m-label">F1 — ustav kapitali</span><span class="m-val">${fmtSum(s.f1UstavKapitali)}</span></div>
+          <div class="mirror-field"><span class="m-label">F1 — o'tgan davr jamg'argan foydasi</span><span class="m-val">${fmtSum(s.f1OldingiFoyda)}</span></div>
+          <div class="mirror-field"><span class="m-label">F1 — uzoq muddatli majburiyatlar</span><span class="m-val">${fmtSum(s.f1UzoqMajburiyat)}</span></div>
+        </div>
+        <div class="page-actions" style="margin-top:14px;">
+          <button class="btn" data-nav="bank">Bank sahifasi</button>
+          <button class="btn" data-nav="foyda">Foyda solig'i</button>
+          <button class="btn" data-nav="f1">F1 — Balans</button>
+        </div>
       </div>
-      <input type="file" id="jsonFile" accept=".json" style="display:none">
-      <div class="note">Barcha ma'lumotlar faqat shu brauzerning xotirasida (localStorage) saqlanadi. Boshqa qurilmaga ko'chirish uchun ".json" formatida eksport/import qiling.</div>
     </div>
 
-    <div class="page-actions" style="margin-top:16px;">
+    <div class="settings-section" data-sec="malumot">
+      <div class="card">
+        <div class="card-title">Ma'lumotlar</div>
+        <div class="page-actions">
+          <button class="btn" id="btnExport">Barcha ma'lumotlarni yuklab olish (.json)</button>
+          <button class="btn" id="btnImportJson">.json fayldan tiklash</button>
+          <button class="btn btn-danger" id="btnReset">Hammasini tozalash</button>
+        </div>
+        <input type="file" id="jsonFile" accept=".json" style="display:none">
+        <div class="note">Ma'lumotlar Supabase bulutida markaziy saqlanadi va jamoa a'zolari orasida real vaqtda sinxronlanadi — sahifa yangilansa ham yo'qolmaydi. ".json" eksport/import faqat zaxira nusxa olish yoki boshqa bazaga ko'chirish uchun kerak.</div>
+      </div>
+    </div>
+
+    ${IS_ADMIN ? `<div class="settings-section" data-sec="firmalar"><div id="firmaManagerHost"><div class="note">Yuklanmoqda…</div></div></div>` : ""}
+
+    <div class="settings-actionbar" id="settingsActionbar">
+      <span class="dirty-note" id="settingsDirtyNote" style="display:none;">• Saqlanmagan o'zgarishlar bor</span>
       <button class="btn btn-primary" id="btnSaveSettings">Saqlash</button>
     </div>
   `;
 
+  SETTINGS_DIRTY = false;
+
+  const settingsTabs = document.getElementById("settingsTabs");
+  const actionbar = document.getElementById("settingsActionbar");
+  const setSettingsSection = (sec) => {
+    settingsTabs.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.sec === sec));
+    main.querySelectorAll(".settings-section").forEach((el) => el.classList.toggle("active", el.dataset.sec === sec));
+    // "Saqlash" paneli faqat tahrirlanadigan bo'limlarda kerak.
+    actionbar.style.display = ["rekvizit", "soliq", "ishhaqi"].includes(sec) ? "" : "none";
+  };
+  settingsTabs.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => setSettingsSection(b.dataset.sec)));
+
+  // Boshqa sahifadan "…ni sozlash" tugmasi orqali kelingan bo'lsa — o'sha bo'lim ochiladi.
+  if (SETTINGS_TARGET_SECTION && settingsTabs.querySelector(`.tab-btn[data-sec="${SETTINGS_TARGET_SECTION}"]`)) {
+    setSettingsSection(SETTINGS_TARGET_SECTION);
+  }
+  SETTINGS_TARGET_SECTION = null;
+
+  const markSettingsDirty = () => {
+    if (SETTINGS_DIRTY) return;
+    SETTINGS_DIRTY = true;
+    document.getElementById("settingsDirtyNote").style.display = "";
+  };
+  main.querySelectorAll(".settings-section input, .settings-section select").forEach((el) => {
+    el.addEventListener("input", markSettingsDirty);
+    el.addEventListener("change", markSettingsDirty);
+  });
+
+  if (IS_ADMIN) {
+    const host = document.getElementById("firmaManagerHost");
+    if (host) renderFirmaManager(host, { withHeader: false });
+  }
+
   document.getElementById("btnSaveSettings").addEventListener("click", () => {
     if (!requireDataReady()) return;
-    s.companyName = document.getElementById("sCompany").value;
-    s.inn = document.getElementById("sInn").value;
-    s.address = document.getElementById("sAddress").value;
-    s.period = document.getElementById("sPeriod").value;
-    s.rahbar = document.getElementById("sRahbar").value;
-    s.qqsStavka = toNum(document.getElementById("sQqs").value);
-    s.foydaStavka = toNum(document.getElementById("sFoyda").value);
-    s.davrXarajati = toNum(document.getElementById("sDavr").value);
-    s.ishHaqiAvtoXarajat = document.getElementById("sIshHaqiAvto").checked;
-    s.moliyaviyXarajat = toNum(document.getElementById("sMoliya").value);
     const tannarxVal = document.getElementById("sTannarx").value.trim();
-    s.tannarxManual = tannarxVal === "" ? null : toNum(tannarxVal);
-    s.ijtimoiySoliqStavka = toNum(document.getElementById("sIjtimoiy").value);
-    s.ndflStavka = toNum(document.getElementById("sNdfl").value);
-    s.inpsStavka = toNum(document.getElementById("sInps").value);
-    saveSettingsToDb({
-      companyName: s.companyName, inn: s.inn, address: s.address, period: s.period, rahbar: s.rahbar,
-      qqsStavka: s.qqsStavka, foydaStavka: s.foydaStavka, davrXarajati: s.davrXarajati,
-      ishHaqiAvtoXarajat: s.ishHaqiAvtoXarajat,
-      moliyaviyXarajat: s.moliyaviyXarajat, tannarxManual: s.tannarxManual,
-      ijtimoiySoliqStavka: s.ijtimoiySoliqStavka, ndflStavka: s.ndflStavka, inpsStavka: s.inpsStavka
-    });
-    saveStore();
+    const next = {
+      companyName: document.getElementById("sCompany").value,
+      inn: document.getElementById("sInn").value,
+      address: document.getElementById("sAddress").value,
+      period: document.getElementById("sPeriod").value,
+      rahbar: document.getElementById("sRahbar").value,
+      qqsStavka: toNum(document.getElementById("sQqs").value),
+      foydaStavka: toNum(document.getElementById("sFoyda").value),
+      davrXarajati: toNum(document.getElementById("sDavr").value),
+      ishHaqiAvtoXarajat: document.getElementById("sIshHaqiAvto").checked,
+      moliyaviyXarajat: toNum(document.getElementById("sMoliya").value),
+      tannarxManual: tannarxVal === "" ? null : toNum(tannarxVal),
+      ijtimoiySoliqStavka: toNum(document.getElementById("sIjtimoiy").value),
+      ndflStavka: toNum(document.getElementById("sNdfl").value),
+      inpsStavka: toNum(document.getElementById("sInps").value)
+    };
+    const { ok, errors, warnings } = validateSettings(next);
+    applySettingsFieldMessages(errors, warnings);
+    if (!ok) {
+      toast("Ba'zi qiymatlar noto'g'ri — qizil bilan belgilangan maydonlarni tuzating", "err");
+      return;
+    }
+    // Yagona yo'l: STORE + baza + kesh. rerender:false — faol tab yo'qolmasin.
+    applySettingsChange(next, { rerender: false });
+    SETTINGS_DIRTY = false;
+    document.getElementById("settingsDirtyNote").style.display = "none";
     toast("Sozlamalar saqlandi");
   });
 
@@ -6044,6 +6276,8 @@ function renderSettings() {
       toast("Tozalandi");
     });
   });
+
+  bindNavShortcuts(main);
 }
 
 /* ------------------------------- Hisobot export/import (Excel) ------------------------------- */
@@ -6061,6 +6295,7 @@ function buildAndDownloadReportXlsx(filenameBase, title, lines, detail) {
     ["Kod", "Ko'rsatkich", "Summa"]
   ];
   lines.forEach((l) => aoa.push([l.code || "", l.label, toNum(l.value)]));
+  if (s.rahbar) { aoa.push([]); aoa.push(["", "Rahbar:", s.rahbar]); }
   const ws1 = XLSX.utils.aoa_to_sheet(aoa);
   ws1["!cols"] = [{ wch: 8 }, { wch: 55 }, { wch: 20 }];
   const wb = XLSX.utils.book_new();
@@ -6828,8 +7063,9 @@ async function bootAfterAuth() {
   }
   setupRealtime();
   updateNavBadges();
+  // "Firmalar" endi Sozlamalar ichidagi bo'lim — alohida nav elementi ko'rsatilmaydi.
   const navFirmalarEl = document.getElementById("navFirmalar");
-  if (navFirmalarEl) navFirmalarEl.style.display = IS_ADMIN ? "" : "none";
+  if (navFirmalarEl) navFirmalarEl.style.display = "none";
   // "loadAllData" tugashi bir necha yuz millisekund cho'zilishi mumkin — shu oraliqda
   // foydalanuvchi allaqachon boshqa bo'limga o'tgan bo'lishi mumkin. Shu sabab uni
   // majburan "dashboard"ga qaytarmaymiz, aksincha HOZIRGI turgan sahifasini yangi
@@ -6888,8 +7124,9 @@ async function switchFirma(firmaId) {
   setupRealtime();
   updateNavBadges();
   renderFirmaSwitcher();
+  // "Firmalar" endi Sozlamalar ichidagi bo'lim — alohida nav elementi ko'rsatilmaydi.
   const navFirmalarEl = document.getElementById("navFirmalar");
-  if (navFirmalarEl) navFirmalarEl.style.display = IS_ADMIN ? "" : "none";
+  if (navFirmalarEl) navFirmalarEl.style.display = "none";
   PAGES[CURRENT_PAGE].render();
 }
 
