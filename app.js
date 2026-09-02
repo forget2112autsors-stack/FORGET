@@ -2912,7 +2912,10 @@ function renderIshlabChiqarish() {
     <div class="section">
       <div class="page-header" style="margin-bottom:12px;">
         <h2 class="section-title" style="margin:0;">Ishlab chiqarish / sotuv jurnali</h2>
-        <div class="page-actions"><button class="btn btn-primary" id="btnAddIC">+ Yozuv qo'shish</button></div>
+        <div class="page-actions">
+          <button class="btn" id="btnExportIC">Excel'ga eksport</button>
+          <button class="btn btn-primary" id="btnAddIC">+ Yozuv qo'shish</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
@@ -2926,6 +2929,7 @@ function renderIshlabChiqarish() {
 
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
+  document.getElementById("btnExportIC").addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
   const rematchAllBtn = document.getElementById("btnRematchAll");
   if (rematchAllBtn) rematchAllBtn.addEventListener("click", rematchAllChiqimTafsil);
   main.querySelectorAll("[data-edit-m]").forEach((b) => b.addEventListener("click", () => openMahsulotModal(b.dataset.editM)));
@@ -2942,6 +2946,19 @@ function renderIshlabChiqarish() {
     const kalkChiqimId = e.target.dataset.openKalk;
     if (kalkChiqimId) openChiqimKalkulyatsiyaModal(kalkChiqimId);
   });
+}
+
+function exportIshlabChiqarishXlsx(rows) {
+  const s = STORE.settings;
+  const aoa = [[s.companyName], [`Sana: ${todayISO()}`], ["Ishlab chiqarish / sotuv jurnali"], [],
+    ["Sana", "Mahsulot", "Miqdor", "Birlik", "Tannarx", "Izoh"]];
+  rows.forEach((r) => aoa.push([r.sana, r.mahsulotNomi, toNum(r.miqdor), r.birlik, toNum(r.tannarx), r.izoh]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 12 }, { wch: 26 }, { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 30 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ishlab chiqarish");
+  XLSX.writeFile(wb, `FORGET_ishlab_chiqarish_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
 }
 
 function omborNomiDatalistHtml() {
@@ -3154,6 +3171,7 @@ function renderKontragentlar() {
         <p class="page-desc">Mijoz va yetkazib beruvchilar spravochnigi — bu yerga kiritilgan nomlar Faktura kirim/chiqim va Bank harakati sahifalarida avtomatik taklif qilinadi, INN esa avtomat to'ldiriladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnExportKontragent">Excel'ga eksport</button>
         <button class="btn" id="btnMergeKontragent">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddKontragent">+ Yangi kontragent</button>
       </div>
@@ -3188,6 +3206,7 @@ function renderKontragentlar() {
   `;
 
   document.getElementById("btnAddKontragent").addEventListener("click", () => openKontragentModal());
+  document.getElementById("btnExportKontragent").addEventListener("click", () => exportKontragentlarXlsx(rows));
   document.getElementById("btnMergeKontragent").addEventListener("click", () => openKontragentMergeModal());
   document.getElementById("searchBox").addEventListener("input", (e) => filterKontragentRows(e.target.value));
   const body = document.getElementById("kontragentBody");
@@ -3220,6 +3239,19 @@ function kontragentRowHtml(k) {
       </td>
     </tr>
   `;
+}
+
+function exportKontragentlarXlsx(rows) {
+  const s = STORE.settings;
+  const aoa = [[s.companyName], [`Sana: ${todayISO()}`], ["Kontragentlar"], [],
+    ["Nomi", "INN", "Turi", "Telefon", "Manzil", "Bank hisob raqami", "MFO"]];
+  rows.forEach((k) => aoa.push([k.nomi, k.inn, k.turi, k.telefon, k.manzil, k.bankHisob, k.bankMfo]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 30 }, { wch: 22 }, { wch: 10 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Kontragentlar");
+  XLSX.writeFile(wb, `FORGET_kontragentlar_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
 }
 
 function filterKontragentRows(q) {
@@ -3432,6 +3464,7 @@ function renderAsosiyVositalar() {
         <p class="page-desc">Asosiy vositalar ro'yxati va yillik foiz stavkasi bo'yicha (chiziqli usul) hisoblangan amortizatsiya. Joriy qoldiq qiymat F1 — Balans hisobotiga avtomatik quyiladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnExportAV">Excel'ga eksport</button>
         <button class="btn btn-primary" id="btnAddAV">+ Yangi vosita</button>
       </div>
     </div>
@@ -3460,6 +3493,7 @@ function renderAsosiyVositalar() {
   `;
 
   document.getElementById("btnAddAV").addEventListener("click", () => openAsosiyVositaModal());
+  document.getElementById("btnExportAV").addEventListener("click", () => exportAsosiyVositalarXlsx(rows, asOf, { jamiBoshlangich, jamiAmortizatsiya, jamiQoldiq }));
   const body = document.getElementById("avBody");
   if (body) body.addEventListener("click", (e) => {
     const editId = e.target.dataset.edit;
@@ -3485,6 +3519,23 @@ function asosiyVositaRowHtml(a, asOf) {
       </td>
     </tr>
   `;
+}
+
+function exportAsosiyVositalarXlsx(rows, asOf, totals) {
+  const s = STORE.settings;
+  const aoa = [[s.companyName], [`Holat sanasi: ${asOf}`], ["Asosiy vositalar"], [],
+    ["Nomi", "Inventar №", "Ishga tushirish sanasi", "Boshlang'ich qiymati", "Stavka (%/yil)", "Joriy qoldiq qiymati", "Holati"]];
+  rows.forEach((a) => aoa.push([a.nomi, a.inventarRaqami, a.ishgaTushirishSanasi, toNum(a.boshlangichQiymati), toNum(a.amortizatsiyaStavkasi), asosiyVositaQoldiqQiymati(a, asOf), a.holati || "Ishlatilmoqda"]));
+  aoa.push([]);
+  aoa.push(["Jami boshlang'ich qiymat", "", "", totals.jamiBoshlangich]);
+  aoa.push(["Jami to'plangan amortizatsiya", "", "", "", "", totals.jamiAmortizatsiya]);
+  aoa.push(["Jami qoldiq qiymat", "", "", "", "", totals.jamiQoldiq]);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 26 }, { wch: 14 }, { wch: 16 }, { wch: 18 }, { wch: 12 }, { wch: 18 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Asosiy vositalar");
+  XLSX.writeFile(wb, `FORGET_asosiy_vositalar_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
 }
 
 function openAsosiyVositaModal(existingId) {
@@ -4357,6 +4408,7 @@ function renderBank() {
         <p class="page-desc">Hisob raqami bo'yicha kirim/chiqim operatsiyalari. Qoldiq F1 hisobotidagi "Pul mablag'lari"ga avtomatik qo'shiladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnExportBank">Excel'ga eksport</button>
         <button class="btn" id="btnImport">Fayldan import</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
@@ -4391,6 +4443,7 @@ function renderBank() {
   `;
 
   document.getElementById("btnAddRow").addEventListener("click", addBankRow);
+  document.getElementById("btnExportBank").addEventListener("click", () => exportBankXlsx(rows));
   document.getElementById("btnImport").addEventListener("click", openBankImportModal);
   document.getElementById("inOpening").addEventListener("change", (e) => {
     const partial = { bankOpeningBalance: toNum(e.target.value) };
@@ -4416,6 +4469,25 @@ function bankRowHtml(r) {
       <td class="row-actions"><button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
+}
+
+function exportBankXlsx(rows) {
+  const s = STORE.settings;
+  const t = computeTotals();
+  const aoa = [
+    [s.companyName], [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`], ["Bank harakati"], [],
+    ["Sana", "Hujjat №", "Kontragent", "INN", "Tavsif", "Kirim", "Chiqim"]
+  ];
+  rows.forEach((r) => aoa.push([r.sana, r.hujjatRaqami, r.kontragent, r.kontragentInn, r.tavsif, toNum(r.kirim), toNum(r.chiqim)]));
+  aoa.push([]);
+  aoa.push(["Boshlang'ich qoldiq", "", "", "", "", "", toNum(s.bankOpeningBalance)]);
+  aoa.push(["Joriy qoldiq", "", "", "", "", "", toNum(t.bankQoldiq)]);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 12 }, { wch: 14 }, { wch: 26 }, { wch: 14 }, { wch: 30 }, { wch: 16 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Bank");
+  XLSX.writeFile(wb, `FORGET_bank_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
 }
 
 function refreshBankSummary() {
@@ -5965,6 +6037,9 @@ function renderFayllar() {
         <h1 class="page-title">Fayl yuklamalari</h1>
         <p class="page-desc">Faktura kirim, Faktura chiqim, Bank harakati, Ombor va Ish haqi bo'limlariga "Excel'dan import" orqali yuklangan fayllar tarixi — faylning o'zi emas, faqat ma'lumoti saqlanadi. Faylni o'chirsangiz, unga bog'liq barcha yozuvlar ham o'chib ketadi.</p>
       </div>
+      <div class="page-actions">
+        <button class="btn" id="btnExportFayllar">Excel'ga eksport</button>
+      </div>
     </div>
 
     <div class="table-wrap">
@@ -6006,6 +6081,24 @@ function renderFayllar() {
     const syncId = e.target.dataset.syncFayl;
     if (syncId) syncFaylLinks(syncId, e.target);
   });
+  document.getElementById("btnExportFayllar").addEventListener("click", () => exportFayllarXlsx(rows));
+}
+
+function exportFayllarXlsx(rows) {
+  const s = STORE.settings;
+  const aoa = [[s.companyName], [`Sana: ${todayISO()}`], ["Fayl yuklamalari"], [],
+    ["Yuklangan sana", "Bo'lim", "Fayl nomi", "Hajmi", "Bog'langan yozuvlar"]];
+  rows.forEach((f) => aoa.push([
+    f.sana ? new Date(f.sana).toLocaleString("ru-RU") : "",
+    FAYL_BOLIM_LABEL[f.bolim] || f.bolim || "",
+    f.faylNomi, fmtBytes(f.hajmi), fayllarLinkedCount(f)
+  ]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 20 }, { wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Fayllar");
+  XLSX.writeFile(wb, `FORGET_fayllar_${todayISO()}.xlsx`);
+  toast("Excel fayl yuklab olindi");
 }
 
 // "Bog'langan yozuvlar" ustunidagi yangilash tugmasi: shu faylga tegishli
