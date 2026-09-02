@@ -1270,6 +1270,34 @@ const DASHBOARD_QQS_SERIES = [
   { key: "qqsToPay", label: "Byudjetga to'lov", varName: "--chart-3" }
 ];
 
+// Har oy oxiridagi to'lanmagan kirim/chiqim fakturalar qoldig'i (aging emas —
+// balans). computeTotals()dagi kreditorlik/debitorlik bilan BIR XIL yondashuv:
+// joriy "tolandi" bayrog'idan foydalanadi (tarixiy FIFO simulyatsiyasi emas) —
+// shu sabab, F1 balansdagi kabi, bu "hozirgi holat asosidagi taxminiy"
+// ko'rsatkich, aynan o'sha oy oxiridagi holatning 100% aniq tarixiy tasviri emas.
+function computeMonthlyDebtTrend(monthsCount) {
+  const now = new Date();
+  const toIso = (d) => d.toISOString().slice(0, 10);
+  const buckets = [];
+  for (let i = monthsCount - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const monthEnd = i === 0 ? todayISO() : toIso(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    const kreditorlik = STORE.kirim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi && r.sana && r.sana <= monthEnd ? a + toNum(r.jamiSumma) : a), 0);
+    const debitorlik = STORE.chiqim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi && r.sana && r.sana <= monthEnd ? a + toNum(r.jamiSumma) : a), 0);
+    buckets.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: UZ_MONTH_SHORT[d.getMonth()],
+      kreditorlik, debitorlik
+    });
+  }
+  return buckets;
+}
+
+const DASHBOARD_DEBT_SERIES = [
+  { key: "debitorlik", label: "Debitorlik (bizga qarzdor)", varName: "--chart-1" },
+  { key: "kreditorlik", label: "Kreditorlik (biz qarzdormiz)", varName: "--chart-2" }
+];
+
 // KPI kartasidagi mini-trend chizig'i (so'nggi oylar) — faqat vizual signal,
 // sarlavhadagi asosiy raqam tanlangan davr filtriga bog'liq bo'lib qoladi.
 function sparklineSvg(values, colorVar) {
@@ -1394,6 +1422,9 @@ function dashboardTrendChartHtml(trend) {
 function dashboardQqsChartHtml(trend) {
   return buildTrendChartHtml(trend, DASHBOARD_QQS_SERIES, { idPrefix: "dashQqs" });
 }
+function dashboardDebtChartHtml(trend) {
+  return buildTrendChartHtml(trend, DASHBOARD_DEBT_SERIES, { idPrefix: "dashDebt" });
+}
 
 // dashboardTrendChartHtml (yoki uning idPrefix bilan variantlari) tomonidan
 // generatsiya qilingan grafikka hover/crosshair/tooltip va jadval-toggle bog'laydi.
@@ -1457,11 +1488,15 @@ function bindDashboardChart(trend) {
 function bindDashboardQqsChart(trend) {
   return bindTrendChart(trend, DASHBOARD_QQS_SERIES, { idPrefix: "dashQqs" });
 }
+function bindDashboardDebtChart(trend) {
+  return bindTrendChart(trend, DASHBOARD_DEBT_SERIES, { idPrefix: "dashDebt" });
+}
 
 function renderDashboard() {
   const t = computeTotals();
   const trend = computeMonthlyTrend(6);
   const qqsTrend = computeMonthlyQqsTrend(6);
+  const debtTrend = computeMonthlyDebtTrend(6);
   const uncostedCount = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
   const ihq = computeIshHaqiTotals();
   const main = document.getElementById("main");
@@ -1554,6 +1589,13 @@ function renderDashboard() {
     </div>
 
     <div class="section">
+      <h2 class="section-title">So'nggi 6 oy — Kreditorlik/Debitorlik qoldig'i</h2>
+      <div class="card" style="padding:18px;">
+        ${dashboardDebtChartHtml(debtTrend)}
+      </div>
+    </div>
+
+    <div class="section">
       <h2 class="section-title">Bo'limlar orasidagi bog'liqlik</h2>
       <div class="card" style="padding:22px;">
         <div class="note" style="margin-top:0;">
@@ -1577,6 +1619,7 @@ function renderDashboard() {
   bindNavShortcuts(main);
   bindDashboardChart(trend);
   bindDashboardQqsChart(qqsTrend);
+  bindDashboardDebtChart(debtTrend);
 }
 
 function recentList(type) {
