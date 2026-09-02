@@ -749,6 +749,25 @@ function el(html) {
   return t.content.firstElementChild;
 }
 
+// Katta jadvallarni bitta ulkan innerHTML satrida emas, kichik bo'laklarga
+// bo'lib (requestAnimationFrame orqali) DOMga qo'shadi. Voqealar tbody emas,
+// uni chaqirgan konteynerga (delegation) osilgani uchun bo'lib-bo'lib qo'shish
+// mavjud klik/o'zgarish handlerlariga ta'sir qilmaydi.
+function renderRowsChunked(tbody, rows, rowHtmlFn, { chunkSize = 200, onDone } = {}) {
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  if (!rows.length) { if (onDone) onDone(); return; }
+  tbody.innerHTML = rows.slice(0, chunkSize).map(rowHtmlFn).join("");
+  let i = chunkSize;
+  function step() {
+    if (i >= rows.length) { if (onDone) onDone(); return; }
+    tbody.insertAdjacentHTML("beforeend", rows.slice(i, i + chunkSize).map(rowHtmlFn).join(""));
+    i += chunkSize;
+    requestAnimationFrame(step);
+  }
+  if (i < rows.length) requestAnimationFrame(step); else if (onDone) onDone();
+}
+
 function toast(msg, type = "ok") {
   const stack = document.getElementById("toastStack");
   const node = el(`<div class="toast ${type}">${escapeHtml(msg)}</div>`);
@@ -1614,9 +1633,7 @@ function renderInvoiceTable(type) {
             <th></th>
           </tr>
         </thead>
-        <tbody id="invoiceBody">
-          ${rows.length ? rows.map((r) => invoiceRowHtml(type, r, dupIds.has(r.id))).join("") : ""}
-        </tbody>
+        <tbody id="invoiceBody"></tbody>
       </table>
     </div>
     ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg><div class="t">${INVOICE_DUP_FILTER[type] ? "Takrorlangan hujjat topilmadi" : "Hujjatlar yo'q"}</div><div class="d">${INVOICE_DUP_FILTER[type] ? "Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuv yo'q." : `"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.`}</div></div>` : ""}
@@ -1633,6 +1650,9 @@ function renderInvoiceTable(type) {
 
   bindInvoiceRowEvents(type);
   bindInvoiceBulkSelect(type);
+  renderRowsChunked(document.getElementById("invoiceBody"), rows, (r) => invoiceRowHtml(type, r, dupIds.has(r.id)), {
+    onDone: () => filterInvoiceRows(document.getElementById("searchBox").value)
+  });
 }
 
 // Faktura jadvalида qatorlarni belgilab ommaviy o'chirish.
@@ -2132,9 +2152,7 @@ function renderOmborKirim() {
             <th></th>
           </tr>
         </thead>
-        <tbody id="omborBody">
-          ${rows.length ? rows.map((r) => omborRowHtml(r)).join("") : ""}
-        </tbody>
+        <tbody id="omborBody"></tbody>
       </table>
     </div>
     ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-package"/></svg><div class="t">Ombor bo'sh</div><div class="d">"Excel'dan import" tugmasi orqali didox.uz "faktura kirim" eksport faylini yuklang yoki qo'lda qo'shing.</div></div>` : ""}
@@ -2147,6 +2165,9 @@ function renderOmborKirim() {
   document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
 
   bindOmborRowEvents();
+  renderRowsChunked(document.getElementById("omborBody"), rows, (r) => omborRowHtml(r), {
+    onDone: () => filterOmborRows(document.getElementById("searchBox").value)
+  });
 }
 
 function omborChiqimRowHtml(r) {
@@ -4221,9 +4242,7 @@ function renderBank() {
             <th class="num">Kirim</th><th class="num">Chiqim</th><th></th>
           </tr>
         </thead>
-        <tbody id="bankBody">
-          ${rows.map(bankRowHtml).join("")}
-        </tbody>
+        <tbody id="bankBody"></tbody>
       </table>
     </div>
     ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-bank"/></svg><div class="t">Bank operatsiyalari yo'q</div><div class="d">"Fayldan import" tugmasi orqali bank ko'chirmasini (masalan, Bank.xlsx) yuklang yoki qo'lda kiriting.</div></div>` : ""}
@@ -4241,6 +4260,7 @@ function renderBank() {
     refreshBankSummary();
   });
   bindBankRowEvents();
+  renderRowsChunked(document.getElementById("bankBody"), rows, bankRowHtml);
 }
 
 function bankRowHtml(r) {
