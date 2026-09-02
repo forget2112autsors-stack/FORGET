@@ -131,6 +131,7 @@ const SETTINGS_DB_MAP = {
   f1AsosiyVositalar: "f1_asosiy_vositalar", f1TovarZaxira: "f1_tovar_zaxira", f1Kassa: "f1_kassa",
   f1UstavKapitali: "f1_ustav_kapitali", f1OldingiFoyda: "f1_oldingi_foyda", f1UzoqMajburiyat: "f1_uzoq_majburiyat",
   ijtimoiySoliqStavka: "ijtimoiy_soliq_stavka", ndflStavka: "ndfl_stavka", inpsStavka: "inps_stavka",
+  ishHaqiTolovKuni: "ish_haqi_tolov_kuni",
   rahbar: "rahbar"
 };
 
@@ -229,6 +230,10 @@ function validateSettings(s) {
   if (!isBlank(s.tannarxManual)) {
     const n = Number(s.tannarxManual);
     if (!Number.isFinite(n) || n < 0) errors.tannarxManual = "Bo'sh qoldiring yoki manfiy bo'lmagan son kiriting";
+  }
+  if (!isBlank(s.ishHaqiTolovKuni)) {
+    const n = Number(s.ishHaqiTolovKuni);
+    if (!Number.isInteger(n) || n < 1 || n > 31) errors.ishHaqiTolovKuni = "1 dan 31 gacha bo'lgan butun son bo'lishi kerak";
   }
   if (s.inn !== undefined && String(s.inn).trim() && !/^\d{9}$/.test(String(s.inn).trim())) {
     warnings.inn = "Odatda INN 9 ta raqamdan iborat bo'ladi";
@@ -448,6 +453,9 @@ function defaultStore() {
       ijtimoiySoliqStavka: 12,
       ndflStavka: 12,
       inpsStavka: 0.1,
+      // Ish haqi to'lov kuni (oyning 1-31 kuni, ixtiyoriy) — diqqat
+      // qo'ng'irog'ida "to'lov muddati yaqinlashmoqda" eslatmasi uchun.
+      ishHaqiTolovKuni: null,
       // Kalkulyatsiya blankasi (chop etish) "UTVERJDAYU" bandida ko'rsatiladi
       rahbar: ""
     },
@@ -724,6 +732,15 @@ function escapeHtml(s) {
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Mahalliy (brauzer vaqt zonasidagi) kalendar sanasini YYYY-MM-DD shaklida
+// beradi. toISOString() avval UTC'ga o'giradi — musbat UTC siljishli
+// zonalarda (masalan O'zbekiston, UTC+5) bu mahalliy yarim tunni oldingi
+// kunga "siljitib" qo'yishi mumkin, shuning uchun aniq kalendar sana kerak
+// bo'lgan joylarda (masalan eslatma sanasi) shu funksiya ishlatiladi.
+function localDateISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function isValidStatus(status) {
@@ -1060,10 +1077,11 @@ function computeAttentionSummary() {
   const takrorlar = ["kirim", "chiqim"].reduce((a, type) => a + findDuplicateInvoiceIds(type).groupCount, 0);
   const yaqinlashayotganKirim = computeUpcomingKreditorlik().length;
   const yaqinlashayotganChiqim = computeUpcomingDebitorlik().length;
+  const ishHaqiReminder = computeIshHaqiPayReminder();
   return {
     kalkulyatsiyasiz, muddatiOtganKirim, muddatiOtganChiqim, innsiz, takrorlar,
-    yaqinlashayotganKirim, yaqinlashayotganChiqim,
-    total: kalkulyatsiyasiz + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar + yaqinlashayotganKirim + yaqinlashayotganChiqim
+    yaqinlashayotganKirim, yaqinlashayotganChiqim, ishHaqiReminder,
+    total: kalkulyatsiyasiz + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar + yaqinlashayotganKirim + yaqinlashayotganChiqim + (ishHaqiReminder ? 1 : 0)
   };
 }
 
@@ -1088,7 +1106,8 @@ function openAttentionModal() {
     { count: s.yaqinlashayotganKirim, label: "Kreditorlik: to'lov muddati yaqinlashmoqda", desc: `${REMINDER_LOOKAHEAD_DAYS} kun ichida 30 kunlik chegaraga yetadigan, hali to'lanmagan kirim fakturalar.`, action: () => navigate("kreditorlik") },
     { count: s.yaqinlashayotganChiqim, label: "Debitorlik: to'lov muddati yaqinlashmoqda", desc: `${REMINDER_LOOKAHEAD_DAYS} kun ichida 30 kunlik chegaraga yetadigan, hali to'lanmagan chiqim fakturalar.`, action: () => navigate("debitorlik") },
     { count: s.innsiz, label: "INN kiritilmagan kirim/chiqim yozuvlari", desc: "Bunday yozuvlarda to'lov holati avtomatik solishtirilmaydi, \"To'landi\" belgisi qo'lda qo'yiladi.", action: () => navigate("kirim") },
-    { count: s.takrorlar, label: "Ehtimoliy takrorlangan hujjatlar", desc: "Hujjat №+sana+summa+kontragent bo'yicha bir xil yozuvlar — \"Faktura kirim/chiqim\" sahifasidagi \"Takrorlar\" tugmasi orqali tekshiring.", action: () => navigate("kirim") }
+    { count: s.takrorlar, label: "Ehtimoliy takrorlangan hujjatlar", desc: "Hujjat №+sana+summa+kontragent bo'yicha bir xil yozuvlar — \"Faktura kirim/chiqim\" sahifasidagi \"Takrorlar\" tugmasi orqali tekshiring.", action: () => navigate("kirim") },
+    ...(s.ishHaqiReminder ? [{ count: 1, label: "Ish haqi to'lov muddati yaqinlashmoqda", desc: `${s.ishHaqiReminder.daysUntil} kun qoldi (${s.ishHaqiReminder.date}).`, action: () => navigate("ishhaqi") }] : [])
   ].filter((it) => it.count > 0);
 
   openModal(`
@@ -1282,11 +1301,10 @@ const DASHBOARD_QQS_SERIES = [
 // ko'rsatkich, aynan o'sha oy oxiridagi holatning 100% aniq tarixiy tasviri emas.
 function computeMonthlyDebtTrend(monthsCount) {
   const now = new Date();
-  const toIso = (d) => d.toISOString().slice(0, 10);
   const buckets = [];
   for (let i = monthsCount - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const monthEnd = i === 0 ? todayISO() : toIso(new Date(d.getFullYear(), d.getMonth() + 1, 0));
+    const monthEnd = i === 0 ? localDateISO(now) : localDateISO(new Date(d.getFullYear(), d.getMonth() + 1, 0));
     const kreditorlik = STORE.kirim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi && r.sana && r.sana <= monthEnd ? a + toNum(r.jamiSumma) : a), 0);
     const debitorlik = STORE.chiqim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi && r.sana && r.sana <= monthEnd ? a + toNum(r.jamiSumma) : a), 0);
     buckets.push({
@@ -4496,6 +4514,25 @@ function computeIshHaqiTotals() {
   return totals;
 }
 
+// Sozlamalarda kiritilgan "Ish haqi to'lov kuni"ga asoslanib, eng yaqin
+// kelgusi to'lov sanasini topadi (joriy oyda o'tib ketgan bo'lsa — keyingi oy).
+const ISH_HAQI_REMINDER_LOOKAHEAD_DAYS = 5;
+function daysInMonth(year, month1based) {
+  return new Date(year, month1based, 0).getDate();
+}
+function computeIshHaqiPayReminder() {
+  const day = toNum(STORE.settings.ishHaqiTolovKuni);
+  if (!day || day < 1 || day > 31) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let target = new Date(today.getFullYear(), today.getMonth(), Math.min(day, daysInMonth(today.getFullYear(), today.getMonth() + 1)));
+  if (target < today) {
+    target = new Date(today.getFullYear(), today.getMonth() + 1, Math.min(day, daysInMonth(today.getFullYear(), today.getMonth() + 2)));
+  }
+  const daysUntil = Math.round((target - today) / 86400000);
+  return daysUntil <= ISH_HAQI_REMINDER_LOOKAHEAD_DAYS ? { daysUntil, date: localDateISO(target) } : null;
+}
+
 // Faktura kirim/chiqimdagi "Takrorlar" filtri bilan bir xil naqsh (qarang:
 // invoiceDuplicateKey, findDuplicateInvoiceIds) — PINFL+sana+F.I.O+summa
 // bo'yicha bir xil yozuvlarni KO'RSATISH uchun, hech narsani avtomat
@@ -6453,7 +6490,7 @@ async function openFirmaAccessModal(firmaId, firmaNomi) {
 const SETTINGS_FIELD_INPUT_ID = {
   companyName: "sCompany", inn: "sInn",
   qqsStavka: "sQqs", foydaStavka: "sFoyda", davrXarajati: "sDavr", moliyaviyXarajat: "sMoliya", tannarxManual: "sTannarx",
-  ijtimoiySoliqStavka: "sIjtimoiy", ndflStavka: "sNdfl", inpsStavka: "sInps"
+  ijtimoiySoliqStavka: "sIjtimoiy", ndflStavka: "sNdfl", inpsStavka: "sInps", ishHaqiTolovKuni: "sIshHaqiTolovKuni"
 };
 
 // validateSettings() natijasini sahifadagi maydonlarga bo'yaydi: xato -> qizil
@@ -6538,6 +6575,7 @@ function renderSettings() {
         <div class="field"><label>Ijtimoiy soliq stavkasi (%)</label><input id="sIjtimoiy" inputmode="decimal" value="${fmt(s.ijtimoiySoliqStavka)}"></div>
         <div class="field"><label>NDFL stavkasi (%)</label><input id="sNdfl" inputmode="decimal" value="${fmt(s.ndflStavka)}"></div>
         <div class="field"><label>INPS stavkasi (%)</label><input id="sInps" inputmode="decimal" value="${fmt(s.inpsStavka, 1)}"></div>
+        <div class="field"><label>To'lov kuni (oyning kuni, ixtiyoriy — eslatma uchun)</label><input id="sIshHaqiTolovKuni" inputmode="numeric" value="${s.ishHaqiTolovKuni || ""}" placeholder="masalan: 5"></div>
       </div>
     </div>
 
@@ -6619,6 +6657,7 @@ function renderSettings() {
   document.getElementById("btnSaveSettings").addEventListener("click", () => {
     if (!requireDataReady()) return;
     const tannarxVal = document.getElementById("sTannarx").value.trim();
+    const tolovKuniVal = document.getElementById("sIshHaqiTolovKuni").value.trim();
     const next = {
       companyName: document.getElementById("sCompany").value,
       inn: document.getElementById("sInn").value,
@@ -6633,7 +6672,8 @@ function renderSettings() {
       tannarxManual: tannarxVal === "" ? null : toNum(tannarxVal),
       ijtimoiySoliqStavka: toNum(document.getElementById("sIjtimoiy").value),
       ndflStavka: toNum(document.getElementById("sNdfl").value),
-      inpsStavka: toNum(document.getElementById("sInps").value)
+      inpsStavka: toNum(document.getElementById("sInps").value),
+      ishHaqiTolovKuni: tolovKuniVal === "" ? null : toNum(tolovKuniVal)
     };
     const { ok, errors, warnings } = validateSettings(next);
     applySettingsFieldMessages(errors, warnings);
