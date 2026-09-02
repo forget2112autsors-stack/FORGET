@@ -368,7 +368,7 @@ function pushFieldsUpdate(type, id, partial) {
   // boshqa firmaga tegishli qator RLS orqali o'tib, joriy firmaga "ko'chib"
   // qolishi mumkin edi).
   sbClient.from(TABLE_NAMES[type]).update(dbPartial).eq("id", id).eq("firma_id", ACTIVE_FIRMA_ID).then(({ error }) => {
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); }
+    if (error) { reportError(error, "Saqlashda xatolik"); }
   });
 }
 
@@ -377,6 +377,13 @@ function pushFieldsUpdate(type, id, partial) {
 // kodini qaytaradi — buni tushunarli xabarga aylantiramiz.
 function isPermissionError(error) {
   return !!(error && (error.code === "42501" || /permission|policy|rls/i.test(String(error.message || ""))));
+}
+
+// Supabase/tarmoq xatosini bitta joyda log qiladi va foydalanuvchiga izchil
+// xabar ko'rsatadi (ruxsat xatosi bo'lsa — alohida matn).
+function reportError(err, userMsg) {
+  console.error(err);
+  toast(isPermissionError(err) ? `${userMsg} — ruxsat yo'q (faqat admin)` : userMsg, "err");
 }
 
 // STORE'dan optimistik ravishda o'chiradi (UI darhol yangilanadi), lekin
@@ -1767,7 +1774,7 @@ async function addInvoiceRow(type) {
     summaQQSsiz: 0, qqsStavka: s.qqsStavka, qqsSumma: 0, jamiSumma: 0, tolandi: false
   };
   const { data, error } = await sbClient.from(TABLE_NAMES[type]).insert(toDbRow(TABLE_MAPS[type], newRow)).select().single();
-  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  if (error) { reportError(error, "Qo'shishda xatolik"); return; }
   const row = fromDbRow(TABLE_MAPS[type], data);
   if (!STORE[type].some((r) => r.id === row.id)) STORE[type].push(row);
   saveStore();
@@ -2338,7 +2345,7 @@ async function addOmborRow() {
     nomi: "", birlik: "", miqdor: 0, narx: 0, yetkazibBerishNarxi: 0, qqsSumma: 0, yetkazibBerishNarxiQQSBilan: 0, turi: "kirim"
   };
   const { data, error } = await sbClient.from("ombor").insert(toDbRow(OMBOR_DB_MAP, newRow)).select().single();
-  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  if (error) { reportError(error, "Qo'shishda xatolik"); return; }
   const row = fromDbRow(OMBOR_DB_MAP, data);
   if (!STORE.ombor.some((r) => r.id === row.id)) STORE.ombor.push(row);
   updateNavBadges();
@@ -2492,7 +2499,7 @@ async function handleOmborImport(file) {
             throw error;
           }
         }
-      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      } catch (error) { reportError(error, "Bazaga yozishda xatolik"); return; }
       data.forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
       added = data.length;
     }
@@ -2867,7 +2874,7 @@ async function saveMahsulotFromModal(existingId) {
       warnMissingMigration = true;
       ({ data, error } = await sbClient.from("mahsulotlar").update(toDbRow(MAHSULOT_DB_MAP, { nomi, birlik, tarkib })).eq("id", existingId).select().single());
     }
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     const idx = STORE.mahsulotlar.findIndex((m) => m.id === existingId);
     if (idx >= 0) STORE.mahsulotlar[idx] = fromDbRow(MAHSULOT_DB_MAP, data);
   } else {
@@ -2876,7 +2883,7 @@ async function saveMahsulotFromModal(existingId) {
       warnMissingMigration = true;
       ({ data, error } = await sbClient.from("mahsulotlar").insert(toDbRow(MAHSULOT_DB_MAP, { nomi, birlik, tarkib })).select().single());
     }
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     STORE.mahsulotlar.push(fromDbRow(MAHSULOT_DB_MAP, data));
   }
   closeModal();
@@ -3025,12 +3032,12 @@ async function saveKontragentFromModal(existingId) {
 
   if (existingId) {
     const { data, error } = await sbClient.from("kontragentlar").update(toDbRow(KONTRAGENT_DB_MAP, payload)).eq("id", existingId).select().single();
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     const idx = STORE.kontragentlar.findIndex((k) => k.id === existingId);
     if (idx >= 0) STORE.kontragentlar[idx] = fromDbRow(KONTRAGENT_DB_MAP, data);
   } else {
     const { data, error } = await sbClient.from("kontragentlar").insert(toDbRow(KONTRAGENT_DB_MAP, payload)).select().single();
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     STORE.kontragentlar.push(fromDbRow(KONTRAGENT_DB_MAP, data));
   }
   closeModal();
@@ -3178,12 +3185,12 @@ async function saveAsosiyVositaFromModal(existingId) {
 
   if (existingId) {
     const { data, error } = await sbClient.from("asosiy_vositalar").update(toDbRow(ASOSIY_VOSITA_DB_MAP, payload)).eq("id", existingId).select().single();
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     const idx = STORE.asosiyVositalar.findIndex((a) => a.id === existingId);
     if (idx >= 0) STORE.asosiyVositalar[idx] = fromDbRow(ASOSIY_VOSITA_DB_MAP, data);
   } else {
     const { data, error } = await sbClient.from("asosiy_vositalar").insert(toDbRow(ASOSIY_VOSITA_DB_MAP, payload)).select().single();
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     STORE.asosiyVositalar.push(fromDbRow(ASOSIY_VOSITA_DB_MAP, data));
   }
   closeModal();
@@ -3298,7 +3305,7 @@ async function performMahsulotConsumption(m, miqdor, sana, izoh) {
   const { data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, {
     sana, mahsulotId: m.id, mahsulotNomi: m.nomi, miqdor, birlik: m.birlik, tannarx, izoh
   })).select().single();
-  if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return false; }
+  if (error) { reportError(error, "Saqlashda xatolik"); return false; }
   const icRow = fromDbRow(ISHLAB_CHIQARISH_DB_MAP, data);
   STORE.ishlabChiqarish.push(icRow);
 
@@ -3369,7 +3376,7 @@ async function setChiqimTafsilMahsulot(tafsilId, mahsulotId, mosTuri) {
   if (oldOmborRows.length) {
     const ids = oldOmborRows.map((r) => r.id);
     const { error } = await sbClient.from("ombor").delete().in("id", ids);
-    if (error) { console.error(error); toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Eski sarfni bekor qilishda xatolik", "err"); return { ok: false, shortages: [] }; }
+    if (error) { reportError(error, "Eski sarfni bekor qilishda xatolik"); return { ok: false, shortages: [] }; }
     STORE.ombor = STORE.ombor.filter((r) => !ids.includes(r.id));
   }
 
@@ -3377,7 +3384,7 @@ async function setChiqimTafsilMahsulot(tafsilId, mahsulotId, mosTuri) {
   const { data, error } = await sbClient.from("chiqim_tafsil")
     .update(toDbRow(CHIQIM_TAFSIL_DB_MAP, { mahsulotId: mahsulot ? mahsulot.id : null, mosTuri: mosTuri || (mahsulot ? "qolda" : "none") }))
     .eq("id", tafsilId).select().single();
-  if (error) { console.error(error); toast(isPermissionError(error) ? "Sizda bu amal uchun ruxsat yo'q (faqat admin)" : "Saqlashda xatolik", "err"); return { ok: false, shortages: [] }; }
+  if (error) { reportError(error, "Saqlashda xatolik"); return { ok: false, shortages: [] }; }
   const idx = STORE.chiqimTafsil.findIndex((t) => t.id === tafsilId);
   if (idx >= 0) STORE.chiqimTafsil[idx] = fromDbRow(CHIQIM_TAFSIL_DB_MAP, data);
 
@@ -3724,7 +3731,7 @@ async function performXomashyoChiqim(nomi, birlik, miqdor, sana, izoh) {
     nomi, birlik, miqdor, narx: 0, yetkazibBerishNarxi: 0, qqsSumma: 0, yetkazibBerishNarxiQQSBilan: 0, turi: "chiqim"
   };
   const { data, error } = await sbClient.from("ombor").insert(toDbRow(OMBOR_DB_MAP, row)).select().single();
-  if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return false; }
+  if (error) { reportError(error, "Saqlashda xatolik"); return false; }
   STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, data));
   updateNavBadges();
   return true;
@@ -3952,7 +3959,7 @@ async function handleOmborChiqimImport(file) {
       let data;
       try {
         data = await insertRowsChunked("ombor", candidates.map((r) => toDbRow(OMBOR_DB_MAP, r)));
-      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      } catch (error) { reportError(error, "Bazaga yozishda xatolik"); return; }
       data.forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
       added = data.length;
     }
@@ -4122,7 +4129,7 @@ function bindBankRowEvents() {
 async function addBankRow() {
   const newRow = { sana: todayISO(), hujjatRaqami: "", kontragent: "", kontragentInn: "", tavsif: "", kirim: 0, chiqim: 0 };
   const { data, error } = await sbClient.from("bank").insert(toDbRow(BANK_DB_MAP, newRow)).select().single();
-  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  if (error) { reportError(error, "Qo'shishda xatolik"); return; }
   const row = fromDbRow(BANK_DB_MAP, data);
   if (!STORE.bank.some((r) => r.id === row.id)) STORE.bank.push(row);
   saveStore();
@@ -4334,7 +4341,7 @@ async function handleIshHaqiImport(file) {
       let data;
       try {
         data = await insertRowsChunked("ish_haqi", candidates.map((r) => toDbRow(ISHHAQI_DB_MAP, r)));
-      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      } catch (error) { reportError(error, "Bazaga yozishda xatolik"); return; }
       data.forEach((row) => STORE.ishHaqi.push(fromDbRow(ISHHAQI_DB_MAP, row)));
       added = data.length;
     }
@@ -4436,7 +4443,7 @@ function bindIshHaqiRowEvents() {
 async function addIshHaqiRow() {
   const newRow = { sana: todayISO(), fio: "", lavozimi: "", pinfl: "", turi: "Rezident", holati: "Ishlayapti", oyliqSumma: 0, imtiyozSumma: 0 };
   const { data, error } = await sbClient.from("ish_haqi").insert(toDbRow(ISHHAQI_DB_MAP, newRow)).select().single();
-  if (error) { console.error(error); toast("Qo'shishda xatolik", "err"); return; }
+  if (error) { reportError(error, "Qo'shishda xatolik"); return; }
   const row = fromDbRow(ISHHAQI_DB_MAP, data);
   if (!STORE.ishHaqi.some((r) => r.id === row.id)) STORE.ishHaqi.push(row);
   saveStore();
@@ -5788,7 +5795,7 @@ async function renderAudit() {
   document.getElementById("searchBox").addEventListener("input", (e) => filterAuditRows(e.target.value));
 
   const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).limit(300);
-  if (error) { console.error(error); toast("Tarixni yuklashda xatolik", "err"); return; }
+  if (error) { reportError(error, "Tarixni yuklashda xatolik"); return; }
   AUDIT_ROWS = data || [];
   document.getElementById("auditCount").textContent = `${AUDIT_ROWS.length} ta yozuv`;
   const body = document.getElementById("auditBody");
@@ -5877,7 +5884,7 @@ async function renderFirmaManager(container, { withHeader = false } = {}) {
   container.querySelector("#btnAddFirma").addEventListener("click", () => openFirmaModal());
 
   const { data, error } = await sbClient.from("firmalar").select("*").order("nomi");
-  if (error) { console.error(error); toast("Firmalarni yuklashda xatolik", "err"); return; }
+  if (error) { reportError(error, "Firmalarni yuklashda xatolik"); return; }
   const body = container.querySelector("#firmalarBody");
   if (!body) return;
   body.innerHTML = data.length ? data.map(firmaRowHtml).join("") :
@@ -5969,7 +5976,7 @@ async function saveFirmaFromModal(existingId) {
 
   if (existingId) {
     const { error } = await sbClient.from("firmalar").update({ nomi }).eq("id", existingId);
-    if (error) { console.error(error); toast("Saqlashda xatolik", "err"); return; }
+    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     // Pastdagi firma-almashtirgich (AVAILABLE_FIRMALAR) alohida so'rov bilan
     // yuklanadi — shu sabab uni ham qayta yuklab, yangi nomni darhol
     // ko'rsatish kerak, aks holda u eski nomni saqlab qoladi.
@@ -5977,7 +5984,7 @@ async function saveFirmaFromModal(existingId) {
     renderFirmaSwitcher();
   } else {
     const { data, error } = await sbClient.from("firmalar").insert({ nomi }).select().single();
-    if (error) { console.error(error); toast("Yaratishda xatolik", "err"); return; }
+    if (error) { reportError(error, "Yaratishda xatolik"); return; }
     // Yangi firma darhol ishlatilishi uchun: sozlamalar qatori + yaratgan
     // adminning o'ziga kirish huquqi ham shu yerda birga qo'shiladi — aks
     // holda firma yaratilgan bo'lsa-da, hech kim (yaratgan admin ham) uni
@@ -6635,7 +6642,7 @@ async function handleInvoiceImport(file, type) {
       let data;
       try {
         data = await insertRowsChunked(TABLE_NAMES[type], candidates.map((r) => toDbRow(INVOICE_DB_MAP, r)));
-      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      } catch (error) { reportError(error, "Bazaga yozishda xatolik"); return; }
       data.forEach((row) => STORE[type].push(fromDbRow(INVOICE_DB_MAP, row)));
       added = data.length;
     }
@@ -6903,7 +6910,7 @@ async function handleBankImport(file) {
       let data;
       try {
         data = await insertRowsChunked("bank", candidates.map((r) => toDbRow(BANK_DB_MAP, r)));
-      } catch (error) { console.error(error); toast("Bazaga yozishda xatolik", "err"); return; }
+      } catch (error) { reportError(error, "Bazaga yozishda xatolik"); return; }
       data.forEach((row) => STORE.bank.push(fromDbRow(BANK_DB_MAP, row)));
       added = data.length;
     }
