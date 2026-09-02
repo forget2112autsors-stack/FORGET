@@ -1232,6 +1232,44 @@ function computeMonthlyTrend(monthsCount) {
   return buckets;
 }
 
+// QQS (byudjetga to'lanadigan) trendi — computeTotals()dagi qqsInput/qqsOutput
+// bilan bir xil mantiq (davr bo'yicha, isValidStatus), lekin oxirgi N oy
+// kesimida. Joriy "Davr" filtridan mustaqil — computeMonthlyTrend kabi.
+function computeMonthlyQqsTrend(monthsCount) {
+  const now = new Date();
+  const buckets = [];
+  for (let i = monthsCount - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    buckets.push({
+      key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
+      label: UZ_MONTH_SHORT[d.getMonth()],
+      qqsInput: 0, qqsOutput: 0
+    });
+  }
+  const byKey = {};
+  buckets.forEach((b) => { byKey[b.key] = b; });
+
+  STORE.kirim.forEach((r) => {
+    if (!isValidStatus(r.status) || !r.sana) return;
+    const b = byKey[r.sana.slice(0, 7)];
+    if (b) b.qqsInput += toNum(r.qqsSumma);
+  });
+  STORE.chiqim.forEach((r) => {
+    if (!isValidStatus(r.status) || !r.sana) return;
+    const b = byKey[r.sana.slice(0, 7)];
+    if (b) b.qqsOutput += toNum(r.qqsSumma);
+  });
+
+  buckets.forEach((b) => { b.qqsToPay = b.qqsOutput - b.qqsInput; });
+  return buckets;
+}
+
+const DASHBOARD_QQS_SERIES = [
+  { key: "qqsOutput", label: "Sotuvdan QQS", varName: "--chart-1" },
+  { key: "qqsInput", label: "Xariddan QQS (zachyot)", varName: "--chart-2" },
+  { key: "qqsToPay", label: "Byudjetga to'lov", varName: "--chart-3" }
+];
+
 // KPI kartasidagi mini-trend chizig'i (so'nggi oylar) — faqat vizual signal,
 // sarlavhadagi asosiy raqam tanlangan davr filtriga bog'liq bo'lib qoladi.
 function sparklineSvg(values, colorVar) {
@@ -1280,10 +1318,19 @@ const DASHBOARD_TREND_SERIES = [
   { key: "foyda", label: "Foyda", varName: "--chart-3" }
 ];
 
-function dashboardTrendChartHtml(trend) {
+// Dashboarddagi oylik trend grafiklari uchun umumiy SVG chizuvchi — har xil
+// seriyalar to'plami (savdo/tannarx/foyda, QQS, kreditorlik/debitorlik va h.k.)
+// bilan qayta ishlatiladi. idPrefix generatsiya qilinadigan elementlar ID'sini
+// belgilaydi (masalan "dash" -> dashTrendSvg/dashChartWrap/...).
+function buildTrendChartHtml(trend, series, opts = {}) {
+  const idPrefix = opts.idPrefix || "dash";
+  const cap = idPrefix.charAt(0).toUpperCase() + idPrefix.slice(1);
+  const svgId = `${idPrefix}TrendSvg`, wrapId = `${idPrefix}ChartWrap`, tooltipId = `${idPrefix}ChartTooltip`,
+    crosshairId = `${idPrefix}Crosshair`, tableBtnId = `btn${cap}ChartTable`, tableWrapId = `${idPrefix}ChartTableWrap`;
+
   const W = 640, H = 230, padL = 54, padR = 64, padT = 16, padB = 30;
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const maxVal = Math.max(1, ...trend.flatMap((b) => [b.savdo, b.tannarx, Math.abs(b.foyda)]));
+  const maxVal = Math.max(1, ...trend.flatMap((b) => series.map((s) => Math.abs(b[s.key]))));
   const { max: axisMax, step } = niceAxisMax(maxVal);
   const xAt = (i) => padL + (trend.length === 1 ? plotW / 2 : (plotW * i) / (trend.length - 1));
   const yAt = (v) => padT + plotH - (Math.max(0, v) / axisMax) * plotH;
@@ -1297,7 +1344,7 @@ function dashboardTrendChartHtml(trend) {
 
   const xLabels = trend.map((b, i) => `<text x="${xAt(i)}" y="${H - 8}" text-anchor="middle" font-size="10.5" fill="var(--text-faint)">${escapeHtml(b.label)}</text>`).join("");
 
-  const seriesPaths = DASHBOARD_TREND_SERIES.map((s) => {
+  const seriesPaths = series.map((s) => {
     const pts = trend.map((b, i) => `${xAt(i)},${yAt(b[s.key])}`).join(" ");
     const lastX = xAt(trend.length - 1);
     const lastY = yAt(trend[trend.length - 1][s.key]);
@@ -1312,40 +1359,51 @@ function dashboardTrendChartHtml(trend) {
 
   const hitCols = trend.map((b, i) => `<rect data-month-idx="${i}" tabindex="0" role="button" aria-label="${escapeHtml(b.label)}" x="${xAt(i) - plotW / (trend.length * 2)}" y="${padT}" width="${plotW / trend.length}" height="${plotH}" fill="transparent"/>`).join("");
 
-  const legend = DASHBOARD_TREND_SERIES.map((s) => `
+  const legend = series.map((s) => `
     <span class="chart-legend-item"><span class="chart-legend-key" style="background:var(${s.varName})"></span>${escapeHtml(s.label)}</span>
   `).join("");
 
   const tableRows = trend.map((b) => `
-    <tr><td>${escapeHtml(b.label)}</td><td class="num">${fmtSum(b.savdo)}</td><td class="num">${fmtSum(b.tannarx)}</td><td class="num">${fmtSum(b.foyda)}</td></tr>
+    <tr><td>${escapeHtml(b.label)}</td>${series.map((s) => `<td class="num">${fmtSum(b[s.key])}</td>`).join("")}</tr>
   `).join("");
 
   return `
-    <div class="chart-legend">${legend}<button class="btn btn-sm" id="btnDashChartTable" style="margin-left:auto;">Jadval ko'rinishida</button></div>
-    <div class="chart-wrap" id="dashChartWrap" style="position:relative;">
-      <svg id="dashTrendSvg" viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block;">
+    <div class="chart-legend">${legend}<button class="btn btn-sm" id="${tableBtnId}" style="margin-left:auto;">Jadval ko'rinishida</button></div>
+    <div class="chart-wrap" id="${wrapId}" style="position:relative;">
+      <svg id="${svgId}" viewBox="0 0 ${W} ${H}" style="width:100%; height:auto; display:block;">
         ${gridLines.join("")}
         ${xLabels}
         ${seriesPaths}
-        <line id="dashCrosshair" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="var(--border-strong)" stroke-width="1" style="display:none;"/>
+        <line id="${crosshairId}" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}" stroke="var(--border-strong)" stroke-width="1" style="display:none;"/>
         ${hitCols}
       </svg>
-      <div id="dashChartTooltip" class="chart-tooltip" style="display:none;"></div>
+      <div id="${tooltipId}" class="chart-tooltip" style="display:none;"></div>
     </div>
-    <div class="table-wrap" id="dashChartTableWrap" style="display:none; margin-top:10px;">
+    <div class="table-wrap" id="${tableWrapId}" style="display:none; margin-top:10px;">
       <table>
-        <thead><tr><th>Oy</th><th class="num">Savdo</th><th class="num">Tannarx</th><th class="num">Foyda</th></tr></thead>
+        <thead><tr><th>Oy</th>${series.map((s) => `<th class="num">${escapeHtml(s.label)}</th>`).join("")}</tr></thead>
         <tbody>${tableRows}</tbody>
       </table>
     </div>
   `;
 }
 
-function bindDashboardChart(trend) {
-  const wrap = document.getElementById("dashChartWrap");
-  const svg = document.getElementById("dashTrendSvg");
-  const crosshair = document.getElementById("dashCrosshair");
-  const tooltip = document.getElementById("dashChartTooltip");
+function dashboardTrendChartHtml(trend) {
+  return buildTrendChartHtml(trend, DASHBOARD_TREND_SERIES, { idPrefix: "dash" });
+}
+function dashboardQqsChartHtml(trend) {
+  return buildTrendChartHtml(trend, DASHBOARD_QQS_SERIES, { idPrefix: "dashQqs" });
+}
+
+// dashboardTrendChartHtml (yoki uning idPrefix bilan variantlari) tomonidan
+// generatsiya qilingan grafikka hover/crosshair/tooltip va jadval-toggle bog'laydi.
+function bindTrendChart(trend, series, opts = {}) {
+  const idPrefix = opts.idPrefix || "dash";
+  const cap = idPrefix.charAt(0).toUpperCase() + idPrefix.slice(1);
+  const wrap = document.getElementById(`${idPrefix}ChartWrap`);
+  const svg = document.getElementById(`${idPrefix}TrendSvg`);
+  const crosshair = document.getElementById(`${idPrefix}Crosshair`);
+  const tooltip = document.getElementById(`${idPrefix}ChartTooltip`);
   if (!wrap || !svg || !tooltip) return;
 
   const showForIndex = (idx, clientX) => {
@@ -1360,7 +1418,7 @@ function bindDashboardChart(trend) {
     crosshair.style.display = "";
     tooltip.innerHTML = `
       <div class="chart-tooltip-title">${escapeHtml(b.label)}</div>
-      ${DASHBOARD_TREND_SERIES.map((s) => `
+      ${series.map((s) => `
         <div class="chart-tooltip-row">
           <span class="chart-legend-key" style="background:var(${s.varName})"></span>
           <span class="chart-tooltip-label">${escapeHtml(s.label)}</span>
@@ -1383,8 +1441,8 @@ function bindDashboardChart(trend) {
   });
   svg.addEventListener("pointerleave", () => { crosshair.style.display = "none"; tooltip.style.display = "none"; });
 
-  const tableBtn = document.getElementById("btnDashChartTable");
-  const tableWrap = document.getElementById("dashChartTableWrap");
+  const tableBtn = document.getElementById(`btn${cap}ChartTable`);
+  const tableWrap = document.getElementById(`${idPrefix}ChartTableWrap`);
   if (tableBtn && tableWrap) tableBtn.addEventListener("click", () => {
     const showingTable = tableWrap.style.display !== "none";
     tableWrap.style.display = showingTable ? "none" : "";
@@ -1393,9 +1451,17 @@ function bindDashboardChart(trend) {
   });
 }
 
+function bindDashboardChart(trend) {
+  return bindTrendChart(trend, DASHBOARD_TREND_SERIES, { idPrefix: "dash" });
+}
+function bindDashboardQqsChart(trend) {
+  return bindTrendChart(trend, DASHBOARD_QQS_SERIES, { idPrefix: "dashQqs" });
+}
+
 function renderDashboard() {
   const t = computeTotals();
   const trend = computeMonthlyTrend(6);
+  const qqsTrend = computeMonthlyQqsTrend(6);
   const uncostedCount = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
   const ihq = computeIshHaqiTotals();
   const main = document.getElementById("main");
@@ -1481,6 +1547,13 @@ function renderDashboard() {
     </div>
 
     <div class="section">
+      <h2 class="section-title">So'nggi 6 oy — QQS (byudjetga to'lov)</h2>
+      <div class="card" style="padding:18px;">
+        ${dashboardQqsChartHtml(qqsTrend)}
+      </div>
+    </div>
+
+    <div class="section">
       <h2 class="section-title">Bo'limlar orasidagi bog'liqlik</h2>
       <div class="card" style="padding:22px;">
         <div class="note" style="margin-top:0;">
@@ -1503,6 +1576,7 @@ function renderDashboard() {
   `;
   bindNavShortcuts(main);
   bindDashboardChart(trend);
+  bindDashboardQqsChart(qqsTrend);
 }
 
 function recentList(type) {
