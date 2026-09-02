@@ -2161,6 +2161,7 @@ async function deleteOmborChiqimRow(id) {
 function renderOmborQoldiq() {
   const main = document.getElementById("main");
   const qoldiq = omborQoldiqList();
+  const negativlar = qoldiq.filter((q) => q.qoldiq < 0);
 
   main.innerHTML = `
     <div class="page-header">
@@ -2175,6 +2176,11 @@ function renderOmborQoldiq() {
     </div>
 
     ${omborTabBarHtml()}
+
+    ${negativlar.length ? `<div class="note" style="border-color:var(--danger);color:var(--danger);margin-bottom:14px;">
+      Diqqat: ${negativlar.length} ta pozitsiyada qoldiq manfiy — chiqim kirimdan ko'p. Sabablari: chiqim nomi kirim nomiga aynan mos kelmayapti (nomlarni birlashtiring), yoki kirim faktura kiritilmagan.
+      <span class="faint">(${negativlar.slice(0, 3).map((q) => escapeHtml(q.nomi)).join(", ")}${negativlar.length > 3 ? "…" : ""})</span>
+    </div>` : ""}
 
     <div class="table-wrap">
       <table>
@@ -2902,6 +2908,12 @@ function renderKontragentlar() {
   const main = document.getElementById("main");
   const rows = STORE.kontragentlar.slice().sort((a, b) => (a.nomi || "").localeCompare(b.nomi || ""));
 
+  // Sifat tekshiruvi: INN'siz fakturalar va takror INN'lar
+  const innsizFaktura = [...STORE.kirim, ...STORE.chiqim].filter((r) => isValidStatus(r.status) && !(r.kontragentInn || "").trim()).length;
+  const innCounts = {};
+  STORE.kontragentlar.forEach((k) => { const i = (k.inn || "").trim(); if (i) innCounts[i] = (innCounts[i] || 0) + 1; });
+  const takrorInn = Object.keys(innCounts).filter((i) => innCounts[i] > 1);
+
   main.innerHTML = `
     <div class="page-header">
       <div>
@@ -2909,9 +2921,16 @@ function renderKontragentlar() {
         <p class="page-desc">Mijoz va yetkazib beruvchilar spravochnigi — bu yerga kiritilgan nomlar Faktura kirim/chiqim va Bank harakati sahifalarida avtomatik taklif qilinadi, INN esa avtomat to'ldiriladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnMergeKontragent">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddKontragent">+ Yangi kontragent</button>
       </div>
     </div>
+
+    ${(innsizFaktura || takrorInn.length) ? `<div class="note" style="border-color:var(--warn);color:var(--warn);margin-bottom:14px;">
+      ${innsizFaktura ? `INN'siz ${innsizFaktura} ta faktura bor — Solishtirma dalolatnoma va muddat hisobotlarida ular kontragentga bog'lanmaydi.` : ""}
+      ${innsizFaktura && takrorInn.length ? "<br>" : ""}
+      ${takrorInn.length ? `Bir xil INN bilan ${takrorInn.length} ta takror kontragent yozuvi bor — "Nomlarni birlashtirish" orqali birlashtiring.` : ""}
+    </div>` : ""}
 
     <div class="toolbar">
       <input class="search-input" id="searchBox" placeholder="Qidirish: nomi, INN...">
@@ -2936,6 +2955,7 @@ function renderKontragentlar() {
   `;
 
   document.getElementById("btnAddKontragent").addEventListener("click", () => openKontragentModal());
+  document.getElementById("btnMergeKontragent").addEventListener("click", () => openKontragentMergeModal());
   document.getElementById("searchBox").addEventListener("input", (e) => filterKontragentRows(e.target.value));
   const body = document.getElementById("kontragentBody");
   if (body) body.addEventListener("click", (e) => {
@@ -2974,6 +2994,95 @@ function filterKontragentRows(q) {
   document.querySelectorAll("#kontragentBody tr").forEach((tr) => {
     tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
   });
+}
+
+// Bitta kontragent qancha faktura/bank yozuviga bog'langan (INN yoki aynan nom bo'yicha).
+function kontragentUsageCount(k) {
+  const inn = (k.inn || "").trim();
+  const nomi = k.nomi || "";
+  const hit = (r, nameField) => (inn && (r.kontragentInn || "").trim() === inn) || (!inn && (r[nameField] || "") === nomi);
+  return STORE.kirim.filter((r) => hit(r, "kontragentNomi")).length
+    + STORE.chiqim.filter((r) => hit(r, "kontragentNomi")).length
+    + STORE.bank.filter((r) => hit(r, "kontragent")).length;
+}
+
+function openKontragentMergeModal() {
+  const list = STORE.kontragentlar.slice().sort((a, b) => (a.nomi || "").localeCompare(b.nomi || ""));
+  if (list.length < 2) { toast("Birlashtirish uchun kamida 2 ta kontragent kerak", "err"); return; }
+  openModal(`
+    <h3>Kontragentlarni birlashtirish</h3>
+    <p class="modal-sub">Bir xil kontragentning takror yozuvlarini belgilang va asosiy (qoladigan) yozuvni tanlang — belgilangan yozuvlardagi barcha faktura va bank harakatlari asosiy yozuvning INN/nomiga o'tkaziladi, takrorlari o'chiriladi.</p>
+    <div class="merge-nomi-list">
+      ${list.map((k) => `
+        <label class="merge-nomi-item">
+          <input type="checkbox" class="mKMChk" value="${k.id}">
+          <span class="merge-nomi-name">${escapeHtml(k.nomi || "(nomsiz)")} ${k.inn ? `<span class="faint">· ${escapeHtml(k.inn)}</span>` : ""}</span>
+          <span class="faint">${kontragentUsageCount(k)} ta</span>
+        </label>
+      `).join("")}
+    </div>
+    <div class="field"><label>Asosiy (qoladigan) yozuv</label>
+      <select id="mKMSurvivor">
+        ${list.map((k) => `<option value="${k.id}">${escapeHtml(k.nomi || "(nomsiz)")}${k.inn ? ` · ${escapeHtml(k.inn)}` : ""}</option>`).join("")}
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mConfirm">Birlashtirish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mConfirm").addEventListener("click", () => {
+    const survivorId = document.getElementById("mKMSurvivor").value;
+    const checked = [...document.querySelectorAll(".mKMChk:checked")].map((c) => c.value);
+    const mergedIds = checked.filter((id) => id !== survivorId);
+    if (!mergedIds.length) { toast("Asosiydan tashqari kamida 1 ta yozuv belgilang", "err"); return; }
+    mergeKontragentlar(survivorId, mergedIds);
+  });
+}
+
+async function mergeKontragentlar(survivorId, mergedIds) {
+  const survivor = STORE.kontragentlar.find((k) => k.id === survivorId);
+  if (!survivor) { toast("Asosiy yozuv topilmadi", "err"); return; }
+  const newInn = (survivor.inn || "").trim();
+  const newNomi = survivor.nomi || "";
+  let moved = 0;
+
+  const reassignInvoice = (type) => {
+    STORE[type].forEach((r) => {
+      const k = STORE.kontragentlar.find((x) => mergedIds.includes(x.id) && (
+        ((x.inn || "").trim() && (r.kontragentInn || "").trim() === (x.inn || "").trim()) ||
+        (!(x.inn || "").trim() && (r.kontragentNomi || "") === (x.nomi || ""))
+      ));
+      if (!k) return;
+      r.kontragentInn = newInn;
+      r.kontragentNomi = newNomi;
+      pushFieldsUpdate(type, r.id, { kontragentInn: newInn, kontragentNomi: newNomi });
+      moved++;
+    });
+  };
+  reassignInvoice("kirim");
+  reassignInvoice("chiqim");
+
+  STORE.bank.forEach((r) => {
+    const k = STORE.kontragentlar.find((x) => mergedIds.includes(x.id) && (
+      ((x.inn || "").trim() && (r.kontragentInn || "").trim() === (x.inn || "").trim()) ||
+      ((r.kontragent || "") === (x.nomi || ""))
+    ));
+    if (!k) return;
+    r.kontragentInn = newInn;
+    r.kontragent = newNomi;
+    pushFieldsUpdate("bank", r.id, { kontragentInn: newInn, kontragent: newNomi });
+    moved++;
+  });
+
+  for (const id of mergedIds) {
+    await deleteRowSafe("kontragentlar", "kontragentlar", id, null);
+  }
+  saveStore();
+  closeModal();
+  renderKontragentlar();
+  toast(`${mergedIds.length} ta kontragent birlashtirildi, ${moved} ta yozuv "${newNomi}"ga o'tkazildi`);
 }
 
 function openKontragentModal(existingId) {
