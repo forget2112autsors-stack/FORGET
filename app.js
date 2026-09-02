@@ -5066,6 +5066,7 @@ function renderAgingReport(type) {
       <div>
         <h1 class="page-title">${cfg.title}</h1>
         <p class="page-desc">${cfg.desc}</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnExportAging">Excel'ga eksport</button>
@@ -5138,6 +5139,7 @@ function renderSverka() {
       <div>
         <h1 class="page-title">Solishtirma dalolatnoma</h1>
         <p class="page-desc">Har bir kontragent (INN) bo'yicha davr boshi/oxiri qarzdorlik holati — Faktura kirim, Faktura chiqim va Bank ma'lumotlaridan avtomatik.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnPrintSverka">PDF (chop etish)</button>
@@ -5373,6 +5375,7 @@ function renderSverkaDetail() {
       <div>
         <h1 class="page-title">${escapeHtml(nomi)}</h1>
         <p class="page-desc">INN ${escapeHtml(inn)} — o'zaro hisob-kitoblar tarixi (Акт сверка andazasi bo'yicha): kirim faktura, chiqim faktura va bank kirim-chiqim harakatlari.</p>
+        ${reportRequisiteLine()}
       </div>
       <div class="page-actions">
         <button class="btn" id="btnBackSverka">&larr; Ro'yxatga qaytish</button>
@@ -5775,11 +5778,19 @@ async function renderAudit() {
     <div class="page-header">
       <div>
         <h1 class="page-title">O'zgarishlar tarixi</h1>
-        <p class="page-desc">Har bir xodimning kirim/chiqim/bank/ombor va boshqa bo'limlardagi qo'shish, o'zgartirish, o'chirish amallari — kim, qachon, nima qilgani (so'nggi 300 yozuv).</p>
+        <p class="page-desc">Har bir xodimning kirim/chiqim/bank/ombor va boshqa bo'limlardagi qo'shish, o'zgartirish, o'chirish amallari — kim, qachon, nima qilgani (so'nggi 1000 yozuv).</p>
       </div>
     </div>
     <div class="toolbar">
       <input class="search-input" id="searchBox" placeholder="Qidirish: email, jadval...">
+      <select class="search-input" id="auditJadval" style="min-width:150px">
+        <option value="">Barcha bo'limlar</option>
+        ${Object.entries(AUDIT_TABLE_LABELS).map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("")}
+      </select>
+      <select class="search-input" id="auditAmal" style="min-width:130px">
+        <option value="">Barcha amallar</option>
+        ${Object.entries(AUDIT_AMAL_LABELS).map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join("")}
+      </select>
       <div class="spacer"></div>
       <span class="faint" id="auditCount">Yuklanmoqda…</span>
     </div>
@@ -5792,9 +5803,11 @@ async function renderAudit() {
       </table>
     </div>
   `;
-  document.getElementById("searchBox").addEventListener("input", (e) => filterAuditRows(e.target.value));
+  document.getElementById("searchBox").addEventListener("input", applyAuditFilters);
+  document.getElementById("auditJadval").addEventListener("change", applyAuditFilters);
+  document.getElementById("auditAmal").addEventListener("change", applyAuditFilters);
 
-  const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).limit(300);
+  const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).limit(1000);
   if (error) { reportError(error, "Tarixni yuklashda xatolik"); return; }
   AUDIT_ROWS = data || [];
   document.getElementById("auditCount").textContent = `${AUDIT_ROWS.length} ta yozuv`;
@@ -5812,7 +5825,7 @@ function auditRowHtml(row, idx) {
   const amal = AUDIT_AMAL_LABELS[row.amal] || row.amal;
   const qisqa = row.amal === "UPDATE" ? diffAuditRow(row) : `${jadval} yozuvi`;
   return `
-    <tr>
+    <tr data-jadval="${escapeHtml(row.jadval || "")}" data-amal="${escapeHtml(row.amal || "")}">
       <td class="mono">${escapeHtml((row.created_at || "").replace("T", " ").slice(0, 19))}</td>
       <td>${escapeHtml(row.actor_email || "")}</td>
       <td>${escapeHtml(jadval)}</td>
@@ -5823,11 +5836,22 @@ function auditRowHtml(row, idx) {
   `;
 }
 
-function filterAuditRows(q) {
-  q = q.trim().toLowerCase();
+// Qidiruv matni + Jadval + Amal filtrlari birgalikda (klient tomonda).
+function applyAuditFilters() {
+  const q = (document.getElementById("searchBox")?.value || "").trim().toLowerCase();
+  const jadval = document.getElementById("auditJadval")?.value || "";
+  const amal = document.getElementById("auditAmal")?.value || "";
+  let shown = 0;
   document.querySelectorAll("#auditBody tr").forEach((tr) => {
-    tr.style.display = !q || tr.textContent.toLowerCase().includes(q) ? "" : "none";
+    const okQ = !q || tr.textContent.toLowerCase().includes(q);
+    const okJ = !jadval || tr.dataset.jadval === jadval;
+    const okA = !amal || tr.dataset.amal === amal;
+    const visible = okQ && okJ && okA;
+    tr.style.display = visible ? "" : "none";
+    if (visible) shown++;
   });
+  const cnt = document.getElementById("auditCount");
+  if (cnt) cnt.textContent = q || jadval || amal ? `${shown} / ${AUDIT_ROWS.length} ta yozuv` : `${AUDIT_ROWS.length} ta yozuv`;
 }
 
 function openAuditDetailModal(row) {
