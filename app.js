@@ -4898,6 +4898,7 @@ function renderIshHaqiHisoboti() {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnExportIshHaqiHisobot">Excel'ga eksport</button>
+        <button class="btn" id="btnPrintIshHaqiHisobot">PDF (chop etish)</button>
         <button class="btn" data-nav="settings" data-nav-section="ishhaqi">Stavkalarni sozlash</button>
       </div>
     </div>
@@ -4954,14 +4955,12 @@ function renderIshHaqiHisoboti() {
     </div>
   `;
   document.getElementById("btnExportIshHaqiHisobot").addEventListener("click", exportIshHaqiHisobotXlsx);
+  document.getElementById("btnPrintIshHaqiHisobot").addEventListener("click", printIshHaqiHisobotPdf);
   bindNavShortcuts(main);
 }
 
-function exportIshHaqiHisobotXlsx() {
-  const s = STORE.settings;
-  const t = computeIshHaqiTotals();
-  const rows = getFilteredRows(STORE.ishHaqi).slice().sort((a, b) => (a.fio || "").localeCompare(b.fio || ""));
-  buildAndDownloadReportXlsx("FORGET_ish_haqi_hisoboti", "Ish haqi hisoboti", [
+function ishHaqiHisobotReportLines(t) {
+  return [
     { code: "010", label: "Hisoblangan ish haqi jamg'armasi", value: t.oylikJami },
     { code: "030", label: "Soliqdan ozod qilingan summalar (imtiyozlar)", value: t.imtiyozJami },
     { code: "040", label: "Soliq bazasi", value: t.soliqBazasiJami },
@@ -4969,7 +4968,14 @@ function exportIshHaqiHisobotXlsx() {
     { code: "060", label: "Hisoblangan NDFL", value: t.ndflJami },
     { code: "080", label: "INPS ixtiyoriy jamg'arma badali", value: t.inpsJami },
     { code: "090", label: "Byudjetga to'lanadigan NDFL", value: t.ndflByudjetgaJami }
-  ], {
+  ];
+}
+
+function exportIshHaqiHisobotXlsx() {
+  const s = STORE.settings;
+  const t = computeIshHaqiTotals();
+  const rows = getFilteredRows(STORE.ishHaqi).slice().sort((a, b) => (a.fio || "").localeCompare(b.fio || ""));
+  buildAndDownloadReportXlsx("FORGET_ish_haqi_hisoboti", "Ish haqi hisoboti", ishHaqiHisobotReportLines(t), {
     sheetName: "Xodimlar",
     headers: ["№", "F.I.O.", "Lavozimi", "PINFL", "Turi", "Holati", "Hisoblangan ish haqi", "Ijtimoiy soliq", "NDFL", "INPS", "Sof ish haqi"],
     rows: rows.map((r, i) => {
@@ -4977,6 +4983,14 @@ function exportIshHaqiHisobotXlsx() {
       return [i + 1, r.fio, r.lavozimi, r.pinfl, r.turi, r.holati, c.oylik, c.ijtimoiySoliq, c.ndfl, c.inps, c.sofIshHaqi];
     })
   });
+}
+
+// Faqat umumiy (010-090) qatorlar chop etiladi — xodimlar bo'yicha tafsilot
+// (Ilova №4) hozircha faqat Excel eksportida bor.
+function printIshHaqiHisobotPdf() {
+  const t = computeIshHaqiTotals();
+  const s = STORE.settings;
+  printReportLines("Ish haqi hisoboti", `Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`, ishHaqiHisobotReportLines(t));
 }
 
 function ishHaqiReportRowHtml(r, n) {
@@ -5038,6 +5052,7 @@ function renderF2() {
       <div class="page-actions">
         <button class="btn" id="btnImportF2">Excel'dan import</button>
         <button class="btn" id="btnExportF2">Excel'ga eksport</button>
+        <button class="btn" id="btnPrintF2">PDF (chop etish)</button>
         <button class="btn" data-nav="settings" data-nav-section="soliq">Xarajatlarni sozlash</button>
       </div>
     </div>
@@ -5079,6 +5094,7 @@ function renderF2() {
     </div>
   `;
   document.getElementById("btnExportF2").addEventListener("click", () => exportF2Xlsx());
+  document.getElementById("btnPrintF2").addEventListener("click", () => printF2Pdf());
   document.getElementById("btnImportF2").addEventListener("click", () => {
     openGenericImportModal(
       "F2 — Excel'dan import",
@@ -5093,9 +5109,8 @@ function renderF2() {
   bindNavShortcuts(main);
 }
 
-function exportF2Xlsx() {
-  const t = computeTotals();
-  buildAndDownloadReportXlsx("FORGET_F2", "F2 — Moliyaviy natijalar to'g'risida hisobot", [
+function f2ReportLines(t) {
+  return [
     { code: "010", label: "Sof tushum (sotuvdan)", value: t.revenue },
     { code: "020", label: "Sotilgan mahsulot tannarxi", value: t.tannarx },
     { code: "030", label: "Yalpi foyda", value: t.yalpiFoyda },
@@ -5105,7 +5120,18 @@ function exportF2Xlsx() {
     { code: "240", label: "Soliqqacha foyda", value: t.soliqqachaFoyda },
     { code: "250", label: "Foyda solig'i", value: t.foydaSoligi },
     { code: "270", label: "Sof foyda (davr natijasi)", value: t.sofFoyda }
-  ]);
+  ];
+}
+
+function exportF2Xlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("FORGET_F2", "F2 — Moliyaviy natijalar to'g'risida hisobot", f2ReportLines(t));
+}
+
+function printF2Pdf() {
+  const t = computeTotals();
+  const s = STORE.settings;
+  printReportLines("F2 — Moliyaviy natijalar to'g'risida hisobot", `Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`, f2ReportLines(t));
 }
 
 /* ------------------------------- QQS hisobot ------------------------------- */
@@ -5123,6 +5149,7 @@ function renderQQS() {
       <div class="page-actions">
         <button class="btn" id="btnImportQQS">Excel'dan import</button>
         <button class="btn" id="btnExportQQS">Excel'ga eksport</button>
+        <button class="btn" id="btnPrintQQS">PDF (chop etish)</button>
       </div>
     </div>
 
@@ -5148,6 +5175,7 @@ function renderQQS() {
     </div>
   `;
   document.getElementById("btnExportQQS").addEventListener("click", () => exportQQSXlsx());
+  document.getElementById("btnPrintQQS").addEventListener("click", () => printQQSPdf());
   document.getElementById("btnImportQQS").addEventListener("click", () => {
     openGenericImportModal(
       "QQS — Excel'dan import",
@@ -5158,14 +5186,24 @@ function renderQQS() {
   });
 }
 
-function exportQQSXlsx() {
-  const t = computeTotals();
-  buildAndDownloadReportXlsx("FORGET_QQS", "QQS hisob-kitobi", [
+function qqsReportLines(t) {
+  return [
     { code: "010", label: "Zachyotga qabul qilinadigan QQS (xariddan)", value: t.qqsInput },
     { code: "020", label: "Sotuvdan QQS", value: t.qqsOutput },
     { code: "030", label: "Byudjetga to'lanadigan QQS", value: t.qqsToPay },
     { code: "", label: "Standart QQS stavkasi (%)", value: STORE.settings.qqsStavka }
-  ]);
+  ];
+}
+
+function exportQQSXlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("FORGET_QQS", "QQS hisob-kitobi", qqsReportLines(t));
+}
+
+function printQQSPdf() {
+  const t = computeTotals();
+  const s = STORE.settings;
+  printReportLines("QQS hisob-kitobi", `Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`, qqsReportLines(t));
 }
 
 /* ------------------------------- Foyda solig'i ------------------------------- */
@@ -5183,6 +5221,7 @@ function renderFoyda() {
       <div class="page-actions">
         <button class="btn" id="btnImportFoyda">Excel'dan import</button>
         <button class="btn" id="btnExportFoyda">Excel'ga eksport</button>
+        <button class="btn" id="btnPrintFoyda">PDF (chop etish)</button>
       </div>
     </div>
 
@@ -5222,6 +5261,7 @@ function renderFoyda() {
     toast("Saqlandi");
   });
   document.getElementById("btnExportFoyda").addEventListener("click", () => exportFoydaXlsx());
+  document.getElementById("btnPrintFoyda").addEventListener("click", () => printFoydaPdf());
   document.getElementById("btnImportFoyda").addEventListener("click", () => {
     openGenericImportModal(
       "Foyda solig'i — Excel'dan import",
@@ -5236,9 +5276,8 @@ function renderFoyda() {
   });
 }
 
-function exportFoydaXlsx() {
-  const t = computeTotals();
-  buildAndDownloadReportXlsx("FORGET_foyda_soligi", "Foyda solig'i hisob-kitobi", [
+function foydaReportLines(t) {
+  return [
     { code: "010", label: "Jami daromad", value: t.jamiDaromad },
     { code: "020", label: "Chegiriladigan xarajatlar", value: t.chegiriladiXarajat },
     { code: "030", label: "Soliqqa tortiladigan foyda", value: t.soliqqaTortiladiganFoyda },
@@ -5248,7 +5287,18 @@ function exportFoydaXlsx() {
     { code: "", label: "Boshqa daromadlar (qo'lda)", value: STORE.settings.boshqaDaromad },
     { code: "", label: "Imtiyozlar summasi (qo'lda)", value: STORE.settings.imtiyozlar },
     { code: "070", label: "Foyda solig'i stavkasi (%)", value: t.foydaStavka }
-  ]);
+  ];
+}
+
+function exportFoydaXlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("FORGET_foyda_soligi", "Foyda solig'i hisob-kitobi", foydaReportLines(t));
+}
+
+function printFoydaPdf() {
+  const t = computeTotals();
+  const s = STORE.settings;
+  printReportLines("Foyda solig'i hisob-kitobi", `Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`, foydaReportLines(t));
 }
 
 /* ------------------------------- F1 balans ------------------------------- */
@@ -5268,6 +5318,7 @@ function renderF1() {
       <div class="page-actions">
         <button class="btn" id="btnImportF1">Excel'dan import</button>
         <button class="btn" id="btnExportF1">Excel'ga eksport</button>
+        <button class="btn" id="btnPrintF1">PDF (chop etish)</button>
       </div>
     </div>
 
@@ -5318,6 +5369,7 @@ function renderF1() {
     toast("Saqlandi");
   });
   document.getElementById("btnExportF1").addEventListener("click", () => exportF1Xlsx());
+  document.getElementById("btnPrintF1").addEventListener("click", () => printF1Pdf());
   document.getElementById("btnImportF1").addEventListener("click", () => {
     openGenericImportModal(
       "F1 — Excel'dan import",
@@ -5333,9 +5385,8 @@ function renderF1() {
   });
 }
 
-function exportF1Xlsx() {
-  const t = computeTotals();
-  buildAndDownloadReportXlsx("FORGET_F1", "F1 — Buxgalteriya balansi", [
+function f1ReportLines(t) {
+  return [
     { code: "", label: "Asosiy vositalar", value: t.asosiyVositalar },
     { code: "", label: "Tovar-moddiy zaxiralar", value: t.tovarZaxira },
     { code: "", label: "Debitorlik qarzdorligi", value: t.debitorlik },
@@ -5348,7 +5399,18 @@ function exportF1Xlsx() {
     { code: "", label: "Uzoq muddatli majburiyatlar", value: t.uzoqMajburiyat },
     { code: "", label: "Kreditorlik qarzdorligi", value: t.kreditorlik },
     { code: "780", label: "Jami passiv", value: t.passivJami }
-  ]);
+  ];
+}
+
+function exportF1Xlsx() {
+  const t = computeTotals();
+  buildAndDownloadReportXlsx("FORGET_F1", "F1 — Buxgalteriya balansi", f1ReportLines(t));
+}
+
+function printF1Pdf() {
+  const t = computeTotals();
+  const s = STORE.settings;
+  printReportLines("F1 — Buxgalteriya balansi", `Sana: ${s.filterTo || todayISO()}`, f1ReportLines(t));
 }
 
 /* ------------------------------- Solishtirma dalolatnoma ------------------------------- */
@@ -5512,6 +5574,7 @@ function renderAgingReport(type) {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnExportAging">Excel'ga eksport</button>
+        <button class="btn" id="btnPrintAging">PDF (chop etish)</button>
       </div>
     </div>
     <div class="grid grid-4 section">
@@ -5539,6 +5602,7 @@ function renderAgingReport(type) {
     ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">${cfg.emptyTitle}</div><div class="d">${cfg.emptyDesc}</div></div>` : ""}
   `;
   document.getElementById("btnExportAging").addEventListener("click", () => exportAgingXlsx(rows, buckets, total, cfg));
+  document.getElementById("btnPrintAging").addEventListener("click", () => printAgingPdf(rows, total, cfg));
   main.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => cfg.viewAction(b.dataset.view)));
 }
 
@@ -5562,6 +5626,27 @@ function exportAgingXlsx(rows, buckets, total, cfg) {
   XLSX.utils.book_append_sheet(wb, ws, cfg.title);
   XLSX.writeFile(wb, `FORGET_${cfg.filePrefix}_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
+}
+
+// Kreditorlik va Debitorlik muddati sahifalari (AGING_CONFIG orqali) bitta
+// umumiy chop etish funksiyasidan foydalanadi — exportAgingXlsx bilan bir xil naqsh.
+function printAgingPdf(rows, total, cfg) {
+  const bodyHtml = rows.map((r) => `
+    <tr>
+      <td>${escapeHtml(r.kontragentNomi || "")}</td>
+      <td>${escapeHtml(r.kontragentInn || "")}</td>
+      <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+      <td>${escapeHtml(r.sana || "")}</td>
+      <td class="num">${r.daysOverdue}</td>
+      <td class="num">${fmtSum(r.jamiSumma)}</td>
+    </tr>
+  `).join("");
+  const tfootHtml = `<tr><td colspan="5">${escapeHtml(cfg.totalLabel)}</td><td class="num">${fmtSum(total)}</td></tr>`;
+  openPrintWindow(buildSimpleReportPrintHtml({
+    title: cfg.title,
+    theadHtml: `<tr><th>${escapeHtml(cfg.partyLabel)}</th><th>INN</th><th>Hujjat №</th><th>Sana</th><th class="num">Necha kun</th><th class="num">Summa</th></tr>`,
+    bodyHtml, tfootHtml
+  }));
 }
 
 function renderSverka() {
@@ -6927,6 +7012,51 @@ function renderSettings() {
 // Har bir hisobot (F2, QQS, Foyda solig'i, Ish haqi hisoboti, F1) uchun umumiy: hisoblangan
 // ko'rsatkichlarni .xlsx fayl sifatida yuklab olish (eksport) va ilgari eksport qilingan
 // fayldan qo'lda kiritiladigan ko'rsatkichlarni qayta o'qib olish (import).
+
+// win.open + win.print() bo'lagi — printSverkaPdf/printOmborQoldiqPdf'dagi
+// bilan bir xil, endi umumiy yordamchiga chiqarilgan (faqat YANGI chop etish
+// funksiyalari shundan foydalanadi; eski funksiyalar o'zgarishsiz qoladi).
+function openPrintWindow(html) {
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+// "Hisobot" uslubidagi sahifalar (F1/F2/QQS/Foyda/aging/ish haqi hisoboti)
+// uchun umumiy chop etish HTML shabloni — mavjud printSverkaPdf bilan bir xil CSS.
+function buildSimpleReportPrintHtml({ title, periodText, theadHtml, bodyHtml, tfootHtml = "" }) {
+  const s = STORE.settings;
+  return `
+    <!doctype html><html lang="uz"><head><meta charset="UTF-8"><title>${escapeHtml(title)}</title>
+    <style>
+      body{font-family:Arial, "Segoe UI", sans-serif; padding:28px; color:#1c2530;}
+      h1{font-size:18px; margin:0 0 4px;} .sub{font-size:12px; color:#5b6b7b; margin:0 0 4px;}
+      .period{font-size:12px; color:#5b6b7b; margin:0 0 18px;}
+      table{width:100%; border-collapse:collapse; font-size:11.5px;}
+      th, td{border:1px solid #ccd3da; padding:6px 8px; text-align:left;}
+      th{background:#eceff2;} td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+      tfoot td{font-weight:700; border-top:2px solid #1c2530;} @media print { body{padding:0;} }
+    </style></head><body>
+      <h1>${escapeHtml(s.companyName)}</h1>
+      <div class="sub">INN: ${escapeHtml(s.inn)}</div>
+      <div class="period">${escapeHtml(title)}${periodText ? " &middot; " + escapeHtml(periodText) : ""}</div>
+      <table><thead>${theadHtml}</thead><tbody>${bodyHtml}</tbody><tfoot>${tfootHtml}</tfoot></table>
+    </body></html>`;
+}
+
+// Hisobot "qator" ro'yxatini (buildAndDownloadReportXlsx uchun ishlatiladigan
+// {code,label,value} shakli) chop etish jadvaliga aylantiradi — F2/QQS/Foyda/F1/
+// Ish haqi hisoboti export va print funksiyalari BITTA manbadan (lines) ishlaydi.
+function printReportLines(title, periodText, lines) {
+  const bodyHtml = lines.map((l) => `<tr><td>${escapeHtml(l.code || "")}</td><td>${escapeHtml(l.label)}</td><td class="num">${fmtSum(l.value)}</td></tr>`).join("");
+  openPrintWindow(buildSimpleReportPrintHtml({
+    title, periodText,
+    theadHtml: `<tr><th>Kod</th><th>Ko'rsatkich</th><th class="num">Summa</th></tr>`,
+    bodyHtml
+  }));
+}
 
 function buildAndDownloadReportXlsx(filenameBase, title, lines, detail) {
   const s = STORE.settings;
