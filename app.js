@@ -5972,6 +5972,9 @@ function diffAuditRow(row) {
 }
 
 let AUDIT_ROWS = [];
+let AUDIT_LOAD_OFFSET = 0;
+const AUDIT_PAGE_SIZE = 1000;
+let AUDIT_HAS_MORE = false;
 
 async function renderAudit() {
   const main = document.getElementById("main");
@@ -6003,14 +6006,17 @@ async function renderAudit() {
         <tbody id="auditBody">${skeletonRows(6)}</tbody>
       </table>
     </div>
+    <div id="auditLoadMoreWrap" style="text-align:center;margin-top:12px;"></div>
   `;
   document.getElementById("searchBox").addEventListener("input", applyAuditFilters);
   document.getElementById("auditJadval").addEventListener("change", applyAuditFilters);
   document.getElementById("auditAmal").addEventListener("change", applyAuditFilters);
 
-  const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).limit(1000);
+  const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).range(0, AUDIT_PAGE_SIZE - 1);
   if (error) { reportError(error, "Tarixni yuklashda xatolik"); return; }
   AUDIT_ROWS = data || [];
+  AUDIT_LOAD_OFFSET = AUDIT_ROWS.length;
+  AUDIT_HAS_MORE = AUDIT_ROWS.length === AUDIT_PAGE_SIZE;
   document.getElementById("auditCount").textContent = `${AUDIT_ROWS.length} ta yozuv`;
   const body = document.getElementById("auditBody");
   body.innerHTML = AUDIT_ROWS.length ? AUDIT_ROWS.map(auditRowHtml).join("") :
@@ -6019,6 +6025,7 @@ async function renderAudit() {
     const idx = e.target.dataset.detail;
     if (idx !== undefined) openAuditDetailModal(AUDIT_ROWS[idx]);
   });
+  renderAuditLoadMoreButton();
 }
 
 function auditRowHtml(row, idx) {
@@ -6053,6 +6060,34 @@ function applyAuditFilters() {
   });
   const cnt = document.getElementById("auditCount");
   if (cnt) cnt.textContent = q || jadval || amal ? `${shown} / ${AUDIT_ROWS.length} ta yozuv` : `${AUDIT_ROWS.length} ta yozuv`;
+}
+
+function renderAuditLoadMoreButton() {
+  const wrap = document.getElementById("auditLoadMoreWrap");
+  if (!wrap) return;
+  wrap.innerHTML = AUDIT_HAS_MORE ? `<button class="btn" id="btnAuditLoadMore">Yana yuklash (${AUDIT_PAGE_SIZE} tagacha)</button>` : "";
+  document.getElementById("btnAuditLoadMore")?.addEventListener("click", loadMoreAuditRows);
+}
+
+async function loadMoreAuditRows() {
+  const btn = document.getElementById("btnAuditLoadMore");
+  if (btn) { btn.disabled = true; btn.textContent = "Yuklanmoqda…"; }
+  const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID)
+    .order("created_at", { ascending: false }).range(AUDIT_LOAD_OFFSET, AUDIT_LOAD_OFFSET + AUDIT_PAGE_SIZE - 1);
+  if (error) {
+    reportError(error, "Qo'shimcha yozuvlarni yuklashda xatolik");
+    if (btn) { btn.disabled = false; btn.textContent = "Yana yuklash"; }
+    return;
+  }
+  const startIdx = AUDIT_ROWS.length;
+  AUDIT_ROWS = AUDIT_ROWS.concat(data || []);
+  AUDIT_LOAD_OFFSET = AUDIT_ROWS.length;
+  AUDIT_HAS_MORE = (data || []).length === AUDIT_PAGE_SIZE;
+  const body = document.getElementById("auditBody");
+  (data || []).forEach((row, i) => body?.insertAdjacentHTML("beforeend", auditRowHtml(row, startIdx + i)));
+  document.getElementById("auditCount").textContent = `${AUDIT_ROWS.length} ta yozuv`;
+  renderAuditLoadMoreButton();
+  applyAuditFilters();
 }
 
 function openAuditDetailModal(row) {
