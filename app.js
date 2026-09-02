@@ -756,16 +756,46 @@ function toast(msg, type = "ok") {
   setTimeout(() => node.remove(), 3200);
 }
 
-function closeModal() {
-  document.getElementById("modalRoot").innerHTML = "";
+// Yuklanish paytida jadval o'rniga ko'rsatiladigan "skelet" qatorlar.
+function skeletonRows(cols, n = 6) {
+  const cells = Array.from({ length: cols }, () => `<td><span class="skeleton"></span></td>`).join("");
+  return Array.from({ length: n }, () => `<tr class="skeleton-row">${cells}</tr>`).join("");
 }
 
-function openModal(html) {
+let MODAL_KEY_HANDLER = null;
+
+function closeModal() {
+  document.getElementById("modalRoot").innerHTML = "";
+  if (MODAL_KEY_HANDLER) { document.removeEventListener("keydown", MODAL_KEY_HANDLER, true); MODAL_KEY_HANDLER = null; }
+}
+
+// opts.focus (default true) — ochilganda birinchi maydonga fokus.
+// Esc — yopadi; Enter (input'da, textarea/select'dan tashqari) — asosiy tugmani
+// bosadi (xavfli .btn-danger bundan mustasno).
+function openModal(html, opts = {}) {
+  const { focus = true } = opts;
   const root = document.getElementById("modalRoot");
   root.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal">${html}</div></div>`;
-  document.getElementById("modalBackdrop").addEventListener("click", (e) => {
-    if (e.target.id === "modalBackdrop") closeModal();
-  });
+  const backdrop = document.getElementById("modalBackdrop");
+  const modal = backdrop.querySelector(".modal");
+  backdrop.addEventListener("click", (e) => { if (e.target.id === "modalBackdrop") closeModal(); });
+
+  MODAL_KEY_HANDLER = (e) => {
+    if (!document.getElementById("modalBackdrop")) return;
+    if (e.key === "Escape") { e.preventDefault(); closeModal(); return; }
+    if (e.key === "Enter") {
+      const t = e.target;
+      if (t && (t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      const primary = modal.querySelector("#mSave, #mConfirm, .modal-actions .btn-primary");
+      if (primary && !primary.classList.contains("btn-danger")) { e.preventDefault(); primary.click(); }
+    }
+  };
+  document.addEventListener("keydown", MODAL_KEY_HANDLER, true);
+
+  if (focus) {
+    const first = modal.querySelector("input:not([type=hidden]):not([disabled]), select, textarea");
+    if (first) setTimeout(() => { try { first.focus(); } catch (e) {} }, 0);
+  }
 }
 
 /* ---------------------------- sana oralig'i filtri ---------------------------- */
@@ -1560,10 +1590,17 @@ function renderInvoiceTable(type) {
       <span class="faint">${rows.length} ta yozuv${INVOICE_DUP_FILTER[type] ? " (faqat takrorlar)" : ""}</span>
     </div>
 
+    <div class="bulk-bar" id="invBulkBar" style="display:none;">
+      <span class="faint"><b id="invSelCount">0</b> ta belgilandi</span>
+      <button class="btn btn-danger btn-sm" id="btnBulkDelInv">Belgilanganlarni o'chirish</button>
+      <button class="btn btn-sm" id="btnBulkClearInv">Bekor qilish</button>
+    </div>
+
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
+            <th style="width:32px"><input type="checkbox" id="selectAllInv" class="row-select" title="Barchasini belgilash"></th>
             <th>Sana</th>
             <th>Hujjat №</th>
             <th>${info.party}</th>
@@ -1595,6 +1632,40 @@ function renderInvoiceTable(type) {
   });
 
   bindInvoiceRowEvents(type);
+  bindInvoiceBulkSelect(type);
+}
+
+// Faktura jadvalида qatorlarni belgilab ommaviy o'chirish.
+function bindInvoiceBulkSelect(type) {
+  const body = document.getElementById("invoiceBody");
+  const bar = document.getElementById("invBulkBar");
+  const cntEl = document.getElementById("invSelCount");
+  const allBox = document.getElementById("selectAllInv");
+  if (!body || !bar) return;
+  const selected = () => [...body.querySelectorAll(".row-select:checked")].map((c) => c.dataset.select);
+  const refresh = () => {
+    const n = selected().length;
+    cntEl.textContent = n;
+    bar.style.display = n ? "" : "none";
+  };
+  body.addEventListener("change", (e) => { if (e.target.classList.contains("row-select")) refresh(); });
+  allBox.addEventListener("change", () => {
+    body.querySelectorAll(".row-select").forEach((c) => { c.checked = allBox.checked; });
+    refresh();
+  });
+  document.getElementById("btnBulkClearInv").addEventListener("click", () => {
+    body.querySelectorAll(".row-select").forEach((c) => { c.checked = false; });
+    allBox.checked = false;
+    refresh();
+  });
+  document.getElementById("btnBulkDelInv").addEventListener("click", async () => {
+    const ids = selected();
+    if (!ids.length) return;
+    if (!confirm(`${ids.length} ta hujjatni o'chirmoqchimisiz?\n\nBu amalni ortga qaytarib bo'lmaydi.`)) return;
+    for (const id of ids) await deleteRowSafe(TABLE_NAMES[type], type, id, null);
+    renderInvoiceTable(type);
+    toast(`${ids.length} ta hujjat o'chirildi`);
+  });
 }
 
 function invoiceRowHtml(type, r, isDup) {
@@ -1603,6 +1674,7 @@ function invoiceRowHtml(type, r, isDup) {
   const rowStyle = [invalid ? "opacity:.55" : "", isDup ? "background:var(--warn-soft)" : ""].filter(Boolean).join(";");
   return `
     <tr data-id="${r.id}" style="${rowStyle}" title="${isDup ? "Diqqat: bu hujjat raqami+sana+summa+kontragent bo'yicha boshqa yozuv(lar) bilan bir xil bo'lishi mumkin" : ""}">
+      <td style="text-align:center"><input type="checkbox" class="row-select" data-select="${r.id}"></td>
       <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
       <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
       <td><input class="cell-input" data-f="kontragentNomi" list="kontragentlarList" value="${escapeHtml(r.kontragentNomi || "")}" style="min-width:170px"></td>
@@ -5908,7 +5980,7 @@ async function renderAudit() {
         <thead>
           <tr><th>Vaqt</th><th>Kim</th><th>Jadval</th><th>Amal</th><th>O'zgarish</th><th></th></tr>
         </thead>
-        <tbody id="auditBody"><tr><td colspan="6" class="faint" style="text-align:center;padding:16px;">Yuklanmoqda…</td></tr></tbody>
+        <tbody id="auditBody">${skeletonRows(6)}</tbody>
       </table>
     </div>
   `;
@@ -6010,7 +6082,7 @@ async function renderFirmaManager(container, { withHeader = false } = {}) {
     <div class="table-wrap">
       <table>
         <thead><tr><th>Nomi</th><th>Yaratilgan</th><th></th></tr></thead>
-        <tbody id="firmalarBody"><tr><td colspan="3" class="faint" style="text-align:center;padding:16px;">Yuklanmoqda…</td></tr></tbody>
+        <tbody id="firmalarBody">${skeletonRows(3, 4)}</tbody>
       </table>
     </div>
   `;
