@@ -1681,9 +1681,9 @@ function invoiceRowHtml(type, r, isDup) {
       <td><input class="cell-input" data-f="kontragentInn" value="${escapeHtml(r.kontragentInn || "")}" style="min-width:90px"></td>
       <td><span class="pill ${statusPill}">${escapeHtml(r.status || "Подписан")}</span></td>
       <td style="text-align:center">${tolandiCellHtml(r)}</td>
-      <td class="num"><input class="cell-input num" data-f="summaQQSsiz" value="${fmt(r.summaQQSsiz)}"></td>
+      <td class="num"><input class="cell-input num num-fmt" data-f="summaQQSsiz" value="${fmt(r.summaQQSsiz)}"></td>
       <td class="num"><input class="cell-input num" data-f="qqsStavka" value="${fmt(r.qqsStavka)}" style="width:50px"></td>
-      <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
+      <td class="num"><input class="cell-input num num-fmt" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
       <td class="row-actions">
         ${type === "chiqim" ? `<button class="icon-btn" data-kalk="${r.id}" title="Kalkulyatsiya — sotilgan mahsulotlar va ombordan sarf"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>` : ""}
@@ -3176,7 +3176,7 @@ function openKontragentModal(existingId) {
     <div class="field"><label>Bank hisob raqami</label><input id="kBankHisob" value="${escapeHtml(existing ? existing.bankHisob : "")}"></div>
     <div class="field"><label>MFO</label><input id="kBankMfo" value="${escapeHtml(existing ? existing.bankMfo : "")}"></div>
     <div class="field"><label>Bank nomi</label><input id="kBankNomi" value="${escapeHtml(existing ? existing.bankNomi : "")}"></div>
-    <div class="field"><label>Boshlang'ich qarz (qo'lda, Solishtirma dalolatnoma uchun)</label><input id="kBoshlangichQarz" value="${existing && existing.boshlangichQarz ? fmt(existing.boshlangichQarz) : ""}" placeholder="masalan: 1500000 (musbat — u bizga qarzdor)"></div>
+    <div class="field"><label>Boshlang'ich qarz (qo'lda, Solishtirma dalolatnoma uchun)</label><input id="kBoshlangichQarz" class="num-fmt" data-fmt-digits="0" value="${existing && existing.boshlangichQarz ? fmt(existing.boshlangichQarz) : ""}" placeholder="masalan: 1500000 (musbat — u bizga qarzdor)"></div>
     <div class="field"><label>Izoh</label><input id="kIzoh" value="${escapeHtml(existing ? existing.izoh : "")}"></div>
     <div class="modal-actions">
       <button class="btn" id="mCancel">Bekor qilish</button>
@@ -4251,8 +4251,8 @@ function bankRowHtml(r) {
       <td><input class="cell-input" data-f="kontragent" list="kontragentlarList" value="${escapeHtml(r.kontragent || "")}" style="min-width:170px"></td>
       <td><input class="cell-input" data-f="kontragentInn" value="${escapeHtml(r.kontragentInn || "")}" style="min-width:90px"></td>
       <td><input class="cell-input" data-f="tavsif" value="${escapeHtml(r.tavsif || "")}" style="min-width:220px" title="${escapeHtml(r.tavsif || "")}"></td>
-      <td class="num"><input class="cell-input num" data-f="kirim" value="${fmt(r.kirim)}"></td>
-      <td class="num"><input class="cell-input num" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
+      <td class="num"><input class="cell-input num num-fmt" data-f="kirim" value="${fmt(r.kirim)}"></td>
+      <td class="num"><input class="cell-input num num-fmt" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
       <td class="row-actions"><button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
@@ -4557,8 +4557,8 @@ function ishHaqiRowHtml(r, isDup) {
           <option value="Tugatilgan" ${r.holati === "Tugatilgan" ? "selected" : ""}>Tugatilgan</option>
         </select>
       </td>
-      <td class="num"><input class="cell-input num" data-f="oyliqSumma" value="${fmt(r.oyliqSumma)}"></td>
-      <td class="num"><input class="cell-input num" data-f="imtiyozSumma" value="${fmt(r.imtiyozSumma)}"></td>
+      <td class="num"><input class="cell-input num num-fmt" data-f="oyliqSumma" value="${fmt(r.oyliqSumma)}"></td>
+      <td class="num"><input class="cell-input num num-fmt" data-f="imtiyozSumma" value="${fmt(r.imtiyozSumma)}"></td>
       <td class="num ihq-ijtimoiy">${fmt(c.ijtimoiySoliq)}</td>
       <td class="num ihq-ndfl">${fmt(c.ndfl)}</td>
       <td class="num ihq-inps">${fmt(c.inps)}</td>
@@ -6332,15 +6332,15 @@ function renderSettings() {
         <div class="card-title">Soliq stavkalari</div>
         <div class="field"><label>QQS stavkasi (%)</label><input id="sQqs" inputmode="decimal" value="${fmt(s.qqsStavka)}"></div>
         <div class="field"><label>Foyda solig'i stavkasi (%)</label><input id="sFoyda" inputmode="decimal" value="${fmt(s.foydaStavka)}"></div>
-        <div class="field"><label>Davr xarajatlari (F2, qo'lda — ish haqidan tashqari boshqa xarajatlar)</label><input id="sDavr" inputmode="decimal" value="${fmt(s.davrXarajati)}"></div>
+        <div class="field"><label>Davr xarajatlari (F2, qo'lda — ish haqidan tashqari boshqa xarajatlar)</label><input id="sDavr" class="num-fmt" inputmode="decimal" value="${fmt(s.davrXarajati)}"></div>
         <div class="switch-row">
           <span class="switch"><input type="checkbox" id="sIshHaqiAvto" ${s.ishHaqiAvtoXarajat ? "checked" : ""}><span class="track"></span></span>
           <label for="sIshHaqiAvto">Ish haqi bo'limidan hisoblangan xarajatni (ish haqi + ijtimoiy soliq) yuqoridagi "Davr xarajatlari"ga avtomatik qo'shish</label>
         </div>
-        <div class="field"><label>Moliyaviy xarajatlar (F2, qo'lda)</label><input id="sMoliya" inputmode="decimal" value="${fmt(s.moliyaviyXarajat)}"></div>
+        <div class="field"><label>Moliyaviy xarajatlar (F2, qo'lda)</label><input id="sMoliya" class="num-fmt" inputmode="decimal" value="${fmt(s.moliyaviyXarajat)}"></div>
         <div class="field">
           <label>Tannarxni qo'lda belgilash (bo'sh = avtomatik, kirim fakturalardan)</label>
-          <input id="sTannarx" inputmode="decimal" value="${tannarxDisplay}">
+          <input id="sTannarx" class="num-fmt" inputmode="decimal" value="${tannarxDisplay}">
         </div>
       </div>
     </div>
@@ -7218,6 +7218,21 @@ let lastTypingAt = 0;
 document.addEventListener("input", (e) => {
   if (e.target && e.target.closest && e.target.closest("#main")) lastTypingAt = Date.now();
 }, true);
+
+// Raqam maydonlari (.num-fmt): fokusда — xom son (tahrirlash oson), fokusdan
+// chiqganda — minglik ajratgichли ko'rinish ("1 234 567"). toNum() ajratgichларни
+// tozalagani uchun saqlash mantig'i o'zgarmaydi.
+document.addEventListener("focusin", (e) => {
+  const t = e.target;
+  if (!t || !t.classList || !t.classList.contains("num-fmt")) return;
+  if (t.value.trim() !== "") t.value = String(toNum(t.value));
+});
+document.addEventListener("focusout", (e) => {
+  const t = e.target;
+  if (!t || !t.classList || !t.classList.contains("num-fmt")) return;
+  if (t.value.trim() === "") return;
+  t.value = fmt(toNum(t.value), t.dataset.fmtDigits ? Number(t.dataset.fmtDigits) : 0);
+});
 
 function rerenderCurrentPage() {
   if (Date.now() - lastTypingAt < 1500) return;
