@@ -377,6 +377,79 @@ function pushFieldsUpdate(type, id, partial) {
   });
 }
 
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// "Izlash va almashtirish" — tanlangan matn maydonida qidiruv so'zini yangi matn
+// bilan almashtiradi (bitta qatorda bir necha marta uchrasa — hammasida).
+// rows — operatsiya bajariladigan aniq massiv (masalan Ombor uchun joriy tab
+// bo'yicha filtrlangan qism); storeType — pushFieldsUpdate uchun jadval kaliti;
+// fields — [{key,label}] tanlash mumkin bo'lgan matn ustunlari; onDone — muvaffaqiyatli
+// almashtirishdan keyin chaqiriladi (odatda joriy sahifani qayta chizadi).
+function openFindReplaceModal({ title, rows, storeType, fields, onDone }) {
+  openModal(`
+    <h3>${escapeHtml(title || "Izlash va almashtirish")}</h3>
+    <div class="field"><label>Maydon</label>
+      <select id="frField">${fields.map((f) => `<option value="${f.key}">${escapeHtml(f.label)}</option>`).join("")}</select>
+    </div>
+    <div class="field"><label>Qidiriladigan matn</label><input id="frSearch" placeholder="masalan: eski nom"></div>
+    <div class="field"><label>Yangi matn</label><input id="frReplace" placeholder="masalan: yangi nom"></div>
+    <label style="display:flex;align-items:center;gap:6px;margin:4px 0 10px;font-size:13px;">
+      <input type="checkbox" id="frCaseSensitive"> Katta-kichik harfni farqlash
+    </label>
+    <p class="modal-sub" id="frMatchInfo">Qidiriladigan matnni kiriting.</p>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mConfirm" disabled>Almashtirish</button>
+    </div>
+  `);
+  const fieldEl = document.getElementById("frField");
+  const searchEl = document.getElementById("frSearch");
+  const caseEl = document.getElementById("frCaseSensitive");
+  const info = document.getElementById("frMatchInfo");
+  const confirmBtn = document.getElementById("mConfirm");
+
+  function countMatches() {
+    const field = fieldEl.value, q = searchEl.value;
+    if (!q) { info.textContent = "Qidiriladigan matnni kiriting."; confirmBtn.disabled = true; return; }
+    const needle = caseEl.checked ? q : q.toLowerCase();
+    const count = rows.filter((r) => {
+      const val = r[field];
+      if (val === undefined || val === null) return false;
+      const hay = caseEl.checked ? String(val) : String(val).toLowerCase();
+      return hay.includes(needle);
+    }).length;
+    info.textContent = count ? `${count} ta qatorda topildi.` : "Hech qanday qator topilmadi.";
+    confirmBtn.disabled = count === 0;
+  }
+  fieldEl.addEventListener("change", countMatches);
+  searchEl.addEventListener("input", countMatches);
+  caseEl.addEventListener("change", countMatches);
+
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  confirmBtn.addEventListener("click", () => {
+    const field = fieldEl.value, q = searchEl.value;
+    const replaceText = document.getElementById("frReplace").value;
+    if (!q) return;
+    const re = new RegExp(escapeRegExp(q), caseEl.checked ? "g" : "gi");
+    let count = 0;
+    rows.forEach((r) => {
+      const val = r[field];
+      if (val === undefined || val === null) return;
+      const str = String(val);
+      const newVal = str.replace(re, replaceText);
+      if (newVal === str) return;
+      r[field] = newVal;
+      pushFieldsUpdate(storeType, r.id, { [field]: newVal });
+      count++;
+    });
+    closeModal();
+    if (onDone) onDone();
+    toast(`${count} ta qatorda almashtirildi`);
+  });
+}
+
 // RLS policy o'chirishni rad etganda (masalan, faqat admin o'chira oladigan
 // qatorni oddiy xodim o'chirishga urinishi) Supabase/Postgres "42501" xato
 // kodini qaytaradi — buni tushunarli xabarga aylantiramiz.
@@ -1730,6 +1803,7 @@ function renderInvoiceTable(type) {
         <p class="page-desc">${info.desc}</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
@@ -1782,6 +1856,11 @@ function renderInvoiceTable(type) {
 
   document.getElementById("btnAddRow").addEventListener("click", () => addInvoiceRow(type));
   document.getElementById("btnImport").addEventListener("click", () => openImportModal(type));
+  document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
+    rows: STORE[type], storeType: type,
+    fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "kontragentNomi", label: "Kontragent nomi" }],
+    onDone: () => renderInvoiceTable(type)
+  }));
   document.getElementById("searchBox").addEventListener("input", (e) => filterInvoiceRows(e.target.value));
   document.getElementById("btnDupToggle").addEventListener("click", () => {
     INVOICE_DUP_FILTER[type] = !INVOICE_DUP_FILTER[type];
@@ -2256,6 +2335,7 @@ function renderOmborKirim() {
         <p class="page-desc">Faktura kirim fayllaridan import qilingan mahsulotlar ro'yxati (kirim jurnali) — har bir qator bitta mahsulot yetkazib berilishini bildiradi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
         <button class="btn" id="btnUnifyNomi">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
@@ -2302,6 +2382,11 @@ function renderOmborKirim() {
   document.getElementById("btnAddRow").addEventListener("click", () => addOmborRow());
   document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
   document.getElementById("btnUnifyNomi").addEventListener("click", () => openOmborMergeNomiModal("kirim"));
+  document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
+    rows: omborKirimRows(), storeType: "ombor",
+    fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "nomi", label: "Nomi" }],
+    onDone: renderOmbor
+  }));
   document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
 
   bindOmborRowEvents();
@@ -2342,6 +2427,7 @@ function renderOmborChiqim() {
         <p class="page-desc">Ombordan chiqarilgan (sarflangan yoki sotilgan) xomashyo va mahsulotlar tarixi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplaceChiqim">Izlash va almashtirish</button>
         <button class="btn" id="btnImportChiqim">Excel'dan import</button>
         <button class="btn" id="btnUnifyNomiChiqim">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddChiqim">+ Chiqim qo'shish</button>
@@ -2376,6 +2462,11 @@ function renderOmborChiqim() {
   document.getElementById("btnAddChiqim").addEventListener("click", () => openOmborChiqimModal());
   document.getElementById("btnImportChiqim").addEventListener("click", () => openOmborChiqimImportModal());
   document.getElementById("btnUnifyNomiChiqim").addEventListener("click", () => openOmborMergeNomiModal("chiqim"));
+  document.getElementById("btnFindReplaceChiqim").addEventListener("click", () => openFindReplaceModal({
+    rows: chiqimRows, storeType: "ombor",
+    fields: [{ key: "nomi", label: "Nomi" }, { key: "kontragentNomi", label: "Manba / izoh" }],
+    onDone: renderOmbor
+  }));
   const body = document.getElementById("omborChiqimBody");
   if (body) body.addEventListener("click", (e) => {
     const delId = e.target.dataset.delChiqim;
@@ -2913,6 +3004,7 @@ function renderIshlabChiqarish() {
       <div class="page-header" style="margin-bottom:12px;">
         <h2 class="section-title" style="margin:0;">Ishlab chiqarish / sotuv jurnali</h2>
         <div class="page-actions">
+          <button class="btn" id="btnFindReplaceIC">Izlash va almashtirish</button>
           <button class="btn" id="btnExportIC">Excel'ga eksport</button>
           <button class="btn btn-primary" id="btnAddIC">+ Yozuv qo'shish</button>
         </div>
@@ -2930,6 +3022,11 @@ function renderIshlabChiqarish() {
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
   document.getElementById("btnExportIC").addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
+  document.getElementById("btnFindReplaceIC").addEventListener("click", () => openFindReplaceModal({
+    rows: STORE.ishlabChiqarish, storeType: "ishlabChiqarish",
+    fields: [{ key: "mahsulotNomi", label: "Mahsulot nomi" }, { key: "izoh", label: "Izoh" }],
+    onDone: renderIshlabChiqarish
+  }));
   const rematchAllBtn = document.getElementById("btnRematchAll");
   if (rematchAllBtn) rematchAllBtn.addEventListener("click", rematchAllChiqimTafsil);
   main.querySelectorAll("[data-edit-m]").forEach((b) => b.addEventListener("click", () => openMahsulotModal(b.dataset.editM)));
@@ -3171,6 +3268,7 @@ function renderKontragentlar() {
         <p class="page-desc">Mijoz va yetkazib beruvchilar spravochnigi — bu yerga kiritilgan nomlar Faktura kirim/chiqim va Bank harakati sahifalarida avtomatik taklif qilinadi, INN esa avtomat to'ldiriladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnExportKontragent">Excel'ga eksport</button>
         <button class="btn" id="btnMergeKontragent">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddKontragent">+ Yangi kontragent</button>
@@ -3207,6 +3305,14 @@ function renderKontragentlar() {
 
   document.getElementById("btnAddKontragent").addEventListener("click", () => openKontragentModal());
   document.getElementById("btnExportKontragent").addEventListener("click", () => exportKontragentlarXlsx(rows));
+  document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
+    rows: STORE.kontragentlar, storeType: "kontragentlar",
+    fields: [
+      { key: "nomi", label: "Nomi" }, { key: "manzil", label: "Manzil" },
+      { key: "telefon", label: "Telefon" }, { key: "bankNomi", label: "Bank nomi" }, { key: "izoh", label: "Izoh" }
+    ],
+    onDone: renderKontragentlar
+  }));
   document.getElementById("btnMergeKontragent").addEventListener("click", () => openKontragentMergeModal());
   document.getElementById("searchBox").addEventListener("input", (e) => filterKontragentRows(e.target.value));
   const body = document.getElementById("kontragentBody");
@@ -3464,6 +3570,7 @@ function renderAsosiyVositalar() {
         <p class="page-desc">Asosiy vositalar ro'yxati va yillik foiz stavkasi bo'yicha (chiziqli usul) hisoblangan amortizatsiya. Joriy qoldiq qiymat F1 — Balans hisobotiga avtomatik quyiladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnExportAV">Excel'ga eksport</button>
         <button class="btn btn-primary" id="btnAddAV">+ Yangi vosita</button>
       </div>
@@ -3494,6 +3601,11 @@ function renderAsosiyVositalar() {
 
   document.getElementById("btnAddAV").addEventListener("click", () => openAsosiyVositaModal());
   document.getElementById("btnExportAV").addEventListener("click", () => exportAsosiyVositalarXlsx(rows, asOf, { jamiBoshlangich, jamiAmortizatsiya, jamiQoldiq }));
+  document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
+    rows: STORE.asosiyVositalar, storeType: "asosiyVositalar",
+    fields: [{ key: "nomi", label: "Nomi" }, { key: "inventarRaqami", label: "Inventar №" }, { key: "izoh", label: "Izoh" }],
+    onDone: renderAsosiyVositalar
+  }));
   const body = document.getElementById("avBody");
   if (body) body.addEventListener("click", (e) => {
     const editId = e.target.dataset.edit;
@@ -4408,6 +4520,7 @@ function renderBank() {
         <p class="page-desc">Hisob raqami bo'yicha kirim/chiqim operatsiyalari. Qoldiq F1 hisobotidagi "Pul mablag'lari"ga avtomatik qo'shiladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnExportBank">Excel'ga eksport</button>
         <button class="btn" id="btnImport">Fayldan import</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
@@ -4444,6 +4557,11 @@ function renderBank() {
 
   document.getElementById("btnAddRow").addEventListener("click", addBankRow);
   document.getElementById("btnExportBank").addEventListener("click", () => exportBankXlsx(rows));
+  document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
+    rows: STORE.bank, storeType: "bank",
+    fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "kontragent", label: "Kontragent" }, { key: "tavsif", label: "Tavsif" }],
+    onDone: renderBank
+  }));
   document.getElementById("btnImport").addEventListener("click", openBankImportModal);
   document.getElementById("inOpening").addEventListener("change", (e) => {
     const partial = { bankOpeningBalance: toNum(e.target.value) };
@@ -4645,6 +4763,7 @@ function renderIshHaqi() {
         <p class="page-desc">Xodimlarga hisoblangan ish haqi — "Ish haqi hisoboti"ga (NDFL/ijtimoiy soliq) doim avtomatik integratsiya bo'ladi. F2 (moliyaviy natija)ga qo'shish ixtiyoriy — "Sozlamalar"da yoqing.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImportIshHaqi">Excel'dan import</button>
         <button class="btn" id="btnExportIshHaqi">Excel'ga eksport</button>
         <button class="btn btn-primary" id="btnAddRow">+ Xodim yozuvi qo'shish</button>
@@ -4697,6 +4816,11 @@ function renderIshHaqi() {
   document.getElementById("btnAddRow").addEventListener("click", addIshHaqiRow);
   document.getElementById("searchBox").addEventListener("input", (e) => filterIshHaqiRows(e.target.value));
   document.getElementById("btnExportIshHaqi").addEventListener("click", exportIshHaqiXlsx);
+  document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
+    rows: STORE.ishHaqi, storeType: "ishHaqi",
+    fields: [{ key: "fio", label: "F.I.O." }, { key: "lavozimi", label: "Lavozimi" }],
+    onDone: renderIshHaqi
+  }));
   document.getElementById("btnImportIshHaqi").addEventListener("click", openIshHaqiImportModal);
   document.getElementById("btnDupToggle").addEventListener("click", () => {
     ISHHAQI_DUP_FILTER = !ISHHAQI_DUP_FILTER;
