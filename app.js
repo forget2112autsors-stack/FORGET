@@ -38,7 +38,8 @@ const INVOICE_DB_MAP = {
 };
 const BANK_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami", kontragent: "kontragent",
-  kontragentInn: "kontragent_inn", tavsif: "tavsif", kirim: "kirim", chiqim: "chiqim", faylId: "fayl_id"
+  kontragentInn: "kontragent_inn", tavsif: "tavsif", kirim: "kirim", chiqim: "chiqim", faylId: "fayl_id",
+  xizmat: "xizmat"
 };
 const FAYL_DB_MAP = { bolim: "bolim", faylNomi: "fayl_nomi", hajmi: "hajmi", sana: "sana" };
 const ISHHAQI_DB_MAP = {
@@ -58,29 +59,11 @@ const OMBOR_DB_MAP = {
   kirimId: "kirim_id"
 };
 
-// Ombor kirimida turli polimer navlari (masalan "Полипропилен марки TPP D30S",
-// "Поливинилхлорид С-70") bitta umumiy zaxira nomi ostida yuritiladi — miqdorlar
-// BIRLASHTIRILMAYDI (har bir qator alohida qoladi), faqat "nomi" maydoni shu
-// umumiy nom bilan almashtiriladi. Nomida quyidagi kalit so'zlardan birortasi
-// uchrasa (katta-kichik harfga qaramasdan), canonicalizeOmborNomi shu umumiy
-// nomni qaytaradi. Ombor kirimi Excel importida (parseOmborLineItems) avtomat
-// qo'llanadi; mavjud (import qilib bo'lingan) yozuvlar esa Ombor kirimi
-// sahifasidagi "Nomlarni birlashtirish" tugmasi orqali qo'lda tanlab
-// birlashtiriladi (openOmborMergeNomiModal).
-const OMBOR_UNIFY_KEYWORDS = ["полиэтилен", "полипропилен", "поливинилхлорид", "пвх", "шпагат", "полиацетали"];
-const OMBOR_UNIFIED_NOMI = "Polietilen granula";
-
-function canonicalizeOmborNomi(nomi) {
-  const s = String(nomi || "").trim();
-  if (!s) return s;
-  const low = s.toLowerCase();
-  if (OMBOR_UNIFY_KEYWORDS.some((k) => low.includes(k))) return OMBOR_UNIFIED_NOMI;
-  return s;
-}
-const MAHSULOT_DB_MAP = { nomi: "nomi", birlik: "birlik", tarkib: "tarkib", standartNarxi: "standart_narxi" };
+const MAHSULOT_DB_MAP = { nomi: "nomi", birlik: "birlik", tarkib: "tarkib", standartNarxi: "standart_narxi", foydaNormasi: "foyda_normasi" };
 const ISHLAB_CHIQARISH_DB_MAP = {
   sana: "sana", mahsulotId: "mahsulot_id", mahsulotNomi: "mahsulot_nomi",
-  miqdor: "miqdor", birlik: "birlik", tannarx: "tannarx", izoh: "izoh"
+  miqdor: "miqdor", birlik: "birlik", tannarx: "tannarx", izoh: "izoh",
+  foydaNormasi: "foyda_normasi"
 };
 // Chiqim faktura import qilinganda har bir sotilgan mahsulot qatori shu
 // jadvalga yoziladi va "Mahsulotlar" kalkulyatsiyasi bilan avtomat (yoki
@@ -775,10 +758,18 @@ function toNum(v) {
   return isFinite(n) ? n : 0;
 }
 
+// Ming ajratuvchi sifatida bo'sh joy (NBSP), kasr ajratuvchi sifatida "." ishlatiladi
+// — "ru-RU" locale (avvalgi variant) vergulni kasr ajratuvchi sifatida ishlatgani
+// uchun uch xonali miqdorlar (masalan "837,000") "837 ming" deb chalkash o'qilishi
+// mumkin edi, aslida "837.000" (ya'ni 837) degani edi. "." bilan bunday chalkashlik
+// bo'lmaydi, ming ajratuvchi bo'sh joy bilan aniq ajralib turadi.
 function fmt(n, digits = 0) {
   n = toNum(n);
-  const opts = { minimumFractionDigits: digits, maximumFractionDigits: digits };
-  return n.toLocaleString("ru-RU", opts);
+  const fixed = Math.abs(n).toFixed(digits);
+  const neg = n < 0 && parseFloat(fixed) !== 0;
+  const [intPart, fracPart] = fixed.split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return (neg ? "-" : "") + grouped + (fracPart ? "." + fracPart : "");
 }
 
 function fmtSum(n) {
@@ -791,8 +782,8 @@ function fmtSum(n) {
 function fmtCompact(n) {
   n = toNum(n);
   const abs = Math.abs(n);
-  if (abs >= 1e9) return `${fmt(n / 1e9, 1).replace(/,0$/, "")} mlrd`;
-  if (abs >= 1e6) return `${fmt(n / 1e6, 1).replace(/,0$/, "")} mln`;
+  if (abs >= 1e9) return `${fmt(n / 1e9, 1).replace(/\.0$/, "")} mlrd`;
+  if (abs >= 1e6) return `${fmt(n / 1e6, 1).replace(/\.0$/, "")} mln`;
   if (abs >= 1e3) return `${fmt(n / 1e3, 0)} ming`;
   return fmt(n, 0);
 }
@@ -961,6 +952,44 @@ function bindDateRangeBar(rerender) {
 
 /* ------------------------------ computations ---------------------------- */
 
+// "Bank harakati"da "Xizmat" deb belgilangan chiqimlar (masalan oylik
+// interaktiv xizmat to'lovi, bank komissiyasi va h.k.) — ishlab chiqarishning
+// biror aniq mahsulotiga bevosita bog'lanmagan, lekin davriy xarajat. Har bir
+// sotuv qatorining tannarxiga ULUSH sifatida qo'shish uchun, YIL bo'yicha
+// (chiqim_tafsil.sana bo'yicha) sotilgan/kalkulyatsiya qilingan mahsulot
+// miqdoriga bo'linadi. OYLIK emas, aynan YILLIK guruhlash ishlatiladi —
+// aks holda mahsulot sotilmagan (yoki hali kalkulyatsiya bilan bog'lanmagan)
+// oydagi xizmat xarajati HECH QAYSI sotuvga taqsimlanmay, hisobdan butunlay
+// tushib qolar edi. Bu qiymatlar SAQLANMAYDI (STORE.bank/chiqimTafsil
+// o'zgargan zahoti avtomatik qayta hisoblanadi) — shu sabab alohida "qayta
+// hisoblash" tugmasi shart emas.
+function bankXizmatXarajatiYil(year) {
+  return STORE.bank.reduce((sum, r) => {
+    if (!r.xizmat || !r.sana || r.sana.slice(0, 4) !== year) return sum;
+    return sum + toNum(r.chiqim);
+  }, 0);
+}
+
+function yillikSotilganMiqdorJami(year) {
+  return STORE.chiqimTafsil.reduce((sum, t) => {
+    if (!t.mahsulotId || !t.sana || t.sana.slice(0, 4) !== year) return sum;
+    return sum + toNum(t.miqdor);
+  }, 0);
+}
+
+// Bitta sotuv qatori uchun (sanasi bo'yicha aniqlangan YILning) xizmat
+// xarajatidan tegishli ulush: (yillik xizmat xarajati / yillik jami sotilgan
+// miqdor) * shu qatorning miqdori. Turli mahsulotlar turli birlikda
+// bo'lganda ham "miqdor" ustunlari to'g'ridan-to'g'ri qo'shiladi — agar
+// asosiy faoliyat bitta dominant birlikda bo'lmasa, bu taxminiy natija beradi.
+function xizmatTannarxUlushi(sana, miqdor) {
+  if (!sana) return 0;
+  const year = sana.slice(0, 4);
+  const jamiMiqdor = yillikSotilganMiqdorJami(year);
+  if (!jamiMiqdor) return 0;
+  return (bankXizmatXarajatiYil(year) / jamiMiqdor) * toNum(miqdor);
+}
+
 function sumRows(rows, field, onlyValid = true) {
   return rows.reduce((acc, r) => {
     if (onlyValid && !isValidStatus(r.status)) return acc;
@@ -1007,13 +1036,21 @@ function computeTotals() {
   const kalkulyatsiyaTannarx = periodChiqimTafsil.reduce((sum, t) => {
     const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
     if (!mahsulot) return sum;
-    return sum + computeMahsulotConsumption(mahsulot, t.miqdor).tannarx;
+    return sum + computeMahsulotConsumption(mahsulot, t.miqdor, t.sana).tannarx + xizmatTannarxUlushi(t.sana, t.miqdor);
   }, 0);
   // Bosh sahifadagi "Kalkulyatsiya bo'yicha foyda" statistika kartasi uchun —
   // faqat kalkulyatsiya bilan bog'langan chiqim_tafsil qatorlarining o'zidan
   // (davr bo'yicha), kirim/chiqim fakturalar jamisidan emas.
   const kalkulyatsiyaSavdo = periodChiqimTafsil.reduce((sum, t) => sum + (toNum(t.summa) || toNum(t.miqdor) * toNum(t.narx)), 0);
   const kalkulyatsiyaFoyda = kalkulyatsiyaSavdo - kalkulyatsiyaTannarx;
+  // Bosh sahifadagi "Foyda solig'i" yorlig'i uchun — rasmiy "Foyda solig'i
+  // hisob-kitobi" sahifasidagi (010-080 qator, deklaratsiya shakli) to'liq
+  // zanjirdan FARQLI, soddalashtirilgan taxmin: to'g'ridan-to'g'ri yuqoridagi
+  // "Kalkulyatsiya bo'yicha foyda"dan (davr xarajati/moliyaviy xarajat/boshqa
+  // daromadsiz) hisoblanadi — buxgalterga davr yakunigacha tezkor mo'ljal
+  // beradi. Rasmiy hisobot hamon computeTotals()dagi to'liq zanjirni ishlatadi.
+  const kalkulyatsiyaSoliqBazasi = Math.max(kalkulyatsiyaFoyda - toNum(s.imtiyozlar), 0);
+  const kalkulyatsiyaFoydaSoligi = kalkulyatsiyaSoliqBazasi * (toNum(s.foydaStavka) / 100);
 
   // ---- F2: Moliyaviy natijalar ----
   const revenue = chiqimBase;
@@ -1069,7 +1106,7 @@ function computeTotals() {
     chiqimBase, chiqimQQS, chiqimJami,
     bankKirim, bankChiqim, bankOpening, bankQoldiq,
     kreditorlik, debitorlik,
-    revenue, tannarx, kalkulyatsiyaTannarx, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, yalpiFoyda, davrXarajati, ishHaqiXarajati, asosiyFaoliyatFoyda,
+    revenue, tannarx, kalkulyatsiyaTannarx, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, kalkulyatsiyaSoliqBazasi, kalkulyatsiyaFoydaSoligi, yalpiFoyda, davrXarajati, ishHaqiXarajati, asosiyFaoliyatFoyda,
     moliyaviyXarajat, soliqqachaFoyda, foydaSoligi, sofFoyda,
     jamiDaromad, chegiriladiXarajat, soliqqaTortiladiganFoyda, imtiyozlar, soliqBazasi, foydaStavka,
     qqsInput, qqsOutput, qqsToPay,
@@ -1322,7 +1359,7 @@ function computeMonthlyTrend(monthsCount) {
     const b = byKey[tf.sana.slice(0, 7)];
     if (!b) return;
     const mahsulot = tf.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === tf.mahsulotId) : null;
-    if (mahsulot) b.tannarx += computeMahsulotConsumption(mahsulot, tf.miqdor).tannarx;
+    if (mahsulot) b.tannarx += computeMahsulotConsumption(mahsulot, tf.miqdor, tf.sana).tannarx + xizmatTannarxUlushi(tf.sana, tf.miqdor);
   });
 
   buckets.forEach((b) => { b.foyda = b.savdo - b.tannarx; });
@@ -1640,10 +1677,10 @@ function renderDashboard() {
         <div class="stat-value">${fmtSum(t.qqsToPay)}</div>
         <div class="stat-sub">Chiqim QQS ${fmtSum(t.qqsOutput)} − Kirim QQS ${fmtSum(t.qqsInput)}</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card" ${uncostedCount ? `id="tileFoydaSoligi" style="cursor:pointer;"` : ""}>
         <div class="stat-label">Foyda solig'i</div>
-        <div class="stat-value">${fmtSum(t.foydaSoligi)}</div>
-        <div class="stat-sub">Stavka ${t.foydaStavka}%</div>
+        <div class="stat-value ${uncostedCount ? "neg" : ""}">${uncostedCount ? "—" : fmtSum(t.kalkulyatsiyaFoydaSoligi)}</div>
+        <div class="stat-sub">${uncostedCount ? `${uncostedCount} ta sotuv kalkulyatsiya bilan bog'lanmagan — bosing` : "To'lanadigan summa, kalkulyatsiya bo'yicha foydadan"}</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">Debitor / Kreditor</div>
@@ -1657,7 +1694,7 @@ function renderDashboard() {
       </div>
     </div>
 
-    <div class="grid grid-2 section">
+    <div class="grid grid-3 section">
       <div class="card stat-card">
         <div class="stat-label">Kalkulyatsiya bo'yicha foyda</div>
         <div class="stat-value">${fmtSum(t.kalkulyatsiyaFoyda)}</div>
@@ -1667,6 +1704,11 @@ function renderDashboard() {
         <div class="stat-label">Kalkulyatsiya qilinmagan sotuvlar</div>
         <div class="stat-value ${uncostedCount ? "neg" : ""}">${uncostedCount}</div>
         <div class="stat-sub">${uncostedCount ? "Ishlab chiqarish sahifasida ko'rish uchun bosing" : "Barcha sotuvlar kalkulyatsiya bilan bog'langan"}</div>
+      </div>
+      <div class="card stat-card" data-nav="ombor" style="cursor:pointer;">
+        <div class="stat-label">Ombor qoldig'i</div>
+        <div class="stat-value">${fmtOgirlik(omborOgirlikQoldigiKg())}</div>
+        <div class="stat-sub">${fmtSum(t.tovarZaxira)}</div>
       </div>
     </div>
 
@@ -1716,6 +1758,27 @@ function renderDashboard() {
   bindDashboardChart(trend);
   bindDashboardQqsChart(qqsTrend);
   bindDashboardDebtChart(debtTrend);
+  const tileFoydaSoligi = document.getElementById("tileFoydaSoligi");
+  if (tileFoydaSoligi) tileFoydaSoligi.addEventListener("click", () => openFoydaSoligiTalabModal(uncostedCount));
+}
+
+// Bosh sahifadagi "Foyda solig'i" yorlig'i kalkulyatsiya bo'yicha foydadan
+// hisoblanadi (qarang: computeTotals -> kalkulyatsiyaFoydaSoligi), shuning
+// uchun kalkulyatsiya bilan bog'lanmagan sotuv qatorlari bo'lsa aniq summa
+// ko'rsatib bo'lmaydi — yorliq bosilganda shu qatorlarni bog'lash talab
+// qilingani haqida oyna chiqadi ("Ishlab chiqarish" sahifasiga o'tkazadi).
+function openFoydaSoligiTalabModal(uncostedCount) {
+  openModal(`
+    <h3>Aniq hisoblash uchun kerakli amal</h3>
+    <p class="modal-sub">"Foyda solig'i" yorlig'i kalkulyatsiya bo'yicha foydadan (Savdo − kalkulyatsiya tannarxi) hisoblanadi. Hozircha <b>${uncostedCount} ta sotuv qatori</b> hech qanday mahsulot kalkulyatsiyasi bilan bog'lanmagan — shu qatorlarning tannarxi hisobga olinmagani uchun aniq soliq summasini ko'rsatib bo'lmaydi.</p>
+    <p class="modal-sub">Davom etish uchun "Ishlab chiqarish" sahifasidagi "Kalkulyatsiya qilinmagan sotuvlar" ro'yxatida shu qatorlarni mos mahsulotga bog'lang.</p>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Yopish</button>
+      <button class="btn btn-primary" id="mGo">Ishlab chiqarishga o'tish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+  document.getElementById("mGo").addEventListener("click", () => { closeModal(); navigate("ishlabchiqarish"); });
 }
 
 function recentList(type) {
@@ -2251,11 +2314,43 @@ function omborQoldiqList() {
     .sort((a, b) => a.nomi.localeCompare(b.nomi));
 }
 
+// Bosh sahifadagi "Ombor qoldig'i" yorlig'i uchun — faqat OG'IRLIK birligida
+// (kg/kilogramm/tonna, lotin/kirill yozuvida) yuritiladigan xomashyolarning
+// jami qoldig'ini kg holida qaytaradi ("tonna" birlikdagilar 1000ga
+// ko'paytirilib qo'shiladi). Dona/metr kabi og'irlik bo'lmagan birliklar
+// mazmunsiz yig'indi bermasligi uchun hisobga olinmaydi.
+const OMBOR_OGIRLIK_BIRLIK_KEYWORDS = ["kg", "кг", "kilogramm", "килограмм", "tonna", "тонна"];
+function omborOgirlikQoldigiKg() {
+  return omborQoldiqList().reduce((sum, q) => {
+    const b = String(q.birlik || "").toLowerCase();
+    if (!OMBOR_OGIRLIK_BIRLIK_KEYWORDS.some((k) => b.includes(k))) return sum;
+    const isTonna = b.includes("tonna") || b.includes("тонна");
+    return sum + q.qoldiq * (isTonna ? 1000 : 1);
+  }, 0);
+}
+
+// Kg qiymatini o'qishga qulay birlikda ko'rsatadi — 1000 kg va undan ko'p
+// bo'lsa tonnada, aks holda kg'da.
+function fmtOgirlik(kg) {
+  if (Math.abs(kg) >= 1000) return `${fmt(kg / 1000, 2)} t`;
+  return `${fmt(kg, 1)} kg`;
+}
+
 // Xomashyoning o'rtacha xarid narxi (QQSsiz, 1 birlik uchun) — barcha "kirim"
 // qatorlaridagi shu nomdagi yozuvlar bo'yicha. Mahsulot kalkulyatsiyasi va
 // Ishlab chiqarish tannarxini hisoblashda ishlatiladi.
-function avgOmborNarx(nomi) {
-  const rows = omborKirimRows().filter((r) => r.nomi === nomi);
+// asOfDate berilsa, faqat shu sanagacha (shu kunni ham qo'shib) bo'lgan kirim
+// qatorlari bo'yicha o'rtacha narx hisoblanadi — masalan eski faktura
+// kalkulyatsiyasi keyinchalik narxlar o'zgargan bo'lsa ham o'sha davrdagi
+// haqiqiy tannarxni ko'rsatishi uchun. Shu sanagacha kirim topilmasa (masalan
+// eng birinchi operatsiya), noaniqlikdan ko'ra yaqinroq bo'lgani uchun butun
+// tarix bo'yicha o'rtachaga qaytiladi.
+function avgOmborNarx(nomi, asOfDate) {
+  let rows = omborKirimRows().filter((r) => r.nomi === nomi);
+  if (asOfDate) {
+    const uptoDate = rows.filter((r) => !r.sana || r.sana <= asOfDate);
+    if (uptoDate.length) rows = uptoDate;
+  }
   const totalMiqdor = rows.reduce((a, r) => a + toNum(r.miqdor), 0);
   if (!totalMiqdor) return 0;
   const totalBaza = rows.reduce((a, r) => a + toNum(r.yetkazibBerishNarxi), 0);
@@ -2729,9 +2824,8 @@ function parseOmborLineItems(rows, col) {
         kontragentNomi: String(row[col.sellerNomi] || "").trim()
       };
     }
-    const rawNomi = String(row[col.nomi] || "").trim();
-    if (!rawNomi || !isValidStatus(ctx.status)) continue;
-    const nomi = canonicalizeOmborNomi(rawNomi);
+    const nomi = String(row[col.nomi] || "").trim();
+    if (!nomi || !isValidStatus(ctx.status)) continue;
 
     const yetkazibBerishNarxi = toNum(row[col.base]);
     const qqsSumma = toNum(row[col.qqsSumma]);
@@ -2923,6 +3017,8 @@ function mahsulotCardHtml(m) {
     <div class="card">
       <div class="card-title">${escapeHtml(m.nomi || "(nomsiz)")} <span class="faint" style="font-weight:400;">/ ${escapeHtml(m.birlik || "")}</span></div>
       <div class="report-line"><span class="label">Tannarx (1 ${escapeHtml(m.birlik || "birlik")})</span><span class="code"></span><span class="val">${fmtSum(mahsulotTannarx(m))}</span></div>
+      <div class="report-line"><span class="label">+ Foyda normasi</span><span class="code"></span><span class="val">${fmtSum(toNum(m.foydaNormasi))}</span></div>
+      <div class="report-line"><span class="label">Tavsiya etilgan narx (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(mahsulotTannarx(m) + toNum(m.foydaNormasi))}</span></div>
       <div class="report-line"><span class="label">Standart sotuv narxi</span><span class="code"></span><span class="val">${toNum(m.standartNarxi) ? fmtSum(m.standartNarxi) : "—"}</span></div>
       <div class="note" style="margin-top:10px;">
         ${tarkib.length ? tarkib.map((t) => `<div>${escapeHtml(t.nomi)} — ${fmt(t.norma, 3)} ${escapeHtml(t.birlik || "")}</div>`).join("") : `<span class="faint">Tarkib kiritilmagan</span>`}
@@ -2944,7 +3040,10 @@ function icRowHtml(r) {
       <td>${escapeHtml(r.birlik || "")}</td>
       <td class="num">${fmtSum(r.tannarx)}</td>
       <td>${escapeHtml(r.izoh || "")}</td>
-      <td class="row-actions"><button class="icon-btn" data-del-ic="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
+      <td class="row-actions">
+        <button class="icon-btn" data-print-ic="${r.id}" title="Ishlab chiqarish dalolatnomasi (chop etish)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>
+        <button class="icon-btn" data-del-ic="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+      </td>
     </tr>
   `;
 }
@@ -3033,8 +3132,10 @@ function renderIshlabChiqarish() {
   main.querySelectorAll("[data-del-m]").forEach((b) => b.addEventListener("click", () => deleteMahsulot(b.dataset.delM)));
   const icBody = document.getElementById("icBody");
   if (icBody) icBody.addEventListener("click", (e) => {
-    const id = e.target.dataset.delIc;
-    if (id) deleteIshlabChiqarishEntry(id);
+    const delId = e.target.dataset.delIc;
+    if (delId) { deleteIshlabChiqarishEntry(delId); return; }
+    const printId = e.target.dataset.printIc;
+    if (printId) printIshlabChiqarishDalolatnoma(printId);
   });
   const uncostedBody = document.getElementById("uncostedBody");
   if (uncostedBody) uncostedBody.addEventListener("click", (e) => {
@@ -3147,13 +3248,34 @@ async function ensureKontragentAutoAdded(inn, nomi) {
 function tarkibRowHtml(item) {
   item = item || {};
   return `
-    <div class="tarkib-row" style="display:flex;gap:8px;margin-bottom:8px;align-items:center;">
-      <input class="search-input tarkib-nomi" list="omborNomiList" placeholder="Xomashyo nomi (Ombordagi nomi bilan bir xil bo'lishi kerak)" value="${escapeHtml(item.nomi || "")}" style="flex:2">
-      <input class="search-input tarkib-birlik" placeholder="Birlik" value="${escapeHtml(item.birlik || "")}" style="width:90px">
-      <input class="search-input tarkib-norma" placeholder="Norma" value="${item.norma ? fmt(item.norma, 4) : ""}" style="width:110px">
-      <button type="button" class="icon-btn tarkib-del" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+    <div class="tarkib-row-wrap" style="margin-bottom:8px;">
+      <div class="tarkib-row" style="display:flex;gap:8px;align-items:center;">
+        <input class="search-input tarkib-nomi" list="omborNomiList" placeholder="Xomashyo nomi (Ombordagi nomi bilan bir xil bo'lishi kerak)" value="${escapeHtml(item.nomi || "")}" style="flex:2">
+        <input class="search-input tarkib-birlik" placeholder="Birlik" value="${escapeHtml(item.birlik || "")}" style="width:90px">
+        <input class="search-input tarkib-norma" placeholder="Norma" value="${item.norma ? fmt(item.norma, 4) : ""}" style="width:110px">
+        <button type="button" class="icon-btn tarkib-del" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="tarkib-hint faint" style="font-size:11.5px;margin-top:4px;"></div>
     </div>
   `;
+}
+
+// Tarkib qatoridagi xomashyo nomi/normasi asosida — Ombordagi joriy o'rtacha
+// narxni (avgOmborNarx) va shu normaga ko'ra 1 birlik tayyor mahsulot uchun
+// taxminiy tannarxni jonli ko'rsatadi (masalan "1 metr trubaga 8 kg" kabi
+// normalar kiritilganda, ombordagi HAQIQIY narx bo'yicha bu qancha turishini
+// darhol ko'rish uchun — noto'g'ri norma/narx kiritilganini shu yerdayoq
+// sezish mumkin). Faqat ko'rsatadi, hisoblashga ta'sir qilmaydi — saqlashda
+// baribir saveMahsulotFromModal xomashyo nomi/normasini o'qiydi.
+function updateTarkibRowHint(rowWrapEl) {
+  const nomi = rowWrapEl.querySelector(".tarkib-nomi").value.trim();
+  const norma = toNum(rowWrapEl.querySelector(".tarkib-norma").value);
+  const hintEl = rowWrapEl.querySelector(".tarkib-hint");
+  if (!hintEl) return;
+  if (!nomi || !norma) { hintEl.textContent = ""; return; }
+  const narx = avgOmborNarx(nomi);
+  if (!narx) { hintEl.textContent = `"${nomi}" uchun Ombor kirimida narx topilmadi.`; return; }
+  hintEl.textContent = `Omborda 1 ${rowWrapEl.querySelector(".tarkib-birlik").value.trim() || "birlik"} narxi: ${fmtSum(narx)} · shu normaga (${fmt(norma, 4)}) ko'ra 1 mahsulot uchun taxminiy tannarx: ${fmtSum(norma * narx)}`;
 }
 
 function openMahsulotModal(existingId) {
@@ -3170,6 +3292,10 @@ function openMahsulotModal(existingId) {
     <div id="tarkibRows">${tarkib.map((t) => tarkibRowHtml(t)).join("")}</div>
     <button type="button" class="btn btn-sm" id="btnAddTarkibRow" style="margin-top:4px;">+ Xomashyo qo'shish</button>
     ${omborNomiDatalistHtml()}
+    <div class="card-title" style="margin-top:16px;">Narx kalkulyatsiyasi (1 birlik uchun)</div>
+    <div class="field"><label>Foyda normasi (1 birlik uchun, so'm)</label><input id="mFoydaNormasi" value="${fmt(existing && toNum(existing.foydaNormasi) ? existing.foydaNormasi : 100)}" placeholder="masalan: 100"></div>
+    <div class="note" id="narxKalkulyatsiyasiPanel" style="margin-top:8px;"></div>
+    <button type="button" class="btn btn-sm" id="btnQollashNarx" style="margin-top:8px;">Tavsiya etilgan narxni "Standart sotuv narxi"ga qo'yish</button>
     <div class="modal-actions">
       <button class="btn" id="mCancel">Bekor qilish</button>
       <button class="btn btn-primary" id="mSave">Saqlash</button>
@@ -3178,11 +3304,65 @@ function openMahsulotModal(existingId) {
   document.getElementById("mCancel").addEventListener("click", closeModal);
   document.getElementById("btnAddTarkibRow").addEventListener("click", () => {
     document.getElementById("tarkibRows").insertAdjacentHTML("beforeend", tarkibRowHtml({}));
+    updateNarxKalkulyatsiyasiPanel();
   });
-  document.getElementById("tarkibRows").addEventListener("click", (e) => {
-    if (e.target.classList.contains("tarkib-del")) e.target.closest(".tarkib-row").remove();
+  const tarkibRowsEl = document.getElementById("tarkibRows");
+  tarkibRowsEl.addEventListener("click", (e) => {
+    if (e.target.classList.contains("tarkib-del")) {
+      e.target.closest(".tarkib-row-wrap").remove();
+      updateNarxKalkulyatsiyasiPanel();
+    }
+  });
+  tarkibRowsEl.addEventListener("input", (e) => {
+    const wrap = e.target.closest(".tarkib-row-wrap");
+    if (wrap) updateTarkibRowHint(wrap);
+    updateNarxKalkulyatsiyasiPanel();
+  });
+  tarkibRowsEl.querySelectorAll(".tarkib-row-wrap").forEach((wrap) => updateTarkibRowHint(wrap));
+  document.getElementById("mFoydaNormasi").addEventListener("input", updateNarxKalkulyatsiyasiPanel);
+  updateNarxKalkulyatsiyasiPanel();
+  document.getElementById("btnQollashNarx").addEventListener("click", () => {
+    const narxExVat = computeNarxKalkulyatsiyasi().narxQqssiz;
+    document.getElementById("mStandartNarxi").value = fmt(narxExVat);
+    toast("Qo'yildi — \"Saqlash\"ni bosishni unutmang");
   });
   document.getElementById("mSave").addEventListener("click", () => saveMahsulotFromModal(existingId));
+}
+
+// Joriy modal formadagi tarkib qatorlari (nomi/norma) va "Foyda normasi"
+// maydoni asosida: xomashyo tannarxi (Ombordagi HAQIQIY o'rtacha narx bo'yicha,
+// qarang avgOmborNarx) + foyda normasi = tavsiya etilgan sotish narxi (QQSsiz),
+// so'ngra joriy QQS stavkasi (Sozlamalar) qo'shilib QQS bilan narx chiqadi.
+// Bu — ishlab chiqarish/umumxo'jalik xarajatlarini emas, faqat XOMASHYO
+// tannarxini hisobga oladigan SODDALASHTIRILGAN narx kalkulyatsiyasi (ilova
+// har bir mahsulotga ish haqi/overhead taqsimotini alohida yuritmaydi).
+function computeNarxKalkulyatsiyasi() {
+  const rows = document.querySelectorAll("#tarkibRows .tarkib-row-wrap");
+  let xomashyoTannarx = 0;
+  rows.forEach((wrap) => {
+    const nomi = wrap.querySelector(".tarkib-nomi").value.trim();
+    const norma = toNum(wrap.querySelector(".tarkib-norma").value);
+    if (nomi && norma > 0) xomashyoTannarx += norma * avgOmborNarx(nomi);
+  });
+  const foydaNormasi = toNum(document.getElementById("mFoydaNormasi").value);
+  const narxQqssiz = xomashyoTannarx + foydaNormasi;
+  const qqsStavka = toNum(STORE.settings.qqsStavka);
+  const qqsSumma = narxQqssiz * (qqsStavka / 100);
+  const narxQqsBilan = narxQqssiz + qqsSumma;
+  return { xomashyoTannarx, foydaNormasi, narxQqssiz, qqsStavka, qqsSumma, narxQqsBilan };
+}
+
+function updateNarxKalkulyatsiyasiPanel() {
+  const panel = document.getElementById("narxKalkulyatsiyasiPanel");
+  if (!panel) return;
+  const k = computeNarxKalkulyatsiyasi();
+  panel.innerHTML = `
+    <div class="report-line"><span class="label">Xomashyo tannarxi</span><span class="code"></span><span class="val">${fmtSum(k.xomashyoTannarx)}</span></div>
+    <div class="report-line"><span class="label">+ Foyda normasi</span><span class="code"></span><span class="val">${fmtSum(k.foydaNormasi)}</span></div>
+    <div class="report-line"><span class="label"><b>= Sotish narxi (QQSsiz)</b></span><span class="code"></span><span class="val"><b>${fmtSum(k.narxQqssiz)}</b></span></div>
+    <div class="report-line"><span class="label">+ QQS (${fmt(k.qqsStavka)}%)</span><span class="code"></span><span class="val">${fmtSum(k.qqsSumma)}</span></div>
+    <div class="report-line"><span class="label"><b>= Sotish narxi (QQS bilan)</b></span><span class="code"></span><span class="val"><b>${fmtSum(k.narxQqsBilan)}</b></span></div>
+  `;
 }
 
 // "standart_narxi" ustuni migration_chiqim_kalkulyatsiya.sql orqali qo'shiladi
@@ -3211,6 +3391,7 @@ async function saveMahsulotFromModal(existingId) {
   const nomi = document.getElementById("mNomi").value.trim();
   const birlik = document.getElementById("mBirlik").value.trim();
   const standartNarxi = toNum(document.getElementById("mStandartNarxi").value);
+  const foydaNormasi = toNum(document.getElementById("mFoydaNormasi").value);
   if (!nomi) { toast("Mahsulot nomini kiriting", "err"); return; }
   const tarkib = Array.from(document.querySelectorAll("#tarkibRows .tarkib-row")).map((row) => ({
     nomi: row.querySelector(".tarkib-nomi").value.trim(),
@@ -3218,30 +3399,43 @@ async function saveMahsulotFromModal(existingId) {
     norma: toNum(row.querySelector(".tarkib-norma").value)
   })).filter((t) => t.nomi && t.norma > 0);
 
-  const payload = { nomi, birlik, tarkib, standartNarxi };
-  let warnMissingMigration = false;
+  // "standart_narxi"/"foyda_normasi" ustunlari alohida migratsiyalar orqali
+  // qo'shiladi — biri ishga tushirilib, ikkinchisi hali tushirilmagan bo'lishi
+  // ham mumkin. Shu sabab "column does not exist" xatosida FAQAT o'sha aniq
+  // ustunni chiqarib tashlab qayta urinamiz (applySettingsChange'dagi bilan
+  // bir xil naqsh), boshqa maydonlar baribir saqlanishi uchun.
+  let attempt = { nomi, birlik, tarkib, standartNarxi, foydaNormasi };
+  let droppedAny = false;
+  let data, error;
+  for (let i = 0; i < 5; i++) {
+    const dbRow = toDbRow(MAHSULOT_DB_MAP, attempt);
+    ({ data, error } = existingId
+      ? await sbClient.from("mahsulotlar").update(dbRow).eq("id", existingId).select().single()
+      : await sbClient.from("mahsulotlar").insert(dbRow).select().single());
+    if (!error) break;
+    const missingCol = isMissingColumnError(error) && extractMissingColumnName(error);
+    const missingKey = missingCol && Object.keys(MAHSULOT_DB_MAP).find((k) => MAHSULOT_DB_MAP[k] === missingCol);
+    if (missingKey && attempt[missingKey] !== undefined) {
+      const rest = { ...attempt };
+      delete rest[missingKey];
+      attempt = rest;
+      droppedAny = true;
+      continue;
+    }
+    reportError(error, "Saqlashda xatolik");
+    return;
+  }
+  if (error) { reportError(error, "Saqlashda xatolik"); return; }
 
   if (existingId) {
-    let { data, error } = await sbClient.from("mahsulotlar").update(toDbRow(MAHSULOT_DB_MAP, payload)).eq("id", existingId).select().single();
-    if (error && isMissingColumnError(error)) {
-      warnMissingMigration = true;
-      ({ data, error } = await sbClient.from("mahsulotlar").update(toDbRow(MAHSULOT_DB_MAP, { nomi, birlik, tarkib })).eq("id", existingId).select().single());
-    }
-    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     const idx = STORE.mahsulotlar.findIndex((m) => m.id === existingId);
     if (idx >= 0) STORE.mahsulotlar[idx] = fromDbRow(MAHSULOT_DB_MAP, data);
   } else {
-    let { data, error } = await sbClient.from("mahsulotlar").insert(toDbRow(MAHSULOT_DB_MAP, payload)).select().single();
-    if (error && isMissingColumnError(error)) {
-      warnMissingMigration = true;
-      ({ data, error } = await sbClient.from("mahsulotlar").insert(toDbRow(MAHSULOT_DB_MAP, { nomi, birlik, tarkib })).select().single());
-    }
-    if (error) { reportError(error, "Saqlashda xatolik"); return; }
     STORE.mahsulotlar.push(fromDbRow(MAHSULOT_DB_MAP, data));
   }
   closeModal();
   renderIshlabChiqarish();
-  toast(warnMissingMigration ? "Saqlandi (standart narx saqlanmadi — baza migratsiyasi ishga tushirilmagan)" : "Saqlandi");
+  toast(droppedAny ? "Saqlandi (ba'zi yangi maydonlar saqlanmadi — baza migratsiyasi ishga tushirilmagan)" : "Saqlandi");
 }
 
 async function deleteMahsulot(id) {
@@ -3717,6 +3911,7 @@ function openIshlabChiqarishModal() {
     </div>
     <div class="field"><label>Sana</label><input type="date" id="icSana" value="${todayISO()}"></div>
     <div class="field"><label>Miqdor</label><input id="icMiqdor" placeholder="masalan: 120"></div>
+    <div class="field"><label>Foyda normasi (1 birlik uchun, so'm)</label><input id="icFoydaNormasi" value="${fmt(toNum(STORE.mahsulotlar[0] && STORE.mahsulotlar[0].foydaNormasi) || 100)}"></div>
     <div class="field"><label>Izoh (ixtiyoriy)</label><input id="icIzoh" placeholder=""></div>
     <div class="note" id="icPreview"></div>
     <div class="modal-actions">
@@ -3725,10 +3920,35 @@ function openIshlabChiqarishModal() {
     </div>
   `);
   document.getElementById("mCancel").addEventListener("click", closeModal);
-  document.getElementById("icMahsulot").addEventListener("change", updateIshlabChiqarishPreview);
+  document.getElementById("icMahsulot").addEventListener("change", () => {
+    // Mahsulot almashtirilganda, agar foydalanuvchi hali qo'lda o'zgartirmagan
+    // bo'lsa, shu mahsulotning o'z "Foyda normasi"si taklif qilinadi.
+    const m = STORE.mahsulotlar.find((x) => x.id === document.getElementById("icMahsulot").value);
+    if (m) document.getElementById("icFoydaNormasi").value = fmt(toNum(m.foydaNormasi));
+    updateIshlabChiqarishPreview();
+  });
   document.getElementById("icMiqdor").addEventListener("input", updateIshlabChiqarishPreview);
+  document.getElementById("icSana").addEventListener("change", updateIshlabChiqarishPreview);
   updateIshlabChiqarishPreview();
   document.getElementById("mSave").addEventListener("click", addIshlabChiqarishEntry);
+}
+
+// Bitta xomashyo nomining joriy qoldig'i — BARCHA "ombor" qatorlari bo'yicha,
+// "birlik" maydonidagi farqdan qat'i nazar (masalan turli fakturalarda "kg" va
+// "кг" kabi bir xil birlik boshqacha yozilgan bo'lsa ham). avgOmborNarx ham
+// narxni xuddi shu — faqat "nomi" bo'yicha — hisoblaydi, shu sabab qoldiq ham
+// shu bilan izchil bo'lishi kerak: aks holda (ilgari omborQoldiqList()dagi
+// nomi+birlik bo'yicha guruhlangan qatorlarni faqat "nomi" bo'yicha xaritaga
+// yig'ganda) bitta nomdagi xomashyoning turli birlik yozuvlari bir-birini
+// almashtirib, haqiqiy zaxira mavjud bo'lsa ham "YETARLI EMAS" deb noto'g'ri
+// ko'rsatilishi mumkin edi.
+function omborQoldiqByNomi(nomi) {
+  let kirim = 0, chiqim = 0;
+  STORE.ombor.forEach((r) => {
+    if (r.nomi !== nomi) return;
+    if (r.turi === "chiqim") chiqim += toNum(r.miqdor); else kirim += toNum(r.miqdor);
+  });
+  return kirim - chiqim;
 }
 
 // Har bir kerakli xomashyo (consumptions — computeMahsulotConsumption natijasi)
@@ -3740,10 +3960,8 @@ function openIshlabChiqarishModal() {
 // hech qanday ogohlantirishsiz manfiyga tushirib yuborishi mumkin edi. Qarang:
 // updateIshlabChiqarishPreview, applyChiqimTafsilConsumption.
 function annotateOmborShortages(consumptions) {
-  const qoldiqMap = {};
-  omborQoldiqList().forEach((q) => { qoldiqMap[q.nomi] = q.qoldiq; });
   return consumptions.map((c) => {
-    const qoldiq = qoldiqMap[c.nomi] || 0;
+    const qoldiq = omborQoldiqByNomi(c.nomi);
     return Object.assign({}, c, { qoldiq, yetarli: qoldiq >= c.miqdor - 0.0001 });
   });
 }
@@ -3757,26 +3975,40 @@ function updateIshlabChiqarishPreview() {
   if (!el) return;
   const mahsulotId = document.getElementById("icMahsulot").value;
   const miqdor = toNum(document.getElementById("icMiqdor").value);
+  const sana = document.getElementById("icSana").value || todayISO();
   const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
   if (!m || !miqdor) { el.innerHTML = `<span class="faint">Mahsulot va miqdorni kiriting</span>`; return; }
 
-  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor);
+  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor, sana);
   const annotated = annotateOmborShortages(consumptions);
+  const hasShortage = annotated.some((c) => !c.yetarli);
   const lines = annotated.map((c) =>
     `<div style="${c.yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(c.nomi)}: ${fmt(c.miqdor, 3)} ${escapeHtml(c.birlik || "")} sarflanadi (qoldiq: ${fmt(c.qoldiq, 3)})${c.yetarli ? "" : " — YETARLI EMAS"}</div>`
   );
-  el.innerHTML = `${lines.join("") || `<span class="faint">Bu mahsulotda tarkib belgilanmagan</span>`}<div style="margin-top:8px;"><b>Taxminiy tannarx: ${fmtSum(tannarx)}</b></div>`;
+  // "YETARLI EMAS" ogohlantirishi yozuvni SAQLASHGA to'sqinlik qilmaydi (qarang
+  // addIshlabChiqarishEntry — hech qanday shortage tekshiruvi bilan bloklanmaydi),
+  // faqat ombor "Norma" bilan mos kelmasligi mumkinligi haqida ogohlantiradi —
+  // ko'pincha tarkibdagi noto'g'ri norma/birlik (masalan kg o'rniga tonna)
+  // sababli bo'ladi, shu sabab avval "Mahsulotlar"dagi tarkib normasini
+  // tekshirish tavsiya etiladi.
+  const shortageNote = hasShortage
+    ? `<div class="faint" style="margin-top:6px;">Bu ogohlantirish yozuvni saqlashga to'sqinlik qilmaydi — lekin ko'pincha "Mahsulotlar"dagi tarkib normasi/birligi noto'g'ri kiritilganidan darak beradi (masalan kg o'rniga tonna). Tekshirish tavsiya etiladi.</div>`
+    : "";
+  el.innerHTML = `${lines.join("") || `<span class="faint">Bu mahsulotda tarkib belgilanmagan</span>`}<div style="margin-top:8px;"><b>Taxminiy tannarx: ${fmtSum(tannarx)}</b></div>${shortageNote}`;
 }
 
 // Mahsulot kalkulyatsiyasi (tarkib) asosida berilgan miqdor uchun qaysi
 // xomashyodan qancha kerakligini va taxminiy tannarxni hisoblaydi — faqat
 // hisoblash, bazaga yozmaydi. performMahsulotConsumption va
 // applyChiqimTafsilConsumption ikkalasi ham shu funksiyani ishlatadi.
-function computeMahsulotConsumption(m, miqdor) {
+// asOfDate (operatsiya sanasi) berilsa, xomashyo narxi o'sha sanagacha bo'lgan
+// kirimlar bo'yicha hisoblanadi (qarang: avgOmborNarx) — shu bilan eski
+// hujjatlar tannarxi keyinroq narx o'zgarishidan ta'sirlanmaydi.
+function computeMahsulotConsumption(m, miqdor, asOfDate) {
   let tannarx = 0;
   const consumptions = (m.tarkib || []).map((t) => {
     const need = toNum(t.norma) * miqdor;
-    tannarx += need * avgOmborNarx(t.nomi);
+    tannarx += need * avgOmborNarx(t.nomi, asOfDate);
     return { nomi: t.nomi, birlik: t.birlik, miqdor: need };
   }).filter((c) => c.miqdor > 0);
   return { consumptions, tannarx };
@@ -3804,12 +4036,22 @@ async function insertOmborConsumptionRows(consumptions, sana, hujjatRaqami, kont
 // keyinchalik birgalikda o'chirish/topish mumkin). "Ombor chiqimi" bo'limidan
 // mahsulot nomi kiritilganda ham, "Ishlab chiqarish" jurnalidan qo'shilganda
 // ham xuddi shu funksiya ishlatiladi — ikkala joyda bitta manba/mantiq.
-async function performMahsulotConsumption(m, miqdor, sana, izoh) {
-  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor);
+// foydaNormasi berilmasa (undefined/null), mahsulotning o'zidagi standart
+// qiymatga tushadi — "Ombor chiqimi" bo'limidan mahsulot nomi orqali topilib
+// chaqirilganda (saveOmborChiqim) foyda alohida so'ralmaydi, shu sabab shu
+// yerda avtomatik mahsulot.foydaNormasi ishlatiladi.
+async function performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi) {
+  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor, sana);
+  const foyda = (foydaNormasi !== undefined && foydaNormasi !== null) ? toNum(foydaNormasi) : toNum(m.foydaNormasi);
 
-  const { data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, {
-    sana, mahsulotId: m.id, mahsulotNomi: m.nomi, miqdor, birlik: m.birlik, tannarx, izoh
-  })).select().single();
+  const payload = { sana, mahsulotId: m.id, mahsulotNomi: m.nomi, miqdor, birlik: m.birlik, tannarx, izoh, foydaNormasi: foyda };
+  let { data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, payload)).select().single();
+  if (error && isMissingColumnError(error)) {
+    // "foyda_normasi" ustuni migratsiyasi hali ishga tushirilmagan — shu
+    // maydonsiz qayta urinamiz (qarang migration_foyda_normasi.sql).
+    const { foydaNormasi: _drop, ...rest } = payload;
+    ({ data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, rest)).select().single());
+  }
   if (error) { reportError(error, "Saqlashda xatolik"); return false; }
   const icRow = fromDbRow(ISHLAB_CHIQARISH_DB_MAP, data);
   STORE.ishlabChiqarish.push(icRow);
@@ -3830,10 +4072,22 @@ async function performMahsulotConsumption(m, miqdor, sana, izoh) {
 // bo'lsa (aks holda "eng yaqini" baribir juda uzoq bo'lishi mumkin, masalan
 // katalogda atigi bitta mahsulot bo'lsa — bunda noto'g'ri mahsulotga bog'lab,
 // tannarx/foydani buzishdan ko'ra "mos kelmadi" deb qoldirib, odam tekshirsin
-// afzal). Hech biri topilmasa "kalkulyatsiya qilinmagan" hisoblanadi.
+// afzal). Ikkalasi ham topilmasa — SOTILGAN NOM Ombordagi xomashyo nomining
+// biriga ANIQ mos kelsa (masalan xomashyoning o'zi to'g'ridan-to'g'ri sotilgan
+// bo'lsa), o'sha xomashyo uchun "o'tkazuvchi" (1 birlik = 1 birlik xomashyo)
+// mahsulot AVTOMATIK yaratiladi — shu bilan Ombordagi qoldiq/narx asosida
+// tannarx to'g'ri hisoblanadi, sotuv "kalkulyatsiya qilinmagan" bo'lib
+// qolmaydi. Bu YANGI mahsulot nomi xomashyo nomi bilan AYNAN bir xil
+// yaratilgani uchun keyingi shu nomdagi sotuvlar endi 1-qadamning o'zida
+// (nomi bo'yicha) avtomatik topiladi — qayta yaratilmaydi.
+// Faqat ikkalasi (mahsulot HAM, xomashyo HAM) topilmasa — haqiqatan
+// noma'lum nom uchun hech narsa o'ylab topilmaydi (bo'sh tarkibli mahsulot
+// avtomatik yaratish "tannarx = 0, foyda = 100%" degan NOTO'G'RI taassurot
+// berardi) — bunday holat hamon "kalkulyatsiya qilinmagan" deb qoldiriladi,
+// odam tekshirib to'g'ri mahsulotni tanlashi kerak.
 const CHIQIM_NARX_MATCH_TOLERANCE = 0.2; // ±20%
 
-function matchMahsulotForChiqimLine(nomi, narx) {
+async function matchMahsulotForChiqimLine(nomi, narx) {
   const norm = (s) => String(s || "").trim().toLowerCase();
   const targetNomi = norm(nomi);
   const byNomi = STORE.mahsulotlar.find((m) => norm(m.nomi) === targetNomi);
@@ -3849,7 +4103,27 @@ function matchMahsulotForChiqimLine(nomi, narx) {
     });
     if (best && bestDiff <= narx * CHIQIM_NARX_MATCH_TOLERANCE) return { mahsulot: best, mosTuri: "narx" };
   }
+
+  const xomashyoRow = omborKirimRows().find((r) => norm(r.nomi) === targetNomi);
+  if (xomashyoRow) {
+    const created = await createOtkazuvchiMahsulot(xomashyoRow.nomi, xomashyoRow.birlik);
+    if (created) return { mahsulot: created, mosTuri: "avto" };
+  }
+
   return { mahsulot: null, mosTuri: "none" };
+}
+
+// Ombordagi bitta xomashyoni to'g'ridan-to'g'ri sotilganda ishlatish uchun
+// "o'tkazuvchi" mahsulot yaratadi: 1 birlik mahsulot = 1 birlik shu xomashyo
+// (tarkib normasi = 1) — shu bilan mavjud computeMahsulotConsumption/Ombor
+// sarfi mexanizmi o'zgarishsiz ishlaydi. Qarang: matchMahsulotForChiqimLine.
+async function createOtkazuvchiMahsulot(nomi, birlik) {
+  const payload = { nomi, birlik, tarkib: [{ nomi, birlik, norma: 1 }], standartNarxi: null };
+  const { data, error } = await sbClient.from("mahsulotlar").insert(toDbRow(MAHSULOT_DB_MAP, payload)).select().single();
+  if (error) { console.error(error); return null; }
+  const mahsulot = fromDbRow(MAHSULOT_DB_MAP, data);
+  STORE.mahsulotlar.push(mahsulot);
+  return mahsulot;
 }
 
 // Bitta "chiqim_tafsil" qatoriga mos kalkulyatsiya asosida ombordan xomashyo
@@ -3859,7 +4133,7 @@ function matchMahsulotForChiqimLine(nomi, narx) {
 // qaysi xomashyolar yetarli emasligi qaytariladi, chaqiruvchi buni foydalanuvchiga
 // ko'rsatadi (qarang: checkOmborShortages, handleInvoiceImport, setChiqimTafsilMahsulot).
 async function applyChiqimTafsilConsumption(tafsilRow, mahsulot) {
-  const { consumptions } = computeMahsulotConsumption(mahsulot, tafsilRow.miqdor);
+  const { consumptions } = computeMahsulotConsumption(mahsulot, tafsilRow.miqdor, tafsilRow.sana);
   const shortages = checkOmborShortages(consumptions);
   await insertOmborConsumptionRows(consumptions, tafsilRow.sana, `CHT-${tafsilRow.id}`, `Sotuv (kalkulyatsiya): ${mahsulot.nomi}`);
   updateNavBadges();
@@ -3909,7 +4183,7 @@ function shortageToastSuffix(shortages) {
 async function rematchChiqimTafsil(tafsilId) {
   const tafsil = STORE.chiqimTafsil.find((t) => t.id === tafsilId);
   if (!tafsil) return;
-  const { mahsulot, mosTuri } = matchMahsulotForChiqimLine(tafsil.nomi, tafsil.narx);
+  const { mahsulot, mosTuri } = await matchMahsulotForChiqimLine(tafsil.nomi, tafsil.narx);
   if (!mahsulot) { toast("Hamon mos kalkulyatsiya topilmadi"); return; }
   const { ok, shortages } = await setChiqimTafsilMahsulot(tafsilId, mahsulot.id, mosTuri);
   if (ok) toast(`"${mahsulot.nomi}" kalkulyatsiyasi bilan bog'landi${shortageToastSuffix(shortages)}`, shortages.length ? "err" : "ok");
@@ -3924,7 +4198,7 @@ async function rematchAllChiqimTafsil() {
   if (!uncosted.length) { toast("Kalkulyatsiya qilinmagan qator yo'q"); return; }
   let matched = 0, shortageRows = 0;
   for (const t of uncosted) {
-    const { mahsulot, mosTuri } = matchMahsulotForChiqimLine(t.nomi, t.narx);
+    const { mahsulot, mosTuri } = await matchMahsulotForChiqimLine(t.nomi, t.narx);
     if (!mahsulot) continue;
     const { ok, shortages } = await setChiqimTafsilMahsulot(t.id, mahsulot.id, mosTuri);
     if (ok) {
@@ -3943,6 +4217,7 @@ async function rematchAllChiqimTafsil() {
 const CHIQIM_TAFSIL_MOS_LABEL = {
   nomi: '<span class="pill pill-ok">Nomi bo\'yicha</span>',
   narx: '<span class="pill pill-warn">Narxi bo\'yicha</span>',
+  avto: '<span class="pill pill-warn">Xomashyo sifatida avto</span>',
   qolda: '<span class="pill pill-muted">Qo\'lda tanlangan</span>',
   none: '<span class="pill pill-danger">Mos kelmadi</span>'
 };
@@ -3955,16 +4230,20 @@ const CHIQIM_TAFSIL_MOS_LABEL = {
 // bo'lgani uchun ularning "foydasi" haqiqatdan kattaroq ko'rinishi mumkin.
 function computeChiqimKalkulyatsiyaFoyda(chiqimId) {
   const rows = STORE.chiqimTafsil.filter((t) => t.chiqimId === chiqimId);
-  let savdo = 0, tannarx = 0;
+  let savdo = 0, xomashyoTannarx = 0, xizmatUlushi = 0;
   rows.forEach((t) => {
     savdo += toNum(t.summa) || toNum(t.miqdor) * toNum(t.narx);
     const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
-    if (mahsulot) tannarx += computeMahsulotConsumption(mahsulot, t.miqdor).tannarx;
+    if (mahsulot) {
+      xomashyoTannarx += computeMahsulotConsumption(mahsulot, t.miqdor, t.sana).tannarx;
+      xizmatUlushi += xizmatTannarxUlushi(t.sana, t.miqdor);
+    }
   });
+  const tannarx = xomashyoTannarx + xizmatUlushi;
   const foyda = savdo - tannarx;
   const foydaStavka = toNum(STORE.settings.foydaStavka);
   const soligi = Math.max(foyda, 0) * (foydaStavka / 100);
-  return { savdo, tannarx, foyda, foydaStavka, soligi };
+  return { savdo, tannarx, xomashyoTannarx, xizmatUlushi, foyda, foydaStavka, soligi };
 }
 
 // Bitta chiqim fakturaning sotilgan mahsulot qatorlarini va ularning
@@ -4016,10 +4295,31 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
   `;
 
   const foydaInfo = computeChiqimKalkulyatsiyaFoyda(chiqimId);
+  const { materials } = computeChiqimMaterialBreakdown(chiqimId);
+  const materialsHtml = materials.length ? `
+    <div class="table-wrap" style="margin-top:12px;">
+      <div class="card-title" style="margin-bottom:4px;">Sarflangan xomashyo (bosma blankadagi 2-bo'lim bilan bir xil)</div>
+      <table>
+        <thead><tr><th>Xomashyo nomi</th><th class="num">Birlik</th><th class="num">Miqdori</th><th class="num">Narxi</th><th class="num">Summa</th></tr></thead>
+        <tbody>
+          ${materials.map((c) => `
+            <tr>
+              <td>${escapeHtml(c.nomi)}</td>
+              <td class="num">${escapeHtml(c.birlik || "")}</td>
+              <td class="num">${fmt(c.miqdor, 3)}</td>
+              <td class="num">${fmtSum(c.narx)}</td>
+              <td class="num">${fmtSum(c.summa)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  ` : "";
   const foydaHtml = rows.length ? `
     <div class="note" style="margin-top:12px;">
       <div class="report-line"><span class="label">Sotuv summasi</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.savdo)}</span></div>
-      <div class="report-line"><span class="label">Xomashyo tannarxi</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.tannarx)}</span></div>
+      <div class="report-line"><span class="label">Xomashyo tannarxi</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.xomashyoTannarx)}</span></div>
+      ${foydaInfo.xizmatUlushi ? `<div class="report-line"><span class="label">+ Xizmat xarajati ulushi (bank)</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.xizmatUlushi)}</span></div>` : ""}
       <div class="report-line"><span class="label"><b>Foyda</b></span><span class="code"></span><span class="val"><b>${fmtSum(foydaInfo.foyda)}</b></span></div>
       <div class="report-line"><span class="label">Taxminiy foyda solig'i (${fmt(foydaInfo.foydaStavka)}%)</span><span class="code"></span><span class="val">${fmtSum(foydaInfo.soligi)}</span></div>
     </div>
@@ -4030,15 +4330,19 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
     <p class="modal-sub">${escapeHtml(chiqimRow.sana || "")} &middot; ${escapeHtml(chiqimRow.kontragentNomi || "")}. Kalkulyatsiya ustunini o'zgartirsangiz, eski ombor sarfi bekor qilinib, yangisiga qarab qayta hisoblanadi.</p>
     ${bodyHtml}
     ${addRowHtml}
+    ${materialsHtml}
     ${foydaHtml}
     <div class="modal-actions">
       <button class="btn" id="mCancel">Yopish</button>
+      ${rows.length ? `<button class="btn" id="mPrintDalolatnoma">Sarflash dalolatnomasi</button>` : ""}
       ${rows.length ? `<button class="btn btn-primary" id="mPrint">Chop etish</button>` : ""}
     </div>
   `);
   document.getElementById("mCancel").addEventListener("click", closeModal);
   const printBtn = document.getElementById("mPrint");
   if (printBtn) printBtn.addEventListener("click", () => printChiqimKalkulyatsiyaBlanka(chiqimId));
+  const printDalolatnomaBtn = document.getElementById("mPrintDalolatnoma");
+  if (printDalolatnomaBtn) printDalolatnomaBtn.addEventListener("click", () => printMahsulotSarflashDalolatnomasi(chiqimId));
   document.querySelectorAll("[data-tafsil-select]").forEach((sel) => {
     sel.addEventListener("change", async () => {
       const tafsilId = sel.dataset.tafsilSelect;
@@ -4084,6 +4388,38 @@ async function addChiqimTafsilRow(chiqimRow) {
   toast(`Qo'shildi${shortageToastSuffix(shortages)}`, shortages.length ? "err" : "ok");
 }
 
+// Bitta chiqim fakturaning barcha sotilgan mahsulot qatorlari bo'yicha
+// (kalkulyatsiya orqali) kerak bo'lgan xomashyoni, BIR XIL nomdagilarni
+// yig'gan holda va har birining sanaga mos o'rtacha narxi bilan qaytaradi.
+// openChiqimKalkulyatsiyaModal (pechatdan oldin ko'rib chiqish) va
+// printChiqimKalkulyatsiyaBlanka (bosma blanka) ikkalasi ham shu bitta
+// funksiyani ishlatadi — shu bilan ekrandagi va bosmadagi summalar hech
+// qachon bir-biridan farq qilmaydi.
+function computeChiqimMaterialBreakdown(chiqimId) {
+  const chiqimRow = STORE.chiqim.find((r) => r.id === chiqimId);
+  const rows = STORE.chiqimTafsil.filter((t) => t.chiqimId === chiqimId);
+  const materialMap = new Map();
+  rows.forEach((t) => {
+    const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
+    if (!mahsulot) return;
+    const { consumptions } = computeMahsulotConsumption(mahsulot, t.miqdor, t.sana);
+    consumptions.forEach((c) => {
+      const cur = materialMap.get(c.nomi) || { nomi: c.nomi, birlik: c.birlik, miqdor: 0 };
+      cur.miqdor += c.miqdor;
+      materialMap.set(c.nomi, cur);
+    });
+  });
+  const asOfDate = chiqimRow ? chiqimRow.sana : null;
+  let total = 0;
+  const materials = Array.from(materialMap.values()).map((c) => {
+    const narx = avgOmborNarx(c.nomi, asOfDate);
+    const summa = c.miqdor * narx;
+    total += summa;
+    return { ...c, narx, summa };
+  });
+  return { materials, total };
+}
+
 // openChiqimKalkulyatsiyaModal bilan bir xil ma'lumot, lekin rasmiy hujjat
 // (blanka) ko'rinishida chop etish uchun — printSverkaPdf naqshi bo'yicha.
 // Rasmiy "KALKULYATSIYA" blankasi andazasi (UTVERJDAYU + ikki bo'limli
@@ -4117,37 +4453,29 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
   // 2-bo'lim: har bir sotilgan mahsulotning kalkulyatsiyasi (tarkib) asosida
   // kerak bo'lgan xomashyo, BIR XIL nomdagilar butun faktura bo'yicha
   // yig'ilgan holda (rasmiy blankadagi "Стоимость материалов" jadvaliga mos).
-  const materialMap = new Map();
-  rows.forEach((t) => {
-    const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
-    if (!mahsulot) return;
-    const { consumptions } = computeMahsulotConsumption(mahsulot, t.miqdor);
-    consumptions.forEach((c) => {
-      const cur = materialMap.get(c.nomi) || { nomi: c.nomi, birlik: c.birlik, miqdor: 0 };
-      cur.miqdor += c.miqdor;
-      materialMap.set(c.nomi, cur);
-    });
-  });
-  let materialsTotal = 0;
-  const materialRows = Array.from(materialMap.values()).map((c) => {
-    const narx = avgOmborNarx(c.nomi);
-    const summa = c.miqdor * narx;
-    materialsTotal += summa;
-    return `
+  // computeChiqimMaterialBreakdown — bir xil hisob openChiqimKalkulyatsiyaModal
+  // oldindan ko'rishida ham ishlatiladi, shu bilan ekran va bosma natija
+  // hech qachon bir-biridan farq qilmaydi.
+  const { materials, total: materialsTotal } = computeChiqimMaterialBreakdown(chiqimId);
+  const materialRows = materials.map((c) => `
       <tr>
         <td>${escapeHtml(c.nomi)}</td>
         <td class="num">${escapeHtml(c.birlik || "")}</td>
         <td class="num">${fmt(c.miqdor, 3)}</td>
-        <td class="num">${fmtSum(narx)}</td>
-        <td class="num">${fmtSum(summa)}</td>
+        <td class="num">${fmtSum(c.narx)}</td>
+        <td class="num">${fmtSum(c.summa)}</td>
       </tr>
-    `;
-  }).join("");
+    `).join("");
 
   // 3-bo'lim: shu ikki jamidan hisoblangan foyda va undan taxminiy foyda
   // solig'i ulushi (STORE.settings.foydaStavka bo'yicha) — computeTotals()
   // orqali Foyda solig'i hisobotidagi umumiy soliq bilan bir xil stavka.
-  const foydaInfo = { foyda: productsTotal - materialsTotal, foydaStavka: toNum(s.foydaStavka) };
+  // "Xizmat" deb belgilangan bank chiqimlaridan shu faktura oyiga tegishli
+  // ulush — computeChiqimKalkulyatsiyaFoyda bilan bir xil manba, shu bilan
+  // ekrandagi modal va bosma blanka hech qachon farq qilmaydi.
+  const xizmatUlushi = STORE.chiqimTafsil.filter((t) => t.chiqimId === chiqimId)
+    .reduce((sum, t) => sum + (t.mahsulotId ? xizmatTannarxUlushi(t.sana, t.miqdor) : 0), 0);
+  const foydaInfo = { foyda: productsTotal - materialsTotal - xizmatUlushi, foydaStavka: toNum(s.foydaStavka) };
   foydaInfo.soligi = Math.max(foydaInfo.foyda, 0) * (foydaInfo.foydaStavka / 100);
 
   const html = `
@@ -4157,6 +4485,7 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
       <meta charset="UTF-8">
       <title>Kalkulyatsiya ${escapeHtml(chiqimRow.hujjatRaqami || "")}</title>
       <style>
+        @page{size:A4; margin:14mm 12mm;}
         body{font-family:Arial, "Segoe UI", sans-serif; padding:32px; color:#1c2530; font-size:12.5px;}
         .approve{float:right; text-align:center; width:260px; font-size:12px;}
         .approve .line{margin-top:6px;}
@@ -4164,13 +4493,15 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
         h1{font-size:19px; text-align:center; margin:70px 0 14px;}
         .meta{font-size:12.5px; margin-bottom:6px;}
         .meta b{font-weight:700;}
-        .section-title{font-weight:700; margin:20px 0 8px; font-size:13px;}
+        .section-title{font-weight:700; margin:20px 0 8px; font-size:13px; break-after:avoid;}
         table{width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:6px;}
+        thead{display:table-header-group;}
+        tr{break-inside:avoid;}
         th, td{border:1px solid #1c2530; padding:5px 8px; text-align:left;}
         th{background:#eceff2; text-align:center;}
         td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
-        .jami{margin:6px 0 0; font-weight:700;}
-        .sign{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:48px; font-size:12px;}
+        .jami{margin:6px 0 0; font-weight:700; break-inside:avoid;}
+        .sign{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:48px; font-size:12px; break-inside:avoid;}
         .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:80%;}
         @media print { body{padding:0;} }
       </style>
@@ -4206,6 +4537,7 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
         <tbody>
           <tr><td>Sotilgan mahsulotlar summasi</td><td class="num">${fmtSum(productsTotal)}</td></tr>
           <tr><td>Xomashyo tannarxi</td><td class="num">${fmtSum(materialsTotal)}</td></tr>
+          ${xizmatUlushi ? `<tr><td>Xizmat xarajati ulushi (bank)</td><td class="num">${fmtSum(xizmatUlushi)}</td></tr>` : ""}
           <tr><td><b>Foyda</b></td><td class="num"><b>${fmtSum(foydaInfo.foyda)}</b></td></tr>
           <tr><td>Foyda solig'i (${fmt(foydaInfo.foydaStavka)}%)</td><td class="num">${fmtSum(foydaInfo.soligi)}</td></tr>
         </tbody>
@@ -4214,6 +4546,296 @@ function printChiqimKalkulyatsiyaBlanka(chiqimId) {
       <div class="sign">
         <div>Tuzdi (buxgalter)<div class="line"></div></div>
         <div>Tasdiqladi (rahbar)<div class="line"></div></div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+/* -------------------- Butun sonni o'zbekcha so'zga o'girish -------------------- */
+// "Jami sarflandilar: ... (miqdori so'z bilan yoziladi)" kabi rasmiy
+// dalolatnoma maydonlari uchun. Faqat butun qismni so'zlaydi (kasr qism
+// jadvalning o'zida raqamda ko'rinadi) — milliardgacha yetarli.
+const SON_BIRLIK_SOZ = ["", "bir", "ikki", "uch", "to'rt", "besh", "olti", "yetti", "sakkiz", "to'qqiz"];
+const SON_ONLIK_SOZ = ["", "o'n", "yigirma", "o'ttiz", "qirq", "ellik", "oltmish", "yetmish", "sakson", "to'qson"];
+
+function sonUchXonaliSoz(n) {
+  const parts = [];
+  const yuz = Math.floor(n / 100);
+  const qoldiq = n % 100;
+  if (yuz) parts.push((yuz > 1 ? SON_BIRLIK_SOZ[yuz] + " " : "") + "yuz");
+  const onlik = Math.floor(qoldiq / 10);
+  const birlik = qoldiq % 10;
+  if (onlik) parts.push(SON_ONLIK_SOZ[onlik]);
+  if (birlik) parts.push(SON_BIRLIK_SOZ[birlik]);
+  return parts.join(" ");
+}
+
+function sonSozBilan(n) {
+  n = Math.round(Math.abs(toNum(n)));
+  if (n === 0) return "nol";
+  const guruhlar = [{ q: 1000000000, nomi: "milliard" }, { q: 1000000, nomi: "million" }, { q: 1000, nomi: "ming" }];
+  let qoldiq = n;
+  const parts = [];
+  for (const g of guruhlar) {
+    const son = Math.floor(qoldiq / g.q);
+    if (son) { parts.push(sonUchXonaliSoz(son) + " " + g.nomi); qoldiq -= son * g.q; }
+  }
+  if (qoldiq) parts.push(sonUchXonaliSoz(qoldiq));
+  return parts.join(" ");
+}
+
+// Bitta chiqim fakturaning kalkulyatsiyasi asosida "Mahsulotlarni ishlab
+// chiqarishga sarflash to'g'risida DALOLATNOMA" — rasmiy andaza bo'yicha
+// (foydalanuvchi bergan namunaga so'zma-so'z mos). Hujjat raqami/sanasi
+// chiqim fakturaning o'zidan, komissiya raisi Sozlamalardagi "rahbar"dan,
+// a'zolar/moddiy javobgar shaxs "Ish haqi" bo'limidagi xodimlardan (birinchi
+// topilgan farqli F.I.Sh.lardan) olinadi — bu maydonlar qog'ozda qo'lda
+// tuzatilishi mumkin. "Tovar kodi" va "Yaroqsiz mahsulot miqdori" uchun
+// ilovada mos ma'lumot yo'q, shu sabab bo'sh (qo'lda to'ldirish uchun)
+// qoldirilgan. Xomashyo (computeChiqimMaterialBreakdown) va sotilgan mahsulot
+// (chiqim_tafsil) qatorlari BITTA jadvalda — "Izoh" ustunida "Sarflandi"/
+// "Tayyorlandi" bilan ajratilgan holda — birlashtirilgan.
+function printMahsulotSarflashDalolatnomasi(chiqimId) {
+  const chiqimRow = STORE.chiqim.find((r) => r.id === chiqimId);
+  if (!chiqimRow) return;
+  const rows = STORE.chiqimTafsil.filter((t) => t.chiqimId === chiqimId);
+  const { materials } = computeChiqimMaterialBreakdown(chiqimId);
+  const s = STORE.settings;
+
+  const shahar = String(s.address || "").split(",")[0].trim() || "____________";
+
+  const xodimFioLar = [...new Set(STORE.ishHaqi.map((r) => r.fio).filter(Boolean))];
+  const topXodim = (i) => STORE.ishHaqi.find((r) => r.fio === xodimFioLar[i]) || null;
+  const azo1 = topXodim(0);
+  const azo2 = topXodim(1);
+  const moddiyJavobgar = topXodim(2) || azo2 || azo1;
+  const kishiHtml = (r) => r
+    ? `${escapeHtml(r.lavozimi || "xodim")}, ${escapeHtml(r.fio)} _________________________________`
+    : `_________________________________ (Lavozimi, F.I.Sh.)`;
+
+  let idx = 0;
+  const materialRows = materials.map((c) => {
+    idx++;
+    return `<tr><td class="num">${idx}</td><td>${escapeHtml(c.nomi)}</td><td class="num">${escapeHtml(c.birlik || "")}</td><td class="num">${fmt(c.miqdor, 3)}</td><td></td><td>Sarflandi</td></tr>`;
+  }).join("");
+  const productRows = rows.map((t) => {
+    idx++;
+    return `<tr><td class="num">${idx}</td><td>${escapeHtml(t.nomi)}</td><td class="num">${escapeHtml(t.birlik || "")}</td><td class="num">${fmt(t.miqdor, 3)}</td><td></td><td>Tayyorlandi</td></tr>`;
+  }).join("");
+
+  // Jami sarflandilar — xomashyo qatorlarini birlik bo'yicha guruhlab, har
+  // birini alohida so'zda ko'rsatamiz (birliklar har xil bo'lishi mumkin,
+  // masalan kg va metr bir jadvalda uchrasa).
+  const birlikJami = {};
+  materials.forEach((c) => { const b = c.birlik || "birlik"; birlikJami[b] = (birlikJami[b] || 0) + toNum(c.miqdor); });
+  const jamiSozda = Object.entries(birlikJami).map(([b, miqdor]) => `${sonSozBilan(miqdor)} ${b}`).join(", ") || "—";
+
+  const tayyorMahsulotText = rows.length
+    ? rows.map((t) => `${escapeHtml(t.nomi)} — ${fmt(t.miqdor, 3)} ${escapeHtml(t.birlik || "")}`).join("; ")
+    : "—";
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Sarflash dalolatnomasi ${escapeHtml(chiqimRow.hujjatRaqami || "")}</title>
+      <style>
+        @page{size:A4; margin:14mm 12mm;}
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:32px; color:#1c2530; font-size:12.5px;}
+        h1{font-size:15.5px; text-align:center; margin:0 0 4px; text-transform:uppercase;}
+        .center{text-align:center;}
+        .meta{font-size:12.5px; margin:4px 0;}
+        .section-title{font-weight:700; margin:16px 0 6px; font-size:12.5px; break-after:avoid;}
+        table{width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:6px;}
+        thead{display:table-header-group;}
+        tr{break-inside:avoid;}
+        th, td{border:1px solid #1c2530; padding:5px 8px; text-align:left;}
+        th{background:#eceff2; text-align:center;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        .fillline{margin:8px 0; break-inside:avoid;}
+        .fillline .dots{border-bottom:1px dotted #1c2530; display:inline-block; min-width:60%;}
+        .sign{margin-top:10px; font-size:12px;}
+        .sign div{margin:14px 0; break-inside:avoid;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <h1>Mahsulotlarni ishlab chiqarishga sarflash to'g'risida<br>dalolatnoma</h1>
+      <div class="center meta">№ ${escapeHtml(chiqimRow.hujjatRaqami || "")}-sonli</div>
+      <div class="center meta">«${escapeHtml((chiqimRow.sana || "").slice(8, 10))}» ${escapeHtml((chiqimRow.sana || "").slice(5, 7))} ${escapeHtml((chiqimRow.sana || "").slice(0, 4))} y.</div>
+      <div class="center meta">${escapeHtml(shahar)} shahri</div>
+
+      <div class="section-title">Komissiya tarkibi:</div>
+      <div class="fillline">Rais: ${escapeHtml(s.rahbar || "")} <span class="dots"></span> (Lavozimi, F.I.Sh.)</div>
+      <div class="fillline">A'zolar: ${kishiHtml(azo1)}</div>
+      <div class="fillline">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${kishiHtml(azo2)}</div>
+
+      <p class="meta">Ushbu dalolatnoma komissiya tomonidan «${escapeHtml((chiqimRow.sana || "").slice(8, 10))}» ${escapeHtml((chiqimRow.sana || "").slice(5, 7))} ${escapeHtml((chiqimRow.sana || "").slice(0, 4))} yildagi ${escapeHtml(chiqimRow.hujjatRaqami || "")}-sonli ombor talabnomasiga asosan ombordan ishlab chiqarish uchun olingan moddiy boyliklar haqiqatda sarflanganligini tasdiqlash uchun tuzildi.</p>
+      <p class="meta">«${escapeHtml((chiqimRow.sana || "").slice(8, 10))}» ${escapeHtml((chiqimRow.sana || "").slice(5, 7))} ${escapeHtml((chiqimRow.sana || "").slice(0, 4))} yildan «${escapeHtml((chiqimRow.sana || "").slice(8, 10))}» ${escapeHtml((chiqimRow.sana || "").slice(5, 7))} ${escapeHtml((chiqimRow.sana || "").slice(0, 4))} yilgacha bo'lgan davrda quyidagi mahsulotlar (xomashyolar) ishlab chiqarish jarayonida to'liq sarflandi:</p>
+
+      <table>
+        <thead><tr><th>№</th><th>Mahsulot/Xomashyo nomi</th><th>O'lchov birligi</th><th class="num">Miqdori</th><th>Tovar kodi (agar bo'lsa)</th><th>Izoh</th></tr></thead>
+        <tbody>${materialRows}${productRows || ""}</tbody>
+      </table>
+
+      <p class="meta"><b>Jami sarflandilar:</b> ${jamiSozda} o'lchov birligida. <span class="faint">(miqdori so'z bilan)</span></p>
+      <p class="meta"><b>Ishlab chiqarilgan tayyor mahsulot turi va miqdori:</b> ${tayyorMahsulotText}</p>
+      <p class="meta"><b>Yaroqsiz mahsulot miqdori:</b> <span class="dots">&nbsp;</span></p>
+
+      <p class="meta">Xulosa: Yuqorida ko'rsatilgan xomashyo va mahsulotlar texnologik me'yorlarga muvofiq ishlab chiqarish ehtiyojlari uchun maqsadli sarflangan. Ushbu dalolatnomaga asosan moddiy boyliklarni ishlab chiqarish xarajatlariga hisobdan chiqarishga ruxsat beriladi.</p>
+
+      <div class="sign">
+        <div>Rais: ${kishiHtml({ lavozimi: "Rahbar", fio: s.rahbar || "" })}</div>
+        <div>A'zolar: ${kishiHtml(azo1)}</div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;${kishiHtml(azo2)}</div>
+        <div>Moddiy javobgar shaxs (Omborchi/Usta): ${kishiHtml(moddiyJavobgar)}</div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+// "Ishlab chiqarish" jurnalidagi bitta yozuv uchun rasmiy "Ishlab chiqarish
+// dalolatnomasi" (ishlab chiqarish akti) — komissiya, sarflangan xomashyo va
+// "Foyda normasi" asosidagi narx kalkulyatsiyasi bilan. Tarkibi O'zbekiston
+// Respublikasi Vazirlar Mahkamasining 1999-yil 5-fevraldagi 54-son qarori
+// bilan tasdiqlangan tannarx/moliyaviy natija shakllantirish tartibiga (asosiy
+// me'yoriy hujjat) asoslangan; komissiya a'zolari ilovada alohida yuritilmagani
+// uchun F.I.Sh. qo'lda to'ldirish uchun bo'sh qoldirilgan.
+function printIshlabChiqarishDalolatnoma(icId) {
+  const icRow = STORE.ishlabChiqarish.find((r) => r.id === icId);
+  if (!icRow) return;
+  const mahsulot = icRow.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === icRow.mahsulotId) : null;
+  const s = STORE.settings;
+
+  // Sarflangan xomashyo — mahsulot hali mavjud bo'lsa aynan shu yozuv sanasi
+  // bo'yicha computeMahsulotConsumption bilan (yozuv saqlangandagi bilan bir
+  // xil natija beradi); mahsulot keyinchalik o'chirilgan bo'lsa, "ombor"
+  // jadvalidagi shu yozuvga tegishli (IC-<id>) chiqim qatorlaridan nomi/miqdor
+  // olinib, narxi shu sanaga nisbatan qayta hisoblanadi.
+  let materials;
+  if (mahsulot) {
+    materials = computeMahsulotConsumption(mahsulot, icRow.miqdor, icRow.sana).consumptions.map((c) => {
+      const narx = avgOmborNarx(c.nomi, icRow.sana);
+      return { nomi: c.nomi, birlik: c.birlik, miqdor: c.miqdor, narx, summa: c.miqdor * narx };
+    });
+  } else {
+    const linked = STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `IC-${icId}`);
+    materials = linked.map((r) => {
+      const narx = avgOmborNarx(r.nomi, icRow.sana);
+      return { nomi: r.nomi, birlik: r.birlik, miqdor: toNum(r.miqdor), narx, summa: toNum(r.miqdor) * narx };
+    });
+  }
+  const materialsTotal = materials.reduce((a, c) => a + c.summa, 0);
+  const materialRows = materials.map((c) => `
+      <tr>
+        <td>${escapeHtml(c.nomi)}</td>
+        <td class="num">${escapeHtml(c.birlik || "")}</td>
+        <td class="num">${fmt(c.miqdor, 3)}</td>
+        <td class="num">${fmtSum(c.narx)}</td>
+        <td class="num">${fmtSum(c.summa)}</td>
+      </tr>
+    `).join("");
+
+  const miqdor = toNum(icRow.miqdor);
+  const foydaNormasi = toNum(icRow.foydaNormasi);
+  const birlikTannarx = miqdor ? toNum(icRow.tannarx) / miqdor : 0;
+  const birlikNarxQqssiz = birlikTannarx + foydaNormasi;
+  const qqsStavka = toNum(s.qqsStavka);
+  const birlikQqsSumma = birlikNarxQqssiz * (qqsStavka / 100);
+  const birlikNarxQqsBilan = birlikNarxQqssiz + birlikQqsSumma;
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Ishlab chiqarish dalolatnomasi ${escapeHtml(icRow.sana || "")}</title>
+      <style>
+        @page{size:A4; margin:14mm 12mm;}
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:32px; color:#1c2530; font-size:12.5px;}
+        .approve{float:right; text-align:center; width:260px; font-size:12px;}
+        .approve .line{margin-top:6px;}
+        .approve .dots{border-bottom:1px dotted #1c2530; display:inline-block; min-width:170px;}
+        h1{font-size:19px; text-align:center; margin:70px 0 14px;}
+        .meta{font-size:12.5px; margin-bottom:6px;}
+        .meta b{font-weight:700;}
+        .section-title{font-weight:700; margin:20px 0 8px; font-size:13px; break-after:avoid;}
+        table{width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:6px;}
+        thead{display:table-header-group;}
+        tr{break-inside:avoid;}
+        th, td{border:1px solid #1c2530; padding:5px 8px; text-align:left;}
+        th{background:#eceff2; text-align:center;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        .jami{margin:6px 0 0; font-weight:700; break-inside:avoid;}
+        .sign{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:48px; font-size:12px; break-inside:avoid;}
+        .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:80%;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <div class="approve">
+        «ТАСДИҚЛАЙМАН»<br>
+        ${escapeHtml(s.companyName)} rahbari<br>
+        <span class="dots">${escapeHtml(s.rahbar || "")}</span>
+        <div class="line">«____» ______________ 20____ y.</div>
+      </div>
+      <div style="clear:both;"></div>
+      <h1>ISHLAB CHIQARISH DALOLATNOMASI</h1>
+      <div class="meta"><b>Sana:</b> ${escapeHtml(icRow.sana || "")} &nbsp; <b>Korxona:</b> ${escapeHtml(s.companyName)} (INN ${escapeHtml(s.inn)})</div>
+      <div class="meta"><b>Asos:</b> O'zbekiston Respublikasi Vazirlar Mahkamasining 1999-yil 5-fevraldagi 54-son qarori bilan tasdiqlangan "Mahsulot (ish, xizmat)lar tannarxiga kiritiladigan xarajatlar tarkibi hamda moliyaviy natijalarni shakllantirish tartibi to'g'risida"gi Nizom.</div>
+
+      <div class="section-title">Komissiya</div>
+      <table>
+        <tbody>
+          <tr><td style="width:220px;">Komissiya raisi</td><td>_____________________________ (F.I.Sh., lavozimi)</td></tr>
+          <tr><td>A'zo</td><td>_____________________________ (F.I.Sh., lavozimi)</td></tr>
+          <tr><td>A'zo</td><td>_____________________________ (F.I.Sh., lavozimi)</td></tr>
+        </tbody>
+      </table>
+
+      <div class="section-title">1. Ishlab chiqarilgan mahsulot</div>
+      <table>
+        <thead><tr><th>Mahsulot nomi</th><th class="num">Birlik</th><th class="num">Miqdori</th></tr></thead>
+        <tbody><tr><td>${escapeHtml(icRow.mahsulotNomi || "")}</td><td class="num">${escapeHtml(icRow.birlik || "")}</td><td class="num">${fmt(miqdor, 3)}</td></tr></tbody>
+      </table>
+
+      <div class="section-title">2. Sarflangan xomashyo</div>
+      <table>
+        <thead><tr><th>Xomashyo nomi</th><th class="num">Birlik</th><th class="num">Miqdori</th><th class="num">Narxi</th><th class="num">Summa</th></tr></thead>
+        <tbody>${materialRows || `<tr><td colspan="5" style="text-align:center;">Xomashyo topilmadi</td></tr>`}</tbody>
+      </table>
+      <div class="jami">JAMI: xomashyo tannarxi — ${fmtSum(materialsTotal)}</div>
+
+      <div class="section-title">3. Narx kalkulyatsiyasi (1 ${escapeHtml(icRow.birlik || "birlik")} uchun)</div>
+      <table>
+        <tbody>
+          <tr><td>Tannarx</td><td class="num">${fmtSum(birlikTannarx)}</td></tr>
+          <tr><td>+ Foyda normasi</td><td class="num">${fmtSum(foydaNormasi)}</td></tr>
+          <tr><td><b>= Sotish narxi (QQSsiz)</b></td><td class="num"><b>${fmtSum(birlikNarxQqssiz)}</b></td></tr>
+          <tr><td>+ QQS (${fmt(qqsStavka)}%)</td><td class="num">${fmtSum(birlikQqsSumma)}</td></tr>
+          <tr><td><b>= Sotish narxi (QQS bilan)</b></td><td class="num"><b>${fmtSum(birlikNarxQqsBilan)}</b></td></tr>
+        </tbody>
+      </table>
+      <div class="jami">JAMI (${fmt(miqdor, 3)} ${escapeHtml(icRow.birlik || "")}): ${fmtSum(birlikNarxQqssiz * miqdor)} (QQSsiz) / ${fmtSum(birlikNarxQqsBilan * miqdor)} (QQS bilan)</div>
+
+      <div class="sign">
+        <div>Komissiya raisi<div class="line"></div></div>
+        <div>Buxgalter<div class="line"></div></div>
       </div>
     </body>
     </html>
@@ -4246,12 +4868,13 @@ async function addIshlabChiqarishEntry() {
   const mahsulotId = document.getElementById("icMahsulot").value;
   const sana = document.getElementById("icSana").value || todayISO();
   const miqdor = toNum(document.getElementById("icMiqdor").value);
+  const foydaNormasi = toNum(document.getElementById("icFoydaNormasi").value);
   const izoh = document.getElementById("icIzoh").value.trim();
   const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
   if (!m) { toast("Mahsulot tanlanmadi", "err"); return; }
   if (!miqdor || miqdor <= 0) { toast("Miqdorni kiriting", "err"); return; }
 
-  const ok = await performMahsulotConsumption(m, miqdor, sana, izoh);
+  const ok = await performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi);
   if (!ok) return;
 
   closeModal();
@@ -4340,12 +4963,10 @@ function updateOmborChiqimPreview() {
   const miqdor = toNum(document.getElementById("ocMiqdor").value);
   if (!nomi || !miqdor) { el.innerHTML = `<span class="faint">Nom va miqdorni kiriting</span>`; return; }
 
-  const qoldiqMap = {};
-  omborQoldiqList().forEach((q) => { qoldiqMap[q.nomi] = q.qoldiq; });
   const target = resolveOmborChiqimTarget(nomi);
 
   if (target.kind === "xomashyo") {
-    const qoldiq = qoldiqMap[nomi] || 0;
+    const qoldiq = omborQoldiqByNomi(nomi);
     const yetarli = qoldiq >= miqdor - 0.0001;
     el.innerHTML = `<div class="faint" style="margin-bottom:4px;">Xomashyo sifatida aniqlandi — to'g'ridan-to'g'ri ayiriladi:</div><div style="${yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(nomi)}: ${fmt(miqdor, 3)} (qoldiq: ${fmt(qoldiq, 3)})${yetarli ? "" : " — YETARLI EMAS"}</div>`;
   } else if (target.kind === "mahsulot") {
@@ -4354,7 +4975,7 @@ function updateOmborChiqimPreview() {
     const lines = (m.tarkib || []).map((t) => {
       const need = toNum(t.norma) * miqdor;
       tannarx += need * avgOmborNarx(t.nomi);
-      const qoldiq = qoldiqMap[t.nomi] || 0;
+      const qoldiq = omborQoldiqByNomi(t.nomi);
       const yetarli = qoldiq >= need - 0.0001;
       return `<div style="${yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(t.nomi)}: ${fmt(need, 3)} ${escapeHtml(t.birlik || "")} sarflanadi (qoldiq: ${fmt(qoldiq, 3)})${yetarli ? "" : " — YETARLI EMAS"}</div>`;
     });
@@ -4392,9 +5013,7 @@ async function saveOmborChiqim() {
 // narxi QQS bilan ustunlari o'sha fayldan xuddi shunday o'qiladi). Yagona
 // farq: manba/izoh maydoni SOTUVCHI emas XARIDOR (Покупатель) nomidan
 // olinadi — chiqim uchun mazmunli kontragent shu, chunki mahsulot xaridorga
-// jo'natiladi — va har bir qator turi="chiqim" bilan yoziladi. Ombor kirimiga
-// xos polimer nomlarini birlashtirish qoidasi (canonicalizeOmborNomi) bu
-// yerda QO'LLANILMAYDI.
+// jo'natiladi — va har bir qator turi="chiqim" bilan yoziladi.
 function parseOmborChiqimLineItems(rows, col) {
   let ctx = { sana: "", hujjatRaqami: "", status: "Подписан", kontragentInn: "", kontragentNomi: "" };
   const items = [];
@@ -4544,7 +5163,7 @@ function renderBank() {
         <thead>
           <tr>
             <th>Sana</th><th>Hujjat №</th><th>Kontragent</th><th>INN</th><th>Tavsif</th>
-            <th class="num">Kirim</th><th class="num">Chiqim</th><th></th>
+            <th class="num">Kirim</th><th class="num">Chiqim</th><th title="Ishlab chiqarishga bevosita bog'lanmagan davriy xarajat — o'sha oyda sotilgan mahsulot miqdoriga bo'linib, kalkulyatsiya tannarxiga ulush sifatida qo'shiladi">Xizmat</th><th></th>
           </tr>
         </thead>
         <tbody id="bankBody"></tbody>
@@ -4584,6 +5203,7 @@ function bankRowHtml(r) {
       <td><input class="cell-input" data-f="tavsif" value="${escapeHtml(r.tavsif || "")}" style="min-width:220px" title="${escapeHtml(r.tavsif || "")}"></td>
       <td class="num"><input class="cell-input num num-fmt" data-f="kirim" value="${fmt(r.kirim)}"></td>
       <td class="num"><input class="cell-input num num-fmt" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
+      <td style="text-align:center;"><input type="checkbox" data-f="xizmat" ${r.xizmat ? "checked" : ""} title="Xizmat xarajati"></td>
       <td class="row-actions"><button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
     </tr>
   `;
@@ -4631,8 +5251,8 @@ function bindBankRowEvents() {
     if (!row) return;
     const field = e.target.dataset.f;
     if (!field) return;
-    if (!guardRowCell(e.target, field, row)) return;
-    row[field] = field === "kirim" || field === "chiqim" ? toNum(e.target.value) : e.target.value;
+    if (field !== "xizmat" && !guardRowCell(e.target, field, row)) return;
+    row[field] = field === "xizmat" ? e.target.checked : (field === "kirim" || field === "chiqim" ? toNum(e.target.value) : e.target.value);
     pushFieldsUpdate("bank", row.id, { [field]: row[field] });
     saveStore();
     if (field === "kirim" || field === "chiqim") {
@@ -4658,7 +5278,7 @@ function bindBankRowEvents() {
 }
 
 async function addBankRow() {
-  const newRow = { sana: todayISO(), hujjatRaqami: "", kontragent: "", kontragentInn: "", tavsif: "", kirim: 0, chiqim: 0 };
+  const newRow = { sana: todayISO(), hujjatRaqami: "", kontragent: "", kontragentInn: "", tavsif: "", kirim: 0, chiqim: 0, xizmat: false };
   const { data, error } = await sbClient.from("bank").insert(toDbRow(BANK_DB_MAP, newRow)).select().single();
   if (error) { reportError(error, "Qo'shishda xatolik"); return; }
   const row = fromDbRow(BANK_DB_MAP, data);
@@ -6600,11 +7220,17 @@ async function renderFirmaManager(container, { withHeader = false } = {}) {
         <h1 class="page-title">Firmalar</h1>
         <p class="page-desc">Har bir firmaning ma'lumotlari (kirim/chiqim/ombor va h.k.) bir-biridan to'liq ajratilgan. Xodim faqat o'ziga ruxsat berilgan firmalarni ilova ichida (chiqmasdan) tanlab ishlaydi.</p>
       </div>
-      <div class="page-actions"><button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button></div>
+      <div class="page-actions">
+        <button class="btn" id="btnBlockedInns">Bloklangan INN'lar</button>
+        <button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button>
+      </div>
     </div>` : `
     <div class="card-title">Firmalar (multi-firma)</div>
     <div class="note">Har bir firmaning ma'lumotlari bir-biridan to'liq ajratilgan. Xodim faqat o'ziga ruxsat berilgan firmalarni ilova ichida tanlab ishlaydi.</div>
-    <div class="page-actions" style="margin:12px 0;"><button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button></div>`}
+    <div class="page-actions" style="margin:12px 0;">
+      <button class="btn" id="btnBlockedInns">Bloklangan INN'lar</button>
+      <button class="btn btn-primary" id="btnAddFirma">+ Yangi firma</button>
+    </div>`}
     <div class="table-wrap">
       <table>
         <thead><tr><th>Nomi</th><th>Yaratilgan</th><th></th></tr></thead>
@@ -6613,6 +7239,7 @@ async function renderFirmaManager(container, { withHeader = false } = {}) {
     </div>
   `;
   container.querySelector("#btnAddFirma").addEventListener("click", () => openFirmaModal());
+  container.querySelector("#btnBlockedInns").addEventListener("click", () => openBlockedInnModal());
 
   const { data, error } = await sbClient.from("firmalar").select("*").order("nomi");
   if (error) { reportError(error, "Firmalarni yuklashda xatolik"); return; }
@@ -6733,8 +7360,12 @@ async function saveFirmaFromModal(existingId) {
 }
 
 async function openFirmaAccessModal(firmaId, firmaNomi) {
+  const { data: settingsRow } = await sbClient.from("settings").select("inn").eq("firma_id", firmaId).maybeSingle();
+  const inn = (settingsRow && settingsRow.inn) ? String(settingsRow.inn).trim() : "";
+
   openModal(`
     <h3>${escapeHtml(firmaNomi)} — xodimlar</h3>
+    <p class="modal-sub">INN: ${inn ? escapeHtml(inn) : `<span class="faint">sozlanmagan</span>`}</p>
     <p class="modal-sub">Shu yerga qo'shilgan email'lar shu firmaga kira oladi (ilova ichida firma-tanlagichda ko'rinadi).</p>
     <div id="firmaAccessList" class="faint">Yuklanmoqda…</div>
     <div class="field" style="margin-top:14px;"><label>Email qo'shish</label>
@@ -6745,9 +7376,24 @@ async function openFirmaAccessModal(firmaId, firmaNomi) {
     </div>
     <div class="modal-actions">
       <button class="btn" id="mCancel">Yopish</button>
+      ${inn ? `<button class="btn btn-danger" id="btnBlockFirma">Blokla (INN bo'yicha)</button>` : ""}
     </div>
   `);
   document.getElementById("mCancel").addEventListener("click", closeModal);
+
+  const blockBtn = document.getElementById("btnBlockFirma");
+  if (blockBtn) {
+    blockBtn.addEventListener("click", async () => {
+      if (!confirm(`"${firmaNomi}" (INN: ${inn}) firmasini bloklamoqchimisiz?\n\nBarcha xodimlarning shu firmaga kirish huquqi darhol bekor qilinadi va shu INN bilan qayta ro'yxatdan o'tib bo'lmaydi.\n\nBu amalni ortga qaytarib bo'lmaydi (faqat "Bloklangan INN'lar" ro'yxatidan qo'lda olib tashlash mumkin).`)) return;
+      const sabab = prompt("Bloklash sababi (ixtiyoriy):", "") || null;
+      const { error: delErr } = await sbClient.from("firma_foydalanuvchilari").delete().eq("firma_id", firmaId);
+      if (delErr) { console.error(delErr); toast("Xodimlar ro'yxatini tozalashda xatolik", "err"); return; }
+      const { error: blockErr } = await sbClient.from("bloklangan_innlar").upsert({ inn, sabab }, { onConflict: "inn" });
+      if (blockErr) { console.error(blockErr); toast("Bloklashda xatolik", "err"); return; }
+      toast("Firma bloklandi");
+      reloadAccessList();
+    });
+  }
 
   async function reloadAccessList() {
     const { data, error } = await sbClient.from("firma_foydalanuvchilari").select("email").eq("firma_id", firmaId).order("email");
@@ -6782,6 +7428,64 @@ async function openFirmaAccessModal(firmaId, firmaNomi) {
     document.getElementById("fAccessEmail").value = "";
     reloadAccessList();
     toast("Qo'shildi");
+  });
+}
+
+// Bloklangan INN'lar ro'yxati — o'z-o'zidan ro'yxatdan o'tishda (signup_create_own_firma,
+// migration_self_signup.sql) shu ro'yxatdagi INN rad etiladi, qaysi email
+// ishlatilishidan qat'i nazar. openFirmaAccessModal'dagi "Blokla" tugmasi shu
+// jadvalga yozadi; bu yerdan qo'lda ham oldindan bloklash yoki blokdan
+// chiqarish mumkin.
+async function openBlockedInnModal() {
+  openModal(`
+    <h3>Bloklangan INN'lar</h3>
+    <p class="modal-sub">Shu ro'yxatdagi INN bilan yangi o'z-o'zidan ro'yxatdan o'tish rad etiladi (qaysi email bo'lishidan qat'i nazar).</p>
+    <div id="blockedInnList" class="faint">Yuklanmoqda…</div>
+    <div class="field" style="margin-top:14px;"><label>INN qo'shish</label>
+      <div style="display:flex;gap:8px;">
+        <input id="fBlockInn" placeholder="9 ta raqam" maxlength="9" style="flex:1;">
+        <button class="btn btn-sm" id="btnAddBlockInn">Bloklash</button>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Yopish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+
+  async function reloadBlockedList() {
+    const { data, error } = await sbClient.from("bloklangan_innlar").select("inn, sabab").order("created_at", { ascending: false });
+    const listEl = document.getElementById("blockedInnList");
+    if (!listEl) return;
+    if (error) { listEl.textContent = "Yuklashda xatolik"; return; }
+    listEl.className = "";
+    listEl.innerHTML = data.length
+      ? data.map((r) => `
+          <div class="report-line" style="grid-template-columns:1fr auto;">
+            <span>${escapeHtml(r.inn)}${r.sabab ? ` — <span class="faint">${escapeHtml(r.sabab)}</span>` : ""}</span>
+            <button class="icon-btn" data-unblock-inn="${escapeHtml(r.inn)}" title="Blokdan chiqarish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+          </div>
+        `).join("")
+      : `<span class="faint">Bloklangan INN yo'q</span>`;
+    listEl.querySelectorAll("[data-unblock-inn]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const { error: delErr } = await sbClient.from("bloklangan_innlar").delete().eq("inn", btn.dataset.unblockInn);
+        if (delErr) { console.error(delErr); toast("Blokdan chiqarishda xatolik", "err"); return; }
+        reloadBlockedList();
+      });
+    });
+  }
+  await reloadBlockedList();
+
+  document.getElementById("btnAddBlockInn").addEventListener("click", async () => {
+    const inn = document.getElementById("fBlockInn").value.trim();
+    const innCheck = validateField("inn", inn);
+    if (!inn || !innCheck.ok) { toast(innCheck.msg || "INN kiriting", "err"); return; }
+    const { error } = await sbClient.from("bloklangan_innlar").upsert({ inn }, { onConflict: "inn" });
+    if (error) { console.error(error); toast("Bloklashda xatolik", "err"); return; }
+    document.getElementById("fBlockInn").value = "";
+    reloadBlockedList();
+    toast("Bloklandi");
   });
 }
 
@@ -7434,7 +8138,7 @@ async function handleInvoiceImport(file, type) {
       const chiqimRow = STORE.chiqim.find((r) => r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana);
       if (!chiqimRow) continue; // hujjat sarlavhasi topilmadi (masalan status noto'g'ri) — o'tkazib yuboriladi
 
-      const { mahsulot, mosTuri } = matchMahsulotForChiqimLine(it.nomi, it.narx);
+      const { mahsulot, mosTuri } = await matchMahsulotForChiqimLine(it.nomi, it.narx);
       const tafsilPayload = {
         chiqimId: chiqimRow.id, hujjatRaqami: it.hujjatRaqami, sana: it.sana,
         nomi: it.nomi, birlik: it.birlik, miqdor: it.miqdor, narx: it.narx, summa: it.summa,
@@ -7460,8 +8164,10 @@ async function handleInvoiceImport(file, type) {
 
     // Kirim uchun mahsulot qatorlarini "ombor" jadvaliga yozamiz — chiqim_tafsil'dan
     // farqli o'laroq bu yerda kalkulyatsiya moslashtirish shart emas (Ombor
-    // kirimi xomashyo/mahsulot nomini o'zicha, canonicalizeOmborNomi orqali
-    // saqlaydi), faqat qaysi hujjatga tegishli ekanini kirim_id bilan belgilaymiz.
+    // kirimi xomashyo/mahsulot nomini faylda yozilganidek, o'zgartirmasdan
+    // saqlaydi — o'xshash nomlarni birlashtirish "Nomlarni birlashtirish"
+    // tugmasi orqali qo'lda amalga oshiriladi, qarang: openOmborMergeNomiModal),
+    // faqat qaysi hujjatga tegishli ekanini kirim_id bilan belgilaymiz.
     let omborAdded = 0, omborFailed = false;
     if (newOmborItems.length) {
       const omborRows = newOmborItems.map((it) => {
@@ -7922,6 +8628,7 @@ window.addEventListener("focus", reconcileData);
 
 function showAuthGate() {
   document.getElementById("authGate").style.display = "flex";
+  if (typeof setAuthMode === "function") setAuthMode("login");
 }
 function hideAuthGate() {
   document.getElementById("authGate").style.display = "none";
@@ -7954,6 +8661,27 @@ async function bootAfterAuth() {
   document.getElementById("topbarNotifBtn").addEventListener("click", openAttentionModal);
 
   await loadAvailableFirmalar();
+  // Foydalanuvchi hozirgina "Ro'yxatdan o'tish" orqali ro'yxatdan o'tgan bo'lsa
+  // (qarang: authSubmit signup shoxobchasi), lekin hali hech qanday firmaga ega
+  // bo'lmasa — o'zi uchun yangi (bo'sh) firmani shu yerda avtomatik yaratamiz.
+  // LocalStorage'da saqlanishi sababi: agar loyihada email tasdiqlash yoqilgan
+  // bo'lsa, signUp() darhol sessiya bermaydi — foydalanuvchi emailidagi havolani
+  // bosib, ALOHIDA sahifa yuklanishida (qayta) kirganda ham shu bayroq saqlanib
+  // qolishi kerak.
+  const pendingRaw = localStorage.getItem(PENDING_SIGNUP_KEY);
+  if (!AVAILABLE_FIRMALAR.length && pendingRaw) {
+    localStorage.removeItem(PENDING_SIGNUP_KEY);
+    let pending = null;
+    try { pending = JSON.parse(pendingRaw); } catch { pending = null; }
+    if (pending && pending.nomi && pending.inn) {
+      const { error } = await sbClient.rpc("signup_create_own_firma", { p_nomi: pending.nomi, p_inn: pending.inn });
+      if (error) {
+        console.error(error);
+        toast(error.message || "Firma yaratishda xatolik", "err");
+      }
+      await loadAvailableFirmalar();
+    }
+  }
   renderFirmaSwitcher();
   if (!AVAILABLE_FIRMALAR.length) {
     document.getElementById("main").innerHTML = `<div class="empty-state"><div class="d">Sizga hali birorta firma biriktirilmagan — administratorga murojaat qiling.</div></div>`;
@@ -8050,6 +8778,9 @@ async function switchFirma(firmaId) {
 let hasBooted = false;
 
 const LAST_EMAIL_KEY = "bux2112_last_email";
+// {nomi, inn} JSON obyekti sifatida saqlanadi — INN qo'shilgani sababli ikkita
+// qiymatni birga saqlash kerak. Qarang: authSubmit signup shoxobchasi, bootAfterAuth.
+const PENDING_SIGNUP_KEY = "bux2112_pending_signup";
 let CURRENT_USER_EMAIL = "";
 
 // Bitta umumiy Supabase loyihasiga bir marta ulanadi (index.html'dagi
@@ -8094,9 +8825,41 @@ authEmailEl.value = localStorage.getItem(LAST_EMAIL_KEY) || "";
 
 initSupabaseClient();
 
+// "Kirish" (login) va "Ro'yxatdan o'tish" (signup) bitta forma ichida,
+// #authToggleMode orqali almashtiriladi. Ro'yxatdan o'tishda kiritilgan
+// "Kompaniya nomi"/INN darhol firma sifatida yaratilmaydi — chunki hali sessiya
+// yo'q (yoki email tasdiqlash yoqilgan bo'lsa umuman bo'lmaydi); shu sabab
+// PENDING_SIGNUP_KEY orqali saqlanadi va haqiqiy yaratish bootAfterAuth()
+// ichida (birinchi muvaffaqiyatli kirishda) amalga oshadi — qarang:
+// signup_create_own_firma() (migration_self_signup.sql).
+let AUTH_MODE = "login";
+
+function setAuthMode(mode) {
+  AUTH_MODE = mode;
+  const isSignup = mode === "signup";
+  document.getElementById("authFirmaNomi").style.display = isSignup ? "" : "none";
+  document.getElementById("authInn").style.display = isSignup ? "" : "none";
+  document.getElementById("authPassword2").style.display = isSignup ? "" : "none";
+  document.getElementById("authIntro").textContent = isSignup
+    ? "Yangi kompaniya uchun hisob yarating"
+    : "Shaxsiy login/parolingizni kiriting";
+  document.getElementById("authSubmit").textContent = isSignup ? "Ro'yxatdan o'tish" : "Kirish";
+  document.getElementById("authToggleMode").textContent = isSignup
+    ? "Hisobingiz bormi? Kirish"
+    : "Hisobingiz yo'qmi? Ro'yxatdan o'ting";
+  document.getElementById("authError").textContent = "";
+}
+document.getElementById("authToggleMode").addEventListener("click", (e) => {
+  e.preventDefault();
+  setAuthMode(AUTH_MODE === "signup" ? "login" : "signup");
+});
+
 document.getElementById("authSubmit").addEventListener("click", async () => {
   const emailEl = document.getElementById("authEmail");
   const pwdEl = document.getElementById("authPassword");
+  const pwd2El = document.getElementById("authPassword2");
+  const firmaNomiEl = document.getElementById("authFirmaNomi");
+  const innEl = document.getElementById("authInn");
   const errEl = document.getElementById("authError");
   const btn = document.getElementById("authSubmit");
   const email = emailEl.value.trim();
@@ -8104,6 +8867,39 @@ document.getElementById("authSubmit").addEventListener("click", async () => {
   errEl.textContent = "";
   if (!email) { errEl.textContent = "Emailni kiriting"; return; }
   if (!pwd) { errEl.textContent = "Parolni kiriting"; return; }
+
+  if (AUTH_MODE === "signup") {
+    const firmaNomi = firmaNomiEl.value.trim();
+    const inn = innEl.value.trim();
+    if (!firmaNomi) { errEl.textContent = "Kompaniya nomini kiriting"; return; }
+    const innCheck = validateField("inn", inn);
+    if (!inn || !innCheck.ok) { errEl.textContent = innCheck.msg || "INN kiriting"; return; }
+    if (pwd.length < 6) { errEl.textContent = "Parol kamida 6 ta belgidan iborat bo'lsin"; return; }
+    if (pwd !== pwd2El.value) { errEl.textContent = "Parollar mos kelmadi"; return; }
+    btn.disabled = true;
+    btn.textContent = "Ro'yxatdan o'tilmoqda…";
+    const { data, error } = await sbClient.auth.signUp({ email, password: pwd });
+    btn.disabled = false;
+    btn.textContent = "Ro'yxatdan o'tish";
+    if (error) {
+      errEl.textContent = error.message === "User already registered" ? "Bu email allaqachon ro'yxatdan o'tgan" : "Ro'yxatdan o'tishda xatolik: " + error.message;
+      return;
+    }
+    localStorage.setItem(PENDING_SIGNUP_KEY, JSON.stringify({ nomi: firmaNomi, inn }));
+    if (!data.session) {
+      // Loyihada email tasdiqlash yoqilgan — sessiya darhol berilmaydi.
+      // Foydalanuvchi havolani bosgach, oddiy "Kirish" bilan kiradi va shu
+      // paytda pending firma bootAfterAuth() orqali yaratiladi.
+      setAuthMode("login");
+      document.getElementById("authError").textContent = "";
+      document.getElementById("authIntro").textContent = "Emailingizga tasdiqlash xati yuborildi — tasdiqlagach shu yerdan kiring.";
+      pwdEl.value = ""; pwd2El.value = ""; firmaNomiEl.value = ""; innEl.value = "";
+    } else {
+      pwdEl.value = ""; pwd2El.value = ""; firmaNomiEl.value = ""; innEl.value = "";
+    }
+    return;
+  }
+
   btn.disabled = true;
   btn.textContent = "Tekshirilmoqda…";
   const { error } = await sbClient.auth.signInWithPassword({ email, password: pwd });
@@ -8118,6 +8914,113 @@ document.getElementById("authSubmit").addEventListener("click", async () => {
 document.getElementById("authPassword").addEventListener("keydown", (e) => {
   if (e.key === "Enter") document.getElementById("authSubmit").click();
 });
+
+/* ------------------------------- E-IMZO orqali kirish -------------------------------
+   Email/parolga QO'SHIMCHA variant (uni almashtirmaydi) — E-IMZO'ning rasmiy
+   "CAPIWS" JS mijozi orqali (qarang: vendor/capiws.js, github.com/qo0p/e-imzo-doc)
+   foydalanuvchi kompyuteridagi tashkilotga tegishli elektron imzo (sertifikat)
+   tanlanadi, tasodifiy "nonce" shu kalit bilan imzolanadi, so'ng imzo (PKCS7)
+   "api/eimzo-login.js" serverless funksiyasiga yuboriladi — u E-IMZO-SERVER
+   orqali IMZONING HAQIQIYLIGINI (soxta emasligini) tekshiradi, sertifikatdan
+   INN'ni chiqarib oladi va Supabase sessiyasini (Admin API orqali) yaratib
+   qaytaradi. Bu yerdagi kod E-IMZO-SERVER'ning o'zi bilan ISHLAMAYDI — faqat
+   frontend (sertifikat tanlash/imzolash) qismi shu yerda, backend tekshiruv
+   "api/eimzo-login.js"da (u alohida, EIMZO_SERVER_URL sozlamasi bilan ishga
+   tushiriladi — qarang shu faylning boshidagi izoh).
+   DIQQAT: "list_all_certificates" va CAPIWS ulanish protokoli haqiqiy
+   vendor/capiws.js kutubxonasiga bog'liq — bu ilova bilan birga kelmaydi,
+   E-IMZO bilan rasman ro'yxatdan o'tgandan keyin ularning integratsiya
+   paketidan olinadi. Shu fayl mavjud bo'lmasa, tugma aniq xabar bilan
+   to'xtaydi (email/parol bilan kirish bunga bog'liq emas). */
+const EIMZO_INN_OID = "1.2.860.3.16.1.1"; // yuridik shaxs INN'i (sertifikat subjectName maydoni)
+
+function eimzoAvailable() {
+  return typeof window.CAPIWS !== "undefined" && !window.EIMZO_MISSING;
+}
+
+function setEimzoStatus(msg, isErr) {
+  const el = document.getElementById("eimzoStatus");
+  if (!el) return;
+  el.textContent = msg || "";
+  el.style.color = isErr ? "var(--danger)" : "";
+}
+
+document.getElementById("authEimzoBtn").addEventListener("click", async () => {
+  if (!eimzoAvailable()) {
+    setEimzoStatus("E-IMZO kutubxonasi topilmadi (vendor/capiws.js) — administratorga murojaat qiling.", true);
+    return;
+  }
+  setEimzoStatus("E-IMZO'ga ulanmoqda…");
+  try {
+    await new Promise((resolve, reject) => {
+      window.CAPIWS.apikey(EIMZO_DOMAIN_API_KEYS, (event, data) => {
+        if (data && data.success) resolve(); else reject(new Error("API-KEY qabul qilinmadi"));
+      }, () => reject(new Error("E-IMZO dasturi ishga tushirilmagan yoki ulanib bo'lmadi")));
+    });
+
+    const certs = await new Promise((resolve, reject) => {
+      window.CAPIWS.callFunction({ plugin: "pfx", name: "list_all_certificates" }, (event, data) => {
+        if (data && data.success) resolve(data.certificates || []); else reject(new Error("Sertifikatlar ro'yxati olinmadi"));
+      }, () => reject(new Error("Sertifikatlar ro'yxatini olishda xatolik")));
+    });
+
+    // Faqat YURIDIK SHAXS (tashkilot) sertifikatlari — shaxsiy (jismoniy
+    // shaxs) sertifikatlarda bu OID bo'lmaydi.
+    const orgCerts = certs.filter((c) => c.subjectName && c.subjectName[EIMZO_INN_OID]);
+    if (!orgCerts.length) {
+      setEimzoStatus("Tashkilotga tegishli (yuridik shaxs) elektron imzo topilmadi.", true);
+      return;
+    }
+    const chosen = orgCerts.length === 1 ? orgCerts[0] : await pickEimzoCertificate(orgCerts);
+    if (!chosen) { setEimzoStatus(""); return; }
+
+    setEimzoStatus("Imzolanmoqda… (PIN so'ralishi mumkin)");
+    const nonce = btoa(String(Date.now()) + "-" + Math.random().toString(36).slice(2));
+    const pkcs7 = await new Promise((resolve, reject) => {
+      window.CAPIWS.callFunction({ plugin: "pkcs7", name: "create_pkcs7", arguments: [nonce, chosen.id, "no"] }, (event, data) => {
+        if (data && data.success) resolve(data.pkcs7_64); else reject(new Error("Imzolashda xatolik yoki bekor qilindi"));
+      }, () => reject(new Error("Imzolashda xatolik")));
+    });
+
+    setEimzoStatus("Tekshirilmoqda…");
+    const resp = await fetch(EIMZO_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pkcs7 })
+    });
+    const result = await resp.json();
+    if (!resp.ok || !result.token_hash) throw new Error(result.error || "Tasdiqlashda xatolik");
+
+    const { error } = await sbClient.auth.verifyOtp({ email: result.email, token_hash: result.token_hash, type: "magiclink" });
+    if (error) throw error;
+    setEimzoStatus("");
+  } catch (err) {
+    console.error(err);
+    setEimzoStatus(err.message || "E-IMZO orqali kirishda xatolik", true);
+  }
+});
+
+function pickEimzoCertificate(certs) {
+  return new Promise((resolve) => {
+    openModal(`
+      <h3>Sertifikatni tanlang</h3>
+      <div class="table-wrap">
+        ${certs.map((c, i) => `
+          <div class="report-line" style="grid-template-columns:1fr auto;cursor:pointer;" data-cert-idx="${i}">
+            <span>${escapeHtml((c.subjectName && c.subjectName.CN) || c.name || "")} — INN ${escapeHtml(c.subjectName[EIMZO_INN_OID])}</span>
+            <span class="faint">${escapeHtml(c.validTo || "")}</span>
+          </div>
+        `).join("")}
+      </div>
+      <div class="modal-actions"><button class="btn" id="mCancel">Bekor qilish</button></div>
+    `);
+    document.getElementById("mCancel").addEventListener("click", () => { closeModal(); resolve(null); });
+    document.querySelectorAll("[data-cert-idx]").forEach((row) => {
+      row.addEventListener("click", () => { closeModal(); resolve(certs[Number(row.dataset.certIdx)]); });
+    });
+  });
+}
+
 document.getElementById("logoutBtn").addEventListener("click", () => {
   openModal(`
     <h3>Tizimdan chiqish</h3>
@@ -8153,6 +9056,23 @@ if (sidebarEl && collapseBtn) {
   collapseBtn.addEventListener("click", () => {
     sidebarEl.classList.toggle("collapsed");
     localStorage.setItem(SIDEBAR_COLLAPSE_KEY, sidebarEl.classList.contains("collapsed") ? "1" : "0");
+  });
+
+  const navTooltip = document.createElement("div");
+  navTooltip.className = "nav-tooltip";
+  document.body.appendChild(navTooltip);
+  sidebarEl.querySelectorAll(".nav-item[data-tip]").forEach((item) => {
+    item.addEventListener("mouseenter", () => {
+      if (!sidebarEl.classList.contains("collapsed")) return;
+      const tip = item.getAttribute("data-tip");
+      if (!tip) return;
+      navTooltip.textContent = tip;
+      const r = item.getBoundingClientRect();
+      navTooltip.style.top = `${r.top + r.height / 2}px`;
+      navTooltip.style.left = `${r.right + 8}px`;
+      navTooltip.classList.add("show");
+    });
+    item.addEventListener("mouseleave", () => navTooltip.classList.remove("show"));
   });
 }
 

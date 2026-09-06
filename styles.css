@@ -130,6 +130,26 @@ button, input, select, textarea{font-family:inherit; font-size:inherit; color:in
 .collapsed .theme-toggle{justify-content:center;}
 .collapsed #themeLabel, .collapsed #logoutBtn > span:first-child{display:none;}
 
+.nav-tooltip{
+  position:fixed;
+  transform:translateY(-50%);
+  background:var(--bg-elevated);
+  color:var(--text);
+  border:1px solid var(--border);
+  box-shadow:var(--shadow);
+  padding:6px 10px;
+  border-radius:var(--radius-sm);
+  font-size:12.5px;
+  font-weight:500;
+  white-space:nowrap;
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transition:opacity .12s ease;
+  z-index:200;
+}
+.nav-tooltip.show{opacity:1; visibility:visible;}
+
 .brand{
   display:flex;
   align-items:center;
@@ -511,6 +531,7 @@ tfoot td{
 .modal{
   background:var(--bg-elevated); border:1px solid var(--border); border-radius:var(--radius);
   box-shadow:var(--shadow); width:460px; max-width:100%; padding:20px;
+  max-height:84vh; overflow-y:auto;
 }
 .modal h3{margin:0 0 4px; font-size:16px;}
 .modal .modal-sub{font-size:12.5px; color:var(--text-muted); margin:0 0 16px;}
@@ -584,6 +605,8 @@ tfoot td{
 .auth-box input:focus, .auth-box select:focus{outline:none; border-color:var(--accent);}
 .auth-error{color:var(--danger); font-size:12.5px; margin-top:10px; min-height:1em;}
 .auth-status{font-size:12px; color:var(--text-faint); margin-top:14px;}
+.auth-toggle a{color:var(--accent); font-size:12.5px; text-decoration:none;}
+.auth-toggle a:hover{text-decoration:underline;}
 .sync-dot{
   display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--ok);
   margin-right:6px; vertical-align:middle;
