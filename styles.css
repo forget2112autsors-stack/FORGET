@@ -174,6 +174,7 @@ button, input, select, textarea{font-family:inherit; font-size:inherit; color:in
   font-weight:600;
 }
 
+.nav-item[hidden], .nav-group-label[hidden]{display:none !important;}
 .nav-item{
   display:flex;
   align-items:center;
@@ -492,6 +493,8 @@ tfoot td{
   margin-top:10px; line-height:1.5;
 }
 .note b{color:var(--text-muted);}
+.note.warn{color:var(--warn); background:var(--warn-soft); border-color:var(--warn);}
+.note.warn b{color:var(--warn);}
 
 .tag-inn{font-variant-numeric:tabular-nums; color:var(--text-faint); font-size:11.5px; font-family:var(--font-mono);}
 
@@ -573,15 +576,37 @@ tfoot td{
 ::-webkit-scrollbar-thumb{background:var(--border-strong); border-radius:20px;}
 ::-webkit-scrollbar-track{background:transparent;}
 
+.hamburger-btn{
+  display:none; width:36px; height:36px; border-radius:var(--radius-sm); border:1px solid var(--border-strong);
+  background:var(--bg-elevated); align-items:center; justify-content:center; cursor:pointer; color:var(--text-muted); flex-shrink:0;
+}
+.hamburger-btn:hover{background:var(--bg-sunken); color:var(--text);}
+.hamburger-btn svg{width:20px; height:20px;}
+.sidebar-backdrop{display:none; position:fixed; inset:0; background:rgba(10,14,18,.45); z-index:105;}
+.sidebar-backdrop.show{display:block;}
+
 @media (max-width:860px){
   .app{flex-direction:column;}
-  .sidebar{width:100%; height:auto; position:relative; flex-direction:row; overflow-x:auto; align-items:center;}
+  .hamburger-btn{display:flex;}
+  .sidebar{
+    position:fixed; top:0; left:0; z-index:110;
+    width:270px; max-width:82vw; height:100vh;
+    flex-direction:column; overflow-x:hidden; align-items:stretch;
+    transform:translateX(-100%);
+    transition:transform .18s ease;
+    box-shadow:var(--shadow);
+  }
+  .sidebar.mobile-open{transform:translateX(0);}
+  .collapse-btn{display:none;}
   .brand{padding:6px 10px;}
-  .nav-group-label{display:none;}
-  .sidebar-foot{margin-top:0; margin-left:auto; border-top:none; flex-direction:row;}
+  .nav-group-label{display:block;}
+  .nav-item{min-height:44px; padding:10px 12px;}
+  .sidebar-foot{margin-top:auto; margin-left:0; border-top:1px solid var(--border); flex-direction:column;}
   .main{padding:18px;}
   .topbar{padding:10px 16px;}
   .topbar-search{display:none;}
+  .btn{min-height:38px;}
+  .icon-btn-tb{width:40px; height:40px;}
 }
 
 /* ---------- auth gate ---------- */
@@ -676,4 +701,19 @@ tfoot td{
   .page-header{flex-direction:column; align-items:flex-start; gap:10px;}
   .page-header .page-actions{width:100%;}
   .topbar{padding:10px 16px;}
+  .table-wrap{-webkit-overflow-scrolling:touch;}
+  thead th{padding:11px 12px;}
+  tbody td{padding:11px 12px;}
 }
+
+@media (max-width:480px){
+  .modal-backdrop{padding:0; align-items:stretch;}
+  .modal{width:100%; max-width:100%; height:100%; max-height:100%; border-radius:0; padding:16px;}
+  .modal [style*="width:"]{max-width:100% !important;}
+  .modal [style*="grid-template-columns"]{grid-template-columns:1fr !important;}
+}
+
+/* ---- Xavfsiz zonalar (notch'li telefonlar, Capacitor/Android) ---- */
+.topbar{padding-top:calc(10px + env(safe-area-inset-top));}
+.sidebar{padding-top:calc(18px + env(safe-area-inset-top)); padding-left:calc(12px + env(safe-area-inset-left));}
+.auth-gate{padding-top:calc(20px + env(safe-area-inset-top));}

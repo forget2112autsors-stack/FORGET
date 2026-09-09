@@ -1,3 +1,15 @@
 .vercel
 supabase/node_modules
 supabase/.env
+node_modules/
+
+# Desktop / mobil build artefaktlari (git tarixiga tushmasligi kerak)
+basa xotirasi/
+desktop-app/
+forget-mobile-build/
+dist/
+*.apk
+
+# Windows
+desktop.ini
+Thumbs.db
