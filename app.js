@@ -3557,7 +3557,7 @@ function renderIshlabChiqarish() {
     onDone: renderIshlabChiqarish
   }));
   const rematchAllBtn = document.getElementById("btnRematchAll");
-  if (rematchAllBtn) rematchAllBtn.addEventListener("click", rematchAllChiqimTafsil);
+  if (rematchAllBtn) rematchAllBtn.addEventListener("click", () => rematchAllChiqimTafsil(rematchAllBtn));
   main.querySelectorAll("[data-edit-m]").forEach((b) => b.addEventListener("click", () => openMahsulotModal(b.dataset.editM)));
   main.querySelectorAll("[data-del-m]").forEach((b) => b.addEventListener("click", () => deleteMahsulot(b.dataset.delM)));
   const icBody = document.getElementById("icBody");
@@ -4800,26 +4800,50 @@ async function rematchChiqimTafsil(tafsilId) {
 // qilinmagan sotuvlar" ro'yxatidagi HAMMA qatorni bittalab bosish o'rniga bir
 // marta bosib, mavjud mahsulot katalogi bo'yicha qayta moslashtirishga urinadi
 // (masalan bir nechta yangi mahsulot/standart narx qo'shilgandan keyin).
-async function rematchAllChiqimTafsil() {
+// btnEl berilsa — jarayon davomida tugmada "X / Y" progress ko'rsatiladi.
+async function rematchAllChiqimTafsil(btnEl) {
   const uncosted = STORE.chiqimTafsil.filter((t) => !t.mahsulotId);
   if (!uncosted.length) { toast("Kalkulyatsiya qilinmagan qator yo'q"); return; }
+
+  const origLabel = btnEl ? btnEl.textContent : "";
+  if (btnEl) { btnEl.disabled = true; }
+  const byMos = { nomi: 0, narx: 0, avto: 0, taxminiy: 0 };
+  const kamomadNomlar = { kam: new Set(), kirim_kech: new Set(), kirim_yoq: new Set() };
   let matched = 0, shortageRows = 0;
-  for (const t of uncosted) {
+
+  for (let i = 0; i < uncosted.length; i++) {
+    if (btnEl) btnEl.textContent = `Moslashtirilmoqda… ${i + 1} / ${uncosted.length}`;
+    const t = uncosted[i];
     const { mahsulot, mosTuri } = await matchMahsulotForChiqimLine(t.nomi, t.narx);
     if (!mahsulot) continue;
     const { ok, shortages } = await setChiqimTafsilMahsulot(t.id, mahsulot.id, mosTuri);
-    if (ok) {
-      matched++;
-      if (shortages.length) shortageRows++;
+    if (!ok) continue;
+    matched++;
+    if (byMos[mosTuri] !== undefined) byMos[mosTuri]++;
+    if (shortages.length) {
+      shortageRows++;
+      shortages.forEach((s) => { (kamomadNomlar[s.sabab] || kamomadNomlar.kam).add(s.nomi); });
     }
   }
+
+  if (btnEl) { btnEl.disabled = false; btnEl.textContent = origLabel; }
+  invalidateFifo();
   renderIshlabChiqarish();
+
   const stillUnmatched = uncosted.length - matched;
-  let msg = `${matched} ta bog'landi`;
-  if (stillUnmatched) msg += `, ${stillUnmatched} ta hali mos kelmadi`;
-  if (shortageRows) msg += `, ${shortageRows} ta qatorda ombor zaxirasi yetarli emas`;
-  toast(msg, shortageRows ? "err" : "ok");
+  const mosQism = Object.entries(byMos).filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ta ${CHIQIM_TAFSIL_MOS_LABEL_QISQA[k] || k}`).join(", ");
+  let msg = `${matched} ta bog'landi${mosQism ? ` (${mosQism})` : ""}`;
+  if (stillUnmatched) msg += `; ${stillUnmatched} ta hali mos kelmadi`;
+  const kamParts = Object.entries(kamomadNomlar).filter(([, set]) => set.size)
+    .map(([k, set]) => `${OMBOR_KAMOMAD_LABEL[k]}: ${[...set].slice(0, 4).join(", ")}${set.size > 4 ? "…" : ""}`);
+  if (kamParts.length) msg += `; ombor — ${kamParts.join("; ")}`;
+  toast(msg, (stillUnmatched || shortageRows) ? "err" : "ok");
 }
+
+const CHIQIM_TAFSIL_MOS_LABEL_QISQA = {
+  nomi: "nomi bo'yicha", narx: "narxi bo'yicha", avto: "xomashyo sifatida", taxminiy: "taxminiy (tekshiring)"
+};
 
 const CHIQIM_TAFSIL_MOS_LABEL = {
   nomi: '<span class="pill pill-ok">Nomi bo\'yicha</span>',
