@@ -1,0 +1,38 @@
+{
+  "name": "forget-desktop",
+  "version": "1.0.0",
+  "description": "FORGET — Buxgalteriya bazasi (desktop)",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "uz.forget.buxgalteriya",
+    "productName": "FORGET",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "index.html",
+      "app.js",
+      "styles.css",
+      "electron-main.js",
+      "icon.png",
+      "vendor/**/*"
+    ],
+    "icon": "icon.ico",
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
