@@ -1,0 +1,20 @@
+# Vercel'ga FAQAT veb-sayt uchun kerakli fayllar yuborilsin.
+#
+# NIMA UCHUN "ruxsat ro'yxati" (allowlist): bu papkada desktop/mobil build
+# artefaktlari yotadi ("basa xotirasi/", "desktop-app/", "forget-mobile-build/",
+# *.apk) — ular birgalikda 270 MB dan oshadi va deploy "File size limit
+# exceeded (100 MB)" xatosi bilan to'xtaydi. .gitignore bu yerda yordam
+# bermaydi: Vercel CLI aynan shu faylga qaraydi.
+#
+# package.json ATAYLAB kiritilmagan — u electron/electron-builder uchun,
+# Vercel uni ko'rsa keraksiz "npm install" boshlab yuboradi. API funksiyalari
+# faqat Node'ning o'z modullarini ishlatadi (crypto, global fetch).
+#
+# Sahifaga yangi fayl qo'shsangiz, uni shu yerga "!" bilan qo'shing.
+
+/*
+!/index.html
+!/app.js
+!/styles.css
+!/vendor
+!/api
