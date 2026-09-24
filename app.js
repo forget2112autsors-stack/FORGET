@@ -1708,18 +1708,17 @@ const DASHBOARD_QQS_SERIES = [
 ];
 
 // Har oy oxiridagi to'lanmagan kirim/chiqim fakturalar qoldig'i (aging emas —
-// balans). computeTotals()dagi kreditorlik/debitorlik bilan BIR XIL yondashuv:
-// joriy "tolandi" bayrog'idan foydalanadi (tarixiy FIFO simulyatsiyasi emas) —
-// shu sabab, F1 balansdagi kabi, bu "hozirgi holat asosidagi taxminiy"
-// ko'rsatkich, aynan o'sha oy oxiridagi holatning 100% aniq tarixiy tasviri emas.
+// balans). Qoldiq shu oyning oxirigacha bo'lgan bank to'lovlari asosida
+// hisoblanadi, shuning uchun keyingi oylardagi to'lovlar o'tgan oy grafigini
+// o'zgartirmaydi.
 function computeMonthlyDebtTrend(monthsCount) {
   const now = new Date();
   const buckets = [];
   for (let i = monthsCount - 1; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const monthEnd = i === 0 ? localDateISO(now) : localDateISO(new Date(d.getFullYear(), d.getMonth() + 1, 0));
-    const kreditorlik = STORE.kirim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi && r.sana && r.sana <= monthEnd ? a + toNum(r.jamiSumma) : a), 0);
-    const debitorlik = STORE.chiqim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi && r.sana && r.sana <= monthEnd ? a + toNum(r.jamiSumma) : a), 0);
+    const kreditorlik = tolanmaganQoldiqAsOf("kirim", monthEnd);
+    const debitorlik = tolanmaganQoldiqAsOf("chiqim", monthEnd);
     buckets.push({
       key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`,
       label: UZ_MONTH_SHORT[d.getMonth()],
@@ -3064,6 +3063,7 @@ function renderOmborKirim() {
       <div class="page-actions">
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
+        <button class="btn btn-secondary" id="btnImportKg1Ombor">KG 1 Kalkulyatsiyasini yuklash (353 ta)</button>
         <button class="btn" id="btnUnifyNomi">Nomlarni birlashtirish</button>
         <button class="btn" id="btnQaytaIshlashKirim">🔄 Qayta ishlash</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
@@ -3109,6 +3109,8 @@ function renderOmborKirim() {
   bindOmborTabBar(main);
   document.getElementById("btnAddRow").addEventListener("click", () => addOmborRow());
   document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
+  const btnKg1Ombor = document.getElementById("btnImportKg1Ombor");
+  if (btnKg1Ombor) btnKg1Ombor.addEventListener("click", () => importKg1Kalkulyatsiya(btnKg1Ombor, renderOmborKirim));
   document.getElementById("btnUnifyNomi").addEventListener("click", () => openOmborMergeNomiModal("kirim"));
   document.getElementById("btnQaytaIshlashKirim").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
@@ -3253,6 +3255,7 @@ function renderOmborQoldiq() {
         <p class="page-desc">Har bir xomashyo/mahsulot bo'yicha joriy zaxira — jami kirim va sarflangan (chiqim) miqdor asosida, barcha davr uchun.</p>
       </div>
       <div class="page-actions">
+        <button class="btn btn-secondary" id="btnImportKg1Qoldiq">KG 1 Kalkulyatsiyasini yuklash (353 ta)</button>
         <button class="btn btn-primary" id="btnQaytaIshlashQoldiq">🔄 Qayta ishlash</button>
         <button class="btn" id="btnPrintOmborQoldiq">PDF (chop etish)</button>
         <button class="btn" id="btnExportOmborQoldiq">Excel'ga eksport</button>
@@ -3298,6 +3301,8 @@ function renderOmborQoldiq() {
   `;
 
   bindOmborTabBar(main);
+  const btnKg1Qoldiq = document.getElementById("btnImportKg1Qoldiq");
+  if (btnKg1Qoldiq) btnKg1Qoldiq.addEventListener("click", () => importKg1Kalkulyatsiya(btnKg1Qoldiq, renderOmborQoldiq));
   document.getElementById("btnQaytaIshlashQoldiq").addEventListener("click", () => openOmborQaytaIshlashModal());
   main.querySelectorAll("[data-qi-nomi]").forEach((b) => b.addEventListener("click", () => openOmborQaytaIshlashModal(b.dataset.qiNomi)));
   document.getElementById("btnExportOmborQoldiq").addEventListener("click", () => exportOmborQoldiqXlsx(qoldiq));
@@ -3827,7 +3832,7 @@ function renderIshlabChiqarish() {
 
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
   const btnImportKg1 = document.getElementById("btnImportKg1");
-  if (btnImportKg1) btnImportKg1.addEventListener("click", function() { importKg1Kalkulyatsiya(this); });
+  if (btnImportKg1) btnImportKg1.addEventListener("click", function() { importKg1Kalkulyatsiya(this, renderIshlabChiqarish); });
   document.getElementById("btnIcQaytaIshlash").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
   document.getElementById("btnExportIC").addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
@@ -4157,7 +4162,7 @@ async function deleteMahsulot(id) {
 
 /* ---------------- KG 1 Kalkulyatsiya va Standart Narxlarni Yuklash ---------------- */
 
-async function importKg1Kalkulyatsiya(btnEl) {
+async function importKg1Kalkulyatsiya(btnEl, renderAfter = renderIshlabChiqarish) {
   const data = typeof KG1_MAHSULOTLAR_DATA !== "undefined" ? KG1_MAHSULOTLAR_DATA : (window.KG1_MAHSULOTLAR_DATA || []);
   if (!data.length) {
     toast("KG 1 ma'lumotlari topilmadi", "err");
@@ -4195,6 +4200,7 @@ async function importKg1Kalkulyatsiya(btnEl) {
 
   // Supabase'ga bo'lib-bo'lib (batch) yuklaymiz
   const BATCH_SIZE = 50;
+  let failed = false;
   for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
     const batch = toInsert.slice(i, i + BATCH_SIZE);
     try {
@@ -4203,25 +4209,23 @@ async function importKg1Kalkulyatsiya(btnEl) {
       if (!error && saved) {
         saved.forEach((r) => { STORE.mahsulotlar.push(fromDbRow(MAHSULOT_DB_MAP, r)); added++; });
       } else {
-        batch.forEach((r) => {
-          const fakeRow = { id: uid(), ...r };
-          STORE.mahsulotlar.push(fakeRow);
-          added++;
-        });
+        failed = true;
+        break;
       }
     } catch (err) {
       console.error(err);
-      batch.forEach((r) => {
-        const fakeRow = { id: uid(), ...r };
-        STORE.mahsulotlar.push(fakeRow);
-        added++;
-      });
+      failed = true;
+      break;
     }
   }
 
   saveStore();
-  renderIshlabChiqarish();
-  toast(`${added} ta polietilen truba kalkulyatsiyasi muvaffaqiyatli yuklandi! (Mavjud: ${skipped} ta)`, "ok");
+  renderAfter();
+  if (failed) {
+    toast(`${added} ta yozuv saqlandi, qolganlari bazaga yozilmadi. Internet yoki Supabase sozlamalarini tekshiring.`, "err");
+  } else {
+    toast(`${added} ta polietilen truba kalkulyatsiyasi muvaffaqiyatli yuklandi! (Mavjud: ${skipped} ta)`, "ok");
+  }
   if (btnEl) { btnEl.disabled = false; btnEl.textContent = "KG 1 Kalkulyatsiyasini yuklash (353 ta)"; }
 }
 
