@@ -895,5 +895,137 @@ tr[data-hist-inn]:hover td {
   font-size: 11px;
 }
 
+/* Valyuta hisobi va Markaziy Bank (CBU) stillari */
+.topbar-currency {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+.topbar-currency:hover {
+  border-color: var(--primary);
+  background: var(--bg-elevated);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+.cbu-ticker-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.cbu-code {
+  font-weight: 700;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+.cbu-rate {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.cbu-diff {
+  font-size: 10px;
+  font-weight: 700;
+}
+.cbu-diff.up {
+  color: #10b981;
+}
+.cbu-diff.down {
+  color: #ef4444;
+}
+.cbu-open-btn {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+.cbu-open-btn:hover {
+  color: var(--primary);
+  background: var(--bg-sunken);
+}
+
+/* Bank 5110 / 5210 hisobvaraq nishonlari va boshqaruvi */
+.badge-5110 {
+  background: rgba(47, 111, 94, 0.12);
+  color: var(--primary, #2f6f5e);
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.badge-5210 {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.badge-currency {
+  font-weight: 700;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-sunken);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+/* Valyuta kalkulyatori va Markaziy Bank modali */
+.cbu-calc-card {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.cbu-calc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cbu-rates-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.cbu-rates-table th, .cbu-rates-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.cbu-rates-table th.num, .cbu-rates-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cbu-rates-table tr:hover td {
+  background: var(--bg-sunken);
+}
+
+@media (max-width: 900px) {
+  .topbar-currency .cbu-ticker-item[data-ccy="EUR"],
+  .topbar-currency .cbu-ticker-item[data-ccy="RUB"] {
+    display: none;
+  }
+}
+@media (max-width: 650px) {
+  .topbar-currency {
+    display: none;
+  }
+}
+
 
 

@@ -195,11 +195,14 @@ test("Excel varaqlaridagi qatorlar va ma'lumotlar to'liq joylandi", () => {
   assert.equal(chiqimRows[1][2], "Xaridor B");
   assert.equal(chiqimRows[1][7], 2240000);
 
-  // Bank varag'i
+  // Bank varag'i (Ko'p valyutali 12 ta ustun bilan)
   const wsBank = wb.Sheets["Bank"];
   const bankRows = XLSX.utils.sheet_to_json(wsBank, { header: 1 });
   assert.equal(bankRows[1][1], "1");
-  assert.equal(bankRows[1][6], 1120000); // chiqim
+  assert.equal(bankRows[1][2], "5110"); // schyot
+  assert.equal(bankRows[1][3], "UZS"); // valyuta
+  assert.equal(bankRows[1][6], "Sotuvchi A"); // kontragent
+  assert.equal(bankRows[1][10], 1120000); // chiqim (UZS)
 
   // Asosiy vositalar
   const wsAv = wb.Sheets["Asosiy_vositalar"];

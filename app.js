@@ -61,7 +61,8 @@ const INVOICE_DB_MAP = {
 const BANK_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami", kontragent: "kontragent",
   kontragentInn: "kontragent_inn", tavsif: "tavsif", kirim: "kirim", chiqim: "chiqim", faylId: "fayl_id",
-  xizmat: "xizmat"
+  xizmat: "xizmat",
+  schyot: "schyot", valyuta: "valyuta", valyutaSumma: "valyuta_summa", kurs: "kurs"
 };
 const KASSA_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami", turi: "turi",
@@ -166,7 +167,8 @@ const SETTINGS_DB_MAP = {
   // Didox / E-Faktura API integratsiyasi
   didoxToken: "didox_token",
   didoxApiUrl: "didox_api_url",
-  didoxAutoOmbor: "didox_auto_ombor"
+  didoxAutoOmbor: "didox_auto_ombor",
+  valyutaOpeningBalance: "valyuta_opening_balance"
 };
 
 // Excel/CSV fayllardan o'qilgan matnlarda ba'zan uzilgan unicode surrogate
@@ -376,7 +378,7 @@ const CELL_VALIDATION_KIND = {
   // ish haqi
   oyliqSumma: "amount", imtiyozSumma: "amount", pinfl: "pinfl",
   // bank
-  kirim: "amount", chiqim: "amount"
+  kirim: "amount", chiqim: "amount", valyutaSumma: "amount", kurs: "amount"
 };
 
 // Katak `change` ishlovchisi boshida chaqiriladi: tahrirlanган maydon turi bo'yicha
@@ -583,7 +585,8 @@ function defaultStore() {
       modulAsosiyVositalar: null,
       didoxToken: "",
       didoxApiUrl: "https://api.didox.uz/v1",
-      didoxAutoOmbor: true
+      didoxAutoOmbor: true,
+      valyutaOpeningBalance: 0
     },
     kirim: [],
     chiqim: [],
@@ -1222,6 +1225,20 @@ function computeTotals() {
   const kalkulyatsiyaSoliqBazasi = Math.max(kalkulyatsiyaFoyda - toNum(s.imtiyozlar), 0);
   const kalkulyatsiyaFoydaSoligi = kalkulyatsiyaSoliqBazasi * (toNum(s.foydaStavka) / 100);
 
+  // Kurs farqlari (BHMS 22: 9540 Daromad / 9640 Zarar)
+  const kf = typeof computeKursFarqlari === "function" ? computeKursFarqlari(to) : { jamiIjobiy: 0, jamiSalbiy: 0, details: [] };
+  const ijobiyKursFarqi = kf.jamiIjobiy || 0;
+  const salbiyKursFarqi = kf.jamiSalbiy || 0;
+  const valyuta5210SomQoldiq = (kf.details || []).reduce((sum, d) => sum + d.qaytaBaholanganQiymat, 0);
+
+  // 5110 va 5210 hisobvaraqlarining ajratilgan va jami qayta baholangan qoldig'i
+  const bank5110Kirim = asOfBank.filter((r) => !r.schyot || r.schyot === "5110" || (!r.valyuta || r.valyuta === "UZS")).reduce((a, r) => a + toNum(r.kirim), 0);
+  const bank5110Chiqim = asOfBank.filter((r) => !r.schyot || r.schyot === "5110" || (!r.valyuta || r.valyuta === "UZS")).reduce((a, r) => a + toNum(r.chiqim), 0);
+  const bank5110Qoldiq = bankOpening + bank5110Kirim - bank5110Chiqim;
+  const joriyBankQoldiq = ((kf.details && kf.details.length) || toNum(s.valyutaOpeningBalance) > 0)
+    ? (bank5110Qoldiq + valyuta5210SomQoldiq)
+    : bankQoldiq;
+
   // ---- F2: Moliyaviy natijalar ----
   const revenue = chiqimBase;
   const tannarx = s.tannarxManual !== null && s.tannarxManual !== undefined && s.tannarxManual !== "" ? toNum(s.tannarxManual) : kalkulyatsiyaTannarx;
@@ -1236,11 +1253,11 @@ function computeTotals() {
   const davrXarajati = toNum(s.davrXarajati) + ishHaqiXarajati;
   const asosiyFaoliyatFoyda = yalpiFoyda - davrXarajati;
   const moliyaviyXarajat = toNum(s.moliyaviyXarajat);
-  const soliqqachaFoyda = asosiyFaoliyatFoyda - moliyaviyXarajat;
+  const soliqqachaFoyda = asosiyFaoliyatFoyda - moliyaviyXarajat + ijobiyKursFarqi - salbiyKursFarqi;
 
   // ---- Foyda solig'i (F2 va Foyda solig'i hisoboti bitta manbadan hisoblanadi) ----
-  const jamiDaromad = revenue + toNum(s.boshqaDaromad);
-  const chegiriladiXarajat = tannarx + davrXarajati + moliyaviyXarajat;
+  const jamiDaromad = revenue + toNum(s.boshqaDaromad) + ijobiyKursFarqi;
+  const chegiriladiXarajat = tannarx + davrXarajati + moliyaviyXarajat + salbiyKursFarqi;
   const soliqqaTortiladiganFoyda = jamiDaromad - chegiriladiXarajat;
   const imtiyozlar = toNum(s.imtiyozlar);
   const soliqBazasi = Math.max(soliqqaTortiladiganFoyda - imtiyozlar, 0);
@@ -1255,7 +1272,7 @@ function computeTotals() {
   const qqsToPay = qqsOutput - qqsInput;
 
   // ---- F1 ----
-  const pulMablaglari = bankQoldiq + ((STORE.kassa && STORE.kassa.length) || kassaOpening ? kassaQoldiq : toNum(s.f1Kassa));
+  const pulMablaglari = joriyBankQoldiq + ((STORE.kassa && STORE.kassa.length) || kassaOpening ? kassaQoldiq : toNum(s.f1Kassa));
   // "Asosiy vositalar" sahifasidagi ro'yxat asosida, "to" (davr oxiri) sanasiga
   // nisbatan hisoblangan qoldiq qiymatlar yig'indisi — endi qo'lda kiritilmaydi.
   const asosiyVositalar = STORE.asosiyVositalar.reduce((sum, a) => sum + asosiyVositaQoldiqQiymati(a, to), 0);
@@ -1274,7 +1291,7 @@ function computeTotals() {
   return {
     kirimBase, kirimQQS, kirimJami,
     chiqimBase, chiqimQQS, chiqimJami,
-    bankKirim, bankChiqim, bankOpening, bankQoldiq,
+    bankKirim, bankChiqim, bankOpening, bankQoldiq: joriyBankQoldiq, bank5110Qoldiq,
     kassaKirim, kassaChiqim, kassaOpening, kassaQoldiq,
     kreditorlik, debitorlik,
     revenue, tannarx, kalkulyatsiyaTannarx, taxminiyTannarx, kalkulyatsiyasizSoni, omborKamomadSoni, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, kalkulyatsiyaSoliqBazasi, kalkulyatsiyaFoydaSoligi, yalpiFoyda, davrXarajati, ishHaqiXarajati, asosiyFaoliyatFoyda,
@@ -1282,7 +1299,8 @@ function computeTotals() {
     jamiDaromad, chegiriladiXarajat, soliqqaTortiladiganFoyda, imtiyozlar, soliqBazasi, foydaStavka,
     qqsInput, qqsOutput, qqsToPay,
     pulMablaglari, asosiyVositalar, tovarZaxira, aktivJami,
-    ustavKapitali, oldingiFoyda, jamgarilganFoyda, uzoqMajburiyat, passivJami
+    ustavKapitali, oldingiFoyda, jamgarilganFoyda, uzoqMajburiyat, passivJami,
+    ijobiyKursFarqi, salbiyKursFarqi, valyuta5210SomQoldiq, kursFarqlari: kf
   };
 }
 
@@ -7664,9 +7682,18 @@ function printQaytaIshlashDalolatnomaByDoc(docNo) {
 
 /* --------------------------------- Bank --------------------------------- */
 
+let BANK_TAB_FILTER = "all"; // "all" | "5110" | "5210"
+
 function renderBank() {
   const filtered = getFilteredRows(STORE.bank);
-  const rows = filtered.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
+  const filtered5110 = filtered.filter((r) => !r.schyot || r.schyot === "5110" || (!r.valyuta || r.valyuta === "UZS"));
+  const filtered5210 = filtered.filter((r) => r.schyot === "5210" || (r.valyuta && r.valyuta !== "UZS"));
+
+  let displayRows = filtered;
+  if (BANK_TAB_FILTER === "5110") displayRows = filtered5110;
+  else if (BANK_TAB_FILTER === "5210") displayRows = filtered5210;
+
+  const rows = displayRows.slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || ""));
   const main = document.getElementById("main");
   const t = computeTotals();
   const periodKirim = filtered.reduce((a, r) => a + toNum(r.kirim), 0);
@@ -7676,73 +7703,154 @@ function renderBank() {
     <div class="page-header">
       <div>
         <h1 class="page-title">Bank harakati</h1>
-        <p class="page-desc">Hisob raqami bo'yicha kirim/chiqim operatsiyalari. Qoldiq F1 hisobotidagi "Pul mablag'lari"ga avtomatik qo'shiladi.</p>
+        <p class="page-desc">5110 (Milliy valyuta) va 5210 (Valyuta hisobvarag'i) bo'yicha operatsiyalar. Markaziy Bank kurslari va BHMS 22 kurs farqlari integratsiyasi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnCbuRates"><svg class="ic" viewBox="0 0 24 24"><use href="#i-currency"/></svg>MB Kurslari</button>
+        <button class="btn" id="btnKursFarqi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-scale"/></svg>Kurs farqi (9540/9640)</button>
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnExportBank">Excel'ga eksport</button>
         <button class="btn" id="btn1CBank"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>1C / Klient-Bank</button>
         <button class="btn" id="btnImport">Fayldan import</button>
-        <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
+        <button class="btn" id="btnAddValyutaRow">+ Valyuta (5210)</button>
+        <button class="btn btn-primary" id="btnAddRow">+ Qo'shish (5110)</button>
       </div>
     </div>
 
-    <div class="note" style="margin:0 0 14px;">"Joriy qoldiq" har doim yuqoridagi "Davr"ning oxirgi sanasiga nisbatan hisoblanadi.</div>
+    <!-- Hisobvaraqlar tab filtri -->
+    <div class="filter-bar" style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div class="segmented-control" id="bankTabControl">
+        <button class="seg-btn ${BANK_TAB_FILTER === "all" ? "active" : ""}" data-tab="all">Barcha hisoblar (${filtered.length})</button>
+        <button class="seg-btn ${BANK_TAB_FILTER === "5110" ? "active" : ""}" data-tab="5110"><span class="badge-5110">5110</span> So'm (${filtered5110.length})</button>
+        <button class="seg-btn ${BANK_TAB_FILTER === "5210" ? "active" : ""}" data-tab="5210"><span class="badge-5210">5210</span> Valyuta (${filtered5210.length})</button>
+      </div>
+      <div class="note" style="margin:0;">"Joriy qoldiq" tanlangan davr oxirgi sanasiga nisbatan hisoblanadi.</div>
+    </div>
 
     <div class="grid grid-4 section">
       <div class="card stat-card">
-        <div class="stat-label">Boshlang'ich qoldiq</div>
-        <input class="cell-input num" id="inOpening" style="font-size:19px;font-weight:700;padding:2px 4px;" value="${fmt(STORE.settings.bankOpeningBalance)}">
+        <div class="stat-label">Boshlang'ich qoldiq (5110 UZS)</div>
+        <input class="cell-input num" id="inOpening" style="font-size:18px;font-weight:700;padding:2px 4px;" value="${fmt(STORE.settings.bankOpeningBalance)}">
+        <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;display:flex;align-items:center;gap:6px;">
+          <span>5210 Valyuta ($):</span>
+          <input class="cell-input num" id="inValyutaOpening" style="font-size:12px;font-weight:700;width:80px;padding:1px 4px;" value="${fmt(STORE.settings.valyutaOpeningBalance || 0)}">
+        </div>
       </div>
       <div class="card stat-card"><div class="stat-label">Davr kirimi</div><div class="stat-value" id="statBankKirim">${fmtSum(periodKirim)}</div></div>
       <div class="card stat-card"><div class="stat-label">Davr chiqimi</div><div class="stat-value" id="statBankChiqim">${fmtSum(periodChiqim)}</div></div>
-      <div class="card stat-card"><div class="stat-label">Joriy qoldiq</div><div class="stat-value" id="statBankQoldiq">${fmtSum(t.bankQoldiq)}</div></div>
+      <div class="card stat-card">
+        <div class="stat-label">Joriy qoldiq (Jami pul)</div>
+        <div class="stat-value" id="statBankQoldiq">${fmtSum(t.bankQoldiq)} <small style="font-size:12px;font-weight:normal;color:var(--text-muted);">so'm</small></div>
+        ${t.valyuta5210SomQoldiq ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">shundan 5210: ${fmtSum(t.valyuta5210SomQoldiq)} so'm</div>` : ""}
+      </div>
     </div>
 
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Sana</th><th>Hujjat №</th><th>Kontragent</th><th>INN</th><th>Tavsif</th>
-            <th class="num">Kirim</th><th class="num">Chiqim</th><th title="Ishlab chiqarishga bevosita bog'lanmagan davriy xarajat — o'sha oyda sotilgan mahsulot miqdoriga bo'linib, kalkulyatsiya tannarxiga ulush sifatida qo'shiladi">Xizmat</th><th></th>
+            <th>Sana</th>
+            <th>Hujjat №</th>
+            <th>Schyot</th>
+            <th>Valyuta</th>
+            <th class="num">Valyuta summasi</th>
+            <th class="num">MB Kursi</th>
+            <th>Kontragent</th>
+            <th>INN</th>
+            <th>Tavsif</th>
+            <th class="num">Kirim (UZS)</th>
+            <th class="num">Chiqim (UZS)</th>
+            <th title="Ishlab chiqarishga bevosita bog'lanmagan davriy xarajat — o'sha oyda sotilgan mahsulot miqdoriga bo'linib, kalkulyatsiya tannarxiga ulush sifatida qo'shiladi">Xizmat</th>
+            <th></th>
           </tr>
         </thead>
         <tbody id="bankBody"></tbody>
       </table>
     </div>
     ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-bank"/></svg><div class="t">Bank operatsiyalari yo'q</div><div class="d">"Fayldan import" tugmasi orqali bank ko'chirmasini (masalan, Bank.xlsx) yuklang yoki qo'lda kiriting.</div></div>` : ""}
-    <div class="note">Bank.xlsx (ABS/Klient-Bank ko'chirmasi) formati avtomatik tanib olinadi — sana, kontragent/INN, hujjat №, "Оборот Дебет" (chiqim) va "Оборот Кредит" (kirim) ustunlari, shuningdek davr boshidagi qoldiq faylning o'zidan olinadi. Boshqa formatdagi fayl uchun ustunlar tartibi: <b>sana, hujjat №, kontragent, tavsif, kirim, chiqim</b> bo'lishi kerak.</div>
+    <div class="note"><b>5110 / 5210 ko'p valyutali tizim:</b> Valyuta tanlanganda Markaziy Bankning o'sha kungi kursi avtomatik yuklanadi. Valyutadagi summa kiritilganda so'mdagi kirim/chiqim avtomatik hisoblanadi. Davr oxirida "Kurs farqi (9540/9640)" tugmasi orqali BHMS 22 standarti bo'yicha qayta baholash amalga oshiriladi.</div>
     ${kontragentlarDatalistHtml()}
   `;
 
-  document.getElementById("btnAddRow").addEventListener("click", addBankRow);
+  document.getElementById("btnAddRow").addEventListener("click", () => addBankRow("5110", "UZS"));
+  const btnValRow = document.getElementById("btnAddValyutaRow");
+  if (btnValRow) btnValRow.addEventListener("click", () => addBankRow("5210", "USD"));
+
   document.getElementById("btnExportBank").addEventListener("click", () => exportBankXlsx(rows));
   document.getElementById("btn1CBank").addEventListener("click", () => open1CExchangeModal("bank"));
+  document.getElementById("btnCbuRates").addEventListener("click", () => openCbuRatesModal());
+  document.getElementById("btnKursFarqi").addEventListener("click", () => openKursFarqiModal());
+
+  // Tab switcher
+  const tabCtrl = document.getElementById("bankTabControl");
+  if (tabCtrl) {
+    tabCtrl.addEventListener("click", (e) => {
+      const btn = e.target.closest(".seg-btn");
+      if (!btn) return;
+      BANK_TAB_FILTER = btn.dataset.tab;
+      renderBank();
+    });
+  }
+
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: STORE.bank, storeType: "bank",
     fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "kontragent", label: "Kontragent" }, { key: "tavsif", label: "Tavsif" }],
     onDone: renderBank
   }));
   document.getElementById("btnImport").addEventListener("click", openBankImportModal);
+
   document.getElementById("inOpening").addEventListener("change", (e) => {
     const partial = { bankOpeningBalance: toNum(e.target.value) };
     if (!guardSettingsPartial(partial)) { e.target.value = fmt(STORE.settings.bankOpeningBalance); return; }
-    // rerender:false — jadvalni to'liq qayta chizmasdan faqat yig'indini yangilaymiz.
     applySettingsChange(partial, { rerender: false });
     refreshBankSummary();
   });
+
+  const inValOpen = document.getElementById("inValyutaOpening");
+  if (inValOpen) {
+    inValOpen.addEventListener("change", (e) => {
+      const partial = { valyutaOpeningBalance: toNum(e.target.value) };
+      if (!guardSettingsPartial(partial)) { e.target.value = fmt(STORE.settings.valyutaOpeningBalance || 0); return; }
+      applySettingsChange(partial, { rerender: false });
+      refreshBankSummary();
+    });
+  }
+
   bindBankRowEvents();
   renderRowsChunked(document.getElementById("bankBody"), rows, bankRowHtml);
 }
 
 function bankRowHtml(r) {
+  const isValyuta = r.schyot === "5210" || (r.valyuta && r.valyuta !== "UZS");
+  const valyutaCode = (r.valyuta || (r.schyot === "5210" ? "USD" : "UZS")).toUpperCase();
+
   return `
     <tr data-id="${r.id}">
       <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
-      <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:90px"></td>
-      <td><input class="cell-input" data-f="kontragent" list="kontragentlarList" value="${escapeHtml(r.kontragent || "")}" style="min-width:170px"></td>
+      <td><input class="cell-input" data-f="hujjatRaqami" value="${escapeHtml(r.hujjatRaqami || "")}" style="min-width:80px"></td>
+      <td>
+        <select class="cell-input" data-f="schyot" style="min-width:70px;font-weight:700;">
+          <option value="5110" ${!isValyuta ? "selected" : ""}>5110</option>
+          <option value="5210" ${isValyuta ? "selected" : ""}>5210</option>
+        </select>
+      </td>
+      <td>
+        <select class="cell-input" data-f="valyuta" style="min-width:70px;font-weight:600;">
+          <option value="UZS" ${valyutaCode === "UZS" ? "selected" : ""}>UZS</option>
+          <option value="USD" ${valyutaCode === "USD" ? "selected" : ""}>USD ($)</option>
+          <option value="EUR" ${valyutaCode === "EUR" ? "selected" : ""}>EUR (€)</option>
+          <option value="RUB" ${valyutaCode === "RUB" ? "selected" : ""}>RUB (₽)</option>
+        </select>
+      </td>
+      <td class="num">
+        <input class="cell-input num num-fmt" data-f="valyutaSumma" value="${isValyuta ? fmt(r.valyutaSumma) : ""}" placeholder="${isValyuta ? "0" : "—"}" style="min-width:85px;" ${!isValyuta ? "disabled" : ""}>
+      </td>
+      <td class="num">
+        <input class="cell-input num num-fmt" data-f="kurs" value="${isValyuta ? fmt(r.kurs) : ""}" placeholder="${isValyuta ? "1" : "—"}" style="min-width:80px;" ${!isValyuta ? "disabled" : ""}>
+      </td>
+      <td><input class="cell-input" data-f="kontragent" list="kontragentlarList" value="${escapeHtml(r.kontragent || "")}" style="min-width:160px"></td>
       <td><input class="cell-input" data-f="kontragentInn" value="${escapeHtml(r.kontragentInn || "")}" style="min-width:90px"></td>
-      <td><input class="cell-input" data-f="tavsif" value="${escapeHtml(r.tavsif || "")}" style="min-width:220px" title="${escapeHtml(r.tavsif || "")}"></td>
+      <td><input class="cell-input" data-f="tavsif" value="${escapeHtml(r.tavsif || "")}" style="min-width:200px" title="${escapeHtml(r.tavsif || "")}"></td>
       <td class="num"><input class="cell-input num num-fmt" data-f="kirim" value="${fmt(r.kirim)}"></td>
       <td class="num"><input class="cell-input num num-fmt" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
       <td style="text-align:center;"><input type="checkbox" data-f="xizmat" ${r.xizmat ? "checked" : ""} title="Xizmat xarajati"></td>
@@ -7759,14 +7867,30 @@ function exportBankXlsx(rows) {
   const t = computeTotals();
   const aoa = [
     [s.companyName], [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`], ["Bank harakati"], [],
-    ["Sana", "Hujjat №", "Kontragent", "INN", "Tavsif", "Kirim", "Chiqim"]
+    ["Sana", "Hujjat №", "Schyot", "Valyuta", "Valyuta summasi", "MB Kursi", "Kontragent", "INN", "Tavsif", "Kirim (UZS)", "Chiqim (UZS)", "Xizmat"]
   ];
-  rows.forEach((r) => aoa.push([r.sana, r.hujjatRaqami, r.kontragent, r.kontragentInn, r.tavsif, toNum(r.kirim), toNum(r.chiqim)]));
+  rows.forEach((r) => aoa.push([
+    r.sana,
+    r.hujjatRaqami,
+    r.schyot || "5110",
+    r.valyuta || "UZS",
+    toNum(r.valyutaSumma),
+    toNum(r.kurs) || 1,
+    r.kontragent,
+    r.kontragentInn,
+    r.tavsif,
+    toNum(r.kirim),
+    toNum(r.chiqim),
+    r.xizmat ? "Ha" : "Yo'q"
+  ]));
   aoa.push([]);
-  aoa.push(["Boshlang'ich qoldiq", "", "", "", "", "", toNum(s.bankOpeningBalance)]);
-  aoa.push(["Joriy qoldiq", "", "", "", "", "", toNum(t.bankQoldiq)]);
+  aoa.push(["Boshlang'ich qoldiq (5110)", "", "", "", "", "", "", "", "", "", "", toNum(s.bankOpeningBalance)]);
+  if (toNum(s.valyutaOpeningBalance)) {
+    aoa.push(["Boshlang'ich qoldiq (5210 USD)", "", "", "", toNum(s.valyutaOpeningBalance), "", "", "", "", "", "", ""]);
+  }
+  aoa.push(["Joriy qoldiq (Jami)", "", "", "", "", "", "", "", "", "", "", toNum(t.bankQoldiq)]);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 12 }, { wch: 14 }, { wch: 26 }, { wch: 14 }, { wch: 30 }, { wch: 16 }, { wch: 16 }];
+  ws["!cols"] = [{ wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 8 }, { wch: 15 }, { wch: 12 }, { wch: 24 }, { wch: 13 }, { wch: 28 }, { wch: 16 }, { wch: 16 }, { wch: 8 }];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Bank");
   XLSX.writeFile(wb, `FORGET_bank_${todayISO()}.xlsx`);
@@ -7783,20 +7907,81 @@ function refreshBankSummary() {
   const elQ = document.getElementById("statBankQoldiq");
   if (elK) elK.textContent = fmtSum(periodKirim);
   if (elC) elC.textContent = fmtSum(periodChiqim);
-  if (elQ) elQ.textContent = fmtSum(t.bankQoldiq);
+  if (elQ) {
+    elQ.innerHTML = `${fmtSum(t.bankQoldiq)} <small style="font-size:12px;font-weight:normal;color:var(--text-muted);">so'm</small>`;
+  }
 }
 
 function bindBankRowEvents() {
   const body = document.getElementById("bankBody");
   if (!body) return;
-  body.addEventListener("change", (e) => {
+  body.addEventListener("change", async (e) => {
     const tr = e.target.closest("tr");
     if (!tr) return;
     const row = STORE.bank.find((r) => r.id === tr.dataset.id);
     if (!row) return;
     const field = e.target.dataset.f;
     if (!field) return;
-    if (field !== "xizmat" && !guardRowCell(e.target, field, row)) return;
+    if (field !== "xizmat" && field !== "schyot" && field !== "valyuta" && !guardRowCell(e.target, field, row)) return;
+
+    if (field === "schyot") {
+      const sch = e.target.value;
+      row.schyot = sch;
+      if (sch === "5210" && (!row.valyuta || row.valyuta === "UZS")) {
+        row.valyuta = "USD";
+        row.kurs = getCbuRate("USD", row.sana);
+      } else if (sch === "5110") {
+        row.valyuta = "UZS";
+        row.kurs = 1;
+      }
+      pushFieldsUpdate("bank", row.id, { schyot: row.schyot, valyuta: row.valyuta, kurs: row.kurs });
+      saveStore();
+      renderBank();
+      return;
+    }
+
+    if (field === "valyuta") {
+      const val = e.target.value;
+      row.valyuta = val;
+      if (val !== "UZS") {
+        row.schyot = "5210";
+        await fetchCbuRates(row.sana);
+        row.kurs = getCbuRate(val, row.sana);
+      } else {
+        row.schyot = "5110";
+        row.kurs = 1;
+      }
+      pushFieldsUpdate("bank", row.id, { schyot: row.schyot, valyuta: row.valyuta, kurs: row.kurs });
+      saveStore();
+      renderBank();
+      return;
+    }
+
+    if (field === "valyutaSumma" || field === "kurs") {
+      row[field] = toNum(e.target.value);
+      const isVal = row.schyot === "5210" || (row.valyuta && row.valyuta !== "UZS");
+      if (isVal) {
+        const v = toNum(row.valyutaSumma);
+        const k = toNum(row.kurs);
+        if (v > 0 && k > 0) {
+          if (toNum(row.kirim) > 0 || !toNum(row.chiqim)) {
+            row.kirim = Math.round(v * k);
+            pushFieldsUpdate("bank", row.id, { [field]: row[field], kirim: row.kirim });
+          } else {
+            row.chiqim = Math.round(v * k);
+            pushFieldsUpdate("bank", row.id, { [field]: row[field], chiqim: row.chiqim });
+          }
+          saveStore();
+          renderBank();
+          return;
+        }
+      }
+      pushFieldsUpdate("bank", row.id, { [field]: row[field] });
+      saveStore();
+      refreshBankSummary();
+      return;
+    }
+
     row[field] = field === "xizmat" ? e.target.checked : (field === "kirim" || field === "chiqim" ? toNum(e.target.value) : e.target.value);
     pushFieldsUpdate("bank", row.id, { [field]: row[field] });
     saveStore();
@@ -7816,14 +8001,37 @@ function bindBankRowEvents() {
       ensureKontragentAutoAdded(row.kontragentInn, row.kontragent);
     }
   });
+
   body.addEventListener("click", (e) => {
     const delId = e.target.dataset.del;
     if (delId) deleteRowSafe("bank", "bank", delId, renderBank);
   });
 }
 
-async function addBankRow() {
-  const newRow = { sana: todayISO(), hujjatRaqami: "", kontragent: "", kontragentInn: "", tavsif: "", kirim: 0, chiqim: 0, xizmat: false };
+async function addBankRow(schyot = "5110", valyuta = "UZS") {
+  const isVal = schyot === "5210" || valyuta !== "UZS";
+  const vCode = isVal ? valyuta || "USD" : "UZS";
+  let rate = 1;
+  if (isVal) {
+    await fetchCbuRates();
+    rate = getCbuRate(vCode);
+  }
+
+  const newRow = {
+    sana: todayISO(),
+    hujjatRaqami: "",
+    schyot: isVal ? "5210" : "5110",
+    valyuta: vCode,
+    valyutaSumma: 0,
+    kurs: rate,
+    kontragent: "",
+    kontragentInn: "",
+    tavsif: isVal ? `Valyuta to'lovi (${vCode})` : "",
+    kirim: 0,
+    chiqim: 0,
+    xizmat: false
+  };
+
   const { data, error } = await sbClient.from("bank").insert(toDbRow(BANK_DB_MAP, newRow)).select().single();
   if (error) { reportError(error, "Qo'shishda xatolik"); return; }
   const row = fromDbRow(BANK_DB_MAP, data);
@@ -13326,11 +13534,12 @@ function exportFullBackupXlsx() {
 
   // 4. Bank
   const bankData = [
-    ["Sana", "Hujjat №", "Kontragent", "INN", "Tavsif", "Kirim", "Chiqim", "Xizmat"]
+    ["Sana", "Hujjat №", "Schyot", "Valyuta", "Valyuta summasi", "MB Kursi", "Kontragent", "INN", "Tavsif", "Kirim (UZS)", "Chiqim (UZS)", "Xizmat"]
   ];
   (STORE.bank || []).forEach((r) => {
     bankData.push([
-      r.sana || "", r.hujjatRaqami || "", r.kontragent || "", r.kontragentInn || "",
+      r.sana || "", r.hujjatRaqami || "", r.schyot || "5110", r.valyuta || "UZS",
+      toNum(r.valyutaSumma), toNum(r.kurs) || 1, r.kontragent || "", r.kontragentInn || "",
       r.tavsif || "", toNum(r.kirim), toNum(r.chiqim), r.xizmat ? "Ha" : "Yo'q"
     ]);
   });
@@ -13723,6 +13932,650 @@ function open1CExchangeModal(initialTab = "bank") {
         toast("JSON faylni o'qishda xatolik: " + err.message, "err");
       }
     });
+  }
+}
+
+/* ------------------------------- Markaziy Bank (CBU) & Ko'p Valyutali Hisob (5210) ------------------------------- */
+// O'zbekiston Respublikasi Markaziy Banki (CBU) rasmiy API integratsiyasi
+// va BHMS 22 "Xorijiy valyutada ifodalangan aktivlar va majburiyatlarning hisobi"
+// standarti bo'yicha valyuta hisobvarag'i (5210) hamda kurs farqlari (9540/9640) hisoblagichi.
+
+const CBU_FALLBACK_RATES = {
+  USD: { ccy: "USD", rate: 12850, diff: "0.00", date: todayISO(), name: "AQSH dollari", code: "840" },
+  EUR: { ccy: "EUR", rate: 13900, diff: "0.00", date: todayISO(), name: "Yevro", code: "978" },
+  RUB: { ccy: "RUB", rate: 140, diff: "0.00", date: todayISO(), name: "Rossiya rubli", code: "643" }
+};
+
+let CBU_RATES_CACHE = {}; // YYYY-MM-DD -> Array of CBU items
+
+function normalizeCbuRateItem(item) {
+  if (!item) return null;
+  const ccy = String(item.Ccy || item.ccy || "").trim().toUpperCase();
+  const rate = toNum(item.Rate || item.rate || 0);
+  if (!ccy || rate <= 0) return null;
+  const rawDiff = String(item.Diff || item.diff || "0.00").trim().replace(",", ".");
+  const diff = rawDiff || "0.00";
+  const date = item.Date || item.date || todayISO();
+  const code = String(item.Code || item.code || "").trim();
+  const name = item.CcyNm_UZ || item.CcyNm_RU || item.name || ccy;
+  return { ccy, rate, diff, date, code, name };
+}
+
+async function fetchCbuRates(dateStr) {
+  const date = (dateStr || todayISO()).trim();
+  if (CBU_RATES_CACHE[date] && CBU_RATES_CACHE[date].length) {
+    return CBU_RATES_CACHE[date];
+  }
+  // LocalStorage keshidan tekshirish
+  try {
+    const cached = localStorage.getItem("forget_cbu_rates_" + date);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Array.isArray(parsed) && parsed.length) {
+        CBU_RATES_CACHE[date] = parsed.map(normalizeCbuRateItem);
+        return CBU_RATES_CACHE[date];
+      }
+    }
+  } catch (e) {}
+
+  // 1) /api/cbu serverless proksi
+  try {
+    const resp = await fetch(`/api/cbu?date=${encodeURIComponent(date)}`);
+    if (resp.ok) {
+      const json = await resp.json();
+      if (Array.isArray(json) && json.length) {
+        const normalized = json.map(normalizeCbuRateItem);
+        CBU_RATES_CACHE[date] = normalized;
+        try { localStorage.setItem("forget_cbu_rates_" + date, JSON.stringify(normalized)); } catch (e) {}
+        return normalized;
+      }
+    }
+  } catch (err) {}
+
+  // 2) To'g'ridan-to'g'ri CBU rasmiy API
+  try {
+    const url = `https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/${encodeURIComponent(date)}/`;
+    const resp = await fetch(url);
+    if (resp.ok) {
+      const json = await resp.json();
+      if (Array.isArray(json) && json.length) {
+        const normalized = json.map(normalizeCbuRateItem);
+        CBU_RATES_CACHE[date] = normalized;
+        try { localStorage.setItem("forget_cbu_rates_" + date, JSON.stringify(normalized)); } catch (e) {}
+        return normalized;
+      }
+    }
+  } catch (err) {}
+
+  // 3) Fallback
+  const fallbackList = Object.values(CBU_FALLBACK_RATES).map((f) => ({ ...f, date }));
+  CBU_RATES_CACHE[date] = fallbackList;
+  return fallbackList;
+}
+
+function getCbuRate(ccy, dateStr) {
+  if (!ccy || ccy.toUpperCase() === "UZS") return 1;
+  const code = ccy.toUpperCase();
+  const date = (dateStr || todayISO()).trim();
+  const list = CBU_RATES_CACHE[date] || [];
+  const found = list.find((c) => c.ccy === code);
+  if (found && found.rate > 0) return found.rate;
+  if (CBU_FALLBACK_RATES[code]) return CBU_FALLBACK_RATES[code].rate;
+  return 1;
+}
+
+function getCbuDiff(ccy, dateStr) {
+  if (!ccy || ccy.toUpperCase() === "UZS") return "0.00";
+  const code = ccy.toUpperCase();
+  const date = (dateStr || todayISO()).trim();
+  const list = CBU_RATES_CACHE[date] || [];
+  const found = list.find((c) => c.ccy === code);
+  return found ? found.diff : "0.00";
+}
+
+function convertCbuCurrency(amount, fromCcy, toCcy, customRate) {
+  const amt = toNum(amount);
+  if (!amt) return 0;
+  const f = (fromCcy || "UZS").toUpperCase();
+  const t = (toCcy || "UZS").toUpperCase();
+  if (f === t) return amt;
+
+  if (f === "UZS") {
+    const rate = customRate || getCbuRate(t);
+    return rate > 0 ? amt / rate : 0;
+  }
+  if (t === "UZS") {
+    const rate = customRate || getCbuRate(f);
+    return amt * rate;
+  }
+  const uzsAmt = amt * (customRate || getCbuRate(f));
+  const toRate = getCbuRate(t);
+  return toRate > 0 ? uzsAmt / toRate : 0;
+}
+
+async function updateCbuTopbarWidget() {
+  const wrap = document.getElementById("topbarCurrencyWidget");
+  if (!wrap) return;
+  try {
+    await fetchCbuRates();
+    const usdRate = getCbuRate("USD");
+    const usdDiff = getCbuDiff("USD");
+    const eurRate = getCbuRate("EUR");
+    const eurDiff = getCbuDiff("EUR");
+    const rubRate = getCbuRate("RUB");
+    const rubDiff = getCbuDiff("RUB");
+
+    const elUsd = document.getElementById("cbuUsdRate");
+    const elUsdDiff = document.getElementById("cbuUsdDiff");
+    const elEur = document.getElementById("cbuEurRate");
+    const elEurDiff = document.getElementById("cbuEurDiff");
+    const elRub = document.getElementById("cbuRubRate");
+    const elRubDiff = document.getElementById("cbuRubDiff");
+
+    if (elUsd) elUsd.textContent = fmt(Math.round(usdRate));
+    if (elUsdDiff) {
+      const d = toNum(usdDiff);
+      elUsdDiff.textContent = (d > 0 ? "▲ +" : d < 0 ? "▼ " : "") + usdDiff;
+      elUsdDiff.className = "cbu-diff " + (d > 0 ? "up" : d < 0 ? "down" : "");
+    }
+    if (elEur) elEur.textContent = fmt(Math.round(eurRate));
+    if (elEurDiff) {
+      const d = toNum(eurDiff);
+      elEurDiff.textContent = (d > 0 ? "▲ +" : d < 0 ? "▼ " : "") + eurDiff;
+      elEurDiff.className = "cbu-diff " + (d > 0 ? "up" : d < 0 ? "down" : "");
+    }
+    if (elRub) elRub.textContent = fmt(Math.round(rubRate * 100) / 100);
+    if (elRubDiff) {
+      const d = toNum(rubDiff);
+      elRubDiff.textContent = (d > 0 ? "▲ +" : d < 0 ? "▼ " : "") + rubDiff;
+      elRubDiff.className = "cbu-diff " + (d > 0 ? "up" : d < 0 ? "down" : "");
+    }
+  } catch (e) {
+    console.warn("CBU Topbar widget error:", e);
+  }
+}
+
+// BHMS 22 bo'yicha Kurs Farqlari (9540 / 9640) hisoblash dvigateli
+function computeKursFarqlari(asOfDate) {
+  const date = (asOfDate || STORE.settings.filterTo || todayISO()).trim();
+  const bankRows = (STORE.bank || []).filter((r) => !date || (r.sana && r.sana <= date));
+
+  // 5210 valyuta hisobvarag'i yoki valyutada (UZS emas) yuritilgan qatorlar
+  const valyutaRows = bankRows.filter((r) => r.schyot === "5210" || (r.valyuta && r.valyuta !== "UZS"));
+
+  const currencies = ["USD", "EUR", "RUB"];
+  const details = [];
+  let jamiIjobiy = 0;
+  let jamiSalbiy = 0;
+
+  const initialUsd = toNum(STORE.settings.valyutaOpeningBalance);
+
+  for (const ccy of currencies) {
+    const rows = valyutaRows.filter((r) => (r.valyuta || "").toUpperCase() === ccy);
+    let valyutaKirim = 0;
+    let valyutaChiqim = 0;
+    let somKirim = 0;
+    let somChiqim = 0;
+
+    rows.forEach((r) => {
+      const vAmt = toNum(r.valyutaSumma) || (toNum(r.kurs) > 0 ? (toNum(r.kirim) || toNum(r.chiqim)) / toNum(r.kurs) : 0);
+      if (toNum(r.kirim) > 0) {
+        valyutaKirim += vAmt;
+        somKirim += toNum(r.kirim);
+      }
+      if (toNum(r.chiqim) > 0) {
+        valyutaChiqim += vAmt;
+        somChiqim += toNum(r.chiqim);
+      }
+    });
+
+    const initValyuta = ccy === "USD" ? initialUsd : 0;
+    const valyutaQoldiq = initValyuta + valyutaKirim - valyutaChiqim;
+
+    if (valyutaQoldiq <= 0 && !rows.length && !initValyuta) {
+      continue;
+    }
+
+    const firstRowRate = rows.length && toNum(rows[0].kurs) > 0 ? toNum(rows[0].kurs) : getCbuRate(ccy, date);
+    const initSomVal = initValyuta * firstRowRate;
+    const totalInSom = somKirim + initSomVal;
+    const totalInValyuta = valyutaKirim + initValyuta;
+    const avgHistoricalRate = totalInValyuta > 0 ? totalInSom / totalInValyuta : getCbuRate(ccy, date);
+
+    const buxgalteriyaQiymati = Math.round(valyutaQoldiq * avgHistoricalRate);
+    const cbuRate = getCbuRate(ccy, date);
+    const qaytaBaholanganQiymat = Math.round(valyutaQoldiq * cbuRate);
+    const kursFarqi = qaytaBaholanganQiymat - buxgalteriyaQiymati;
+
+    let ijobiy = 0;
+    let salbiy = 0;
+    let provodka = "";
+
+    if (kursFarqi > 0) {
+      ijobiy = kursFarqi;
+      jamiIjobiy += ijobiy;
+      provodka = "Dt 5210 - Kt 9540 (Daromad)";
+    } else if (kursFarqi < 0) {
+      salbiy = Math.abs(kursFarqi);
+      jamiSalbiy += salbiy;
+      provodka = "Dt 9640 - Kt 5210 (Zarar)";
+    } else {
+      provodka = "Farq yo'q";
+    }
+
+    details.push({
+      ccy,
+      valyutaQoldiq: Math.round(valyutaQoldiq * 100) / 100,
+      avgHistoricalRate: Math.round(avgHistoricalRate * 100) / 100,
+      buxgalteriyaQiymati,
+      cbuRate,
+      qaytaBaholanganQiymat,
+      kursFarqi,
+      ijobiy,
+      salbiy,
+      provodka
+    });
+  }
+
+  return {
+    asOfDate: date,
+    details,
+    jamiIjobiy,
+    jamiSalbiy,
+    sofKursFarqi: jamiIjobiy - jamiSalbiy
+  };
+}
+
+// Markaziy Bank kurslari va valyuta kalkulyatori modali
+async function openCbuRatesModal(initialDate) {
+  const selDate = initialDate || todayISO();
+  let rates = await fetchCbuRates(selDate);
+
+  function renderModalHtml(currentRates, d) {
+    const usd = currentRates.find((c) => c.ccy === "USD") || { rate: 12850, diff: "0.00" };
+    const eur = currentRates.find((c) => c.ccy === "EUR") || { rate: 13900, diff: "0.00" };
+    const rub = currentRates.find((c) => c.ccy === "RUB") || { rate: 140, diff: "0.00" };
+    const cny = currentRates.find((c) => c.ccy === "CNY") || { rate: 1820, diff: "0.00" };
+
+    return `
+      <div style="max-width:760px;width:100%;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+          <div>
+            <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+              <svg class="ic" viewBox="0 0 24 24" style="color:var(--primary);"><use href="#i-currency"/></svg>
+              Markaziy Bank (CBU) rasmiy kurslari
+            </h3>
+            <p class="modal-sub" style="margin:4px 0 0;">O'zbekiston Respublikasi Markaziy Bankining rasmiy ochiq valyuta kurslari</p>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <label style="font-size:12px;font-weight:600;">Sana:</label>
+            <input type="date" id="cbuModalDate" value="${escapeHtml(d)}" style="padding:4px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text);">
+          </div>
+        </div>
+
+        <!-- Asosiy valyutalar mini-kartalari -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">
+          <div class="card stat-card" style="padding:10px 14px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--text-muted);">
+              <span>USD</span> <span class="cbu-diff ${toNum(usd.diff) > 0 ? "up" : toNum(usd.diff) < 0 ? "down" : ""}">${toNum(usd.diff) > 0 ? "+" : ""}${usd.diff}</span>
+            </div>
+            <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt(usd.rate)} <small style="font-size:11px;font-weight:normal;color:var(--text-muted);">so'm</small></div>
+          </div>
+          <div class="card stat-card" style="padding:10px 14px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--text-muted);">
+              <span>EUR</span> <span class="cbu-diff ${toNum(eur.diff) > 0 ? "up" : toNum(eur.diff) < 0 ? "down" : ""}">${toNum(eur.diff) > 0 ? "+" : ""}${eur.diff}</span>
+            </div>
+            <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt(eur.rate)} <small style="font-size:11px;font-weight:normal;color:var(--text-muted);">so'm</small></div>
+          </div>
+          <div class="card stat-card" style="padding:10px 14px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--text-muted);">
+              <span>RUB</span> <span class="cbu-diff ${toNum(rub.diff) > 0 ? "up" : toNum(rub.diff) < 0 ? "down" : ""}">${toNum(rub.diff) > 0 ? "+" : ""}${rub.diff}</span>
+            </div>
+            <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt(rub.rate)} <small style="font-size:11px;font-weight:normal;color:var(--text-muted);">so'm</small></div>
+          </div>
+          <div class="card stat-card" style="padding:10px 14px;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--text-muted);">
+              <span>CNY</span> <span class="cbu-diff ${toNum(cny.diff) > 0 ? "up" : toNum(cny.diff) < 0 ? "down" : ""}">${toNum(cny.diff) > 0 ? "+" : ""}${cny.diff}</span>
+            </div>
+            <div style="font-size:18px;font-weight:700;margin-top:4px;">${fmt(cny.rate)} <small style="font-size:11px;font-weight:normal;color:var(--text-muted);">so'm</small></div>
+          </div>
+        </div>
+
+        <!-- Valyuta konvertori -->
+        <div class="cbu-calc-card">
+          <div style="font-weight:700;font-size:13px;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+            <svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg>
+            Tezkor Valyuta Konvertori
+          </div>
+          <div class="cbu-calc-row">
+            <input type="number" id="calcAmount" value="100" style="width:120px;padding:6px 10px;font-size:14px;font-weight:700;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text);">
+            <select id="calcFromCcy" style="padding:6px 10px;font-size:13px;font-weight:600;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text);">
+              <option value="USD">USD ($)</option>
+              <option value="EUR">EUR (€)</option>
+              <option value="RUB">RUB (₽)</option>
+              <option value="UZS">UZS (so'm)</option>
+            </select>
+            <span style="font-size:16px;font-weight:700;color:var(--text-muted);">➔</span>
+            <select id="calcToCcy" style="padding:6px 10px;font-size:13px;font-weight:600;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text);">
+              <option value="UZS">UZS (so'm)</option>
+              <option value="USD">USD ($)</option>
+              <option value="EUR">EUR (€)</option>
+              <option value="RUB">RUB (₽)</option>
+            </select>
+            <div style="flex:1;min-width:160px;text-align:right;">
+              <span id="calcResult" style="font-size:18px;font-weight:800;color:var(--primary);">—</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Qidiruv maydoni -->
+        <div style="margin-bottom:10px;">
+          <input type="text" id="cbuSearchInput" placeholder="Valyuta nomi yoki kodini qidirish (USD, evro, rubl, yuan...)..." style="width:100%;padding:7px 12px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text);">
+        </div>
+
+        <!-- Kurslar jadvali -->
+        <div style="max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;">
+          <table class="cbu-rates-table">
+            <thead>
+              <tr style="background:var(--bg-sunken);position:sticky;top:0;z-index:2;">
+                <th>Kodi</th>
+                <th>Valyuta nomi</th>
+                <th class="num">Rasmiy kursi (UZS)</th>
+                <th class="num">O'zgarish</th>
+              </tr>
+            </thead>
+            <tbody id="cbuRatesTbody">
+              ${currentRates.map((r) => `
+                <tr data-search="${escapeHtml((r.ccy + " " + r.name + " " + r.code).toLowerCase())}">
+                  <td><span class="badge-currency">${escapeHtml(r.ccy)}</span></td>
+                  <td>${escapeHtml(r.name)}</td>
+                  <td class="num" style="font-weight:700;">${fmt(r.rate)}</td>
+                  <td class="num"><span class="cbu-diff ${toNum(r.diff) > 0 ? "up" : toNum(r.diff) < 0 ? "down" : ""}">${toNum(r.diff) > 0 ? "+" : ""}${r.diff}</span></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="modal-actions" style="margin-top:16px;">
+          <button class="btn" id="btnOpenKfFromCbu"><svg class="ic" viewBox="0 0 24 24"><use href="#i-scale"/></svg>Kurs farqi (9540/9640)</button>
+          <button class="btn btn-primary" id="mCancel">Yopish</button>
+        </div>
+      </div>
+    `;
+  }
+
+  openModal(renderModalHtml(rates, selDate));
+
+  function updateConverter() {
+    const amt = toNum(document.getElementById("calcAmount").value);
+    const from = document.getElementById("calcFromCcy").value;
+    const to = document.getElementById("calcToCcy").value;
+    const res = convertCbuCurrency(amt, from, to);
+    const el = document.getElementById("calcResult");
+    if (el) {
+      el.textContent = fmt(Math.round(res * 100) / 100) + " " + to;
+    }
+  }
+
+  updateConverter();
+
+  document.getElementById("calcAmount").addEventListener("input", updateConverter);
+  document.getElementById("calcFromCcy").addEventListener("change", updateConverter);
+  document.getElementById("calcToCcy").addEventListener("change", updateConverter);
+
+  const dateInput = document.getElementById("cbuModalDate");
+  if (dateInput) {
+    dateInput.addEventListener("change", async (e) => {
+      const newD = e.target.value;
+      if (!newD) return;
+      toast("Kurslar yuklanmoqda...");
+      rates = await fetchCbuRates(newD);
+      openCbuRatesModal(newD);
+    });
+  }
+
+  const sInput = document.getElementById("cbuSearchInput");
+  if (sInput) {
+    sInput.addEventListener("input", (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      const rows = document.querySelectorAll("#cbuRatesTbody tr");
+      rows.forEach((tr) => {
+        const text = tr.getAttribute("data-search") || "";
+        tr.style.display = !q || text.includes(q) ? "" : "none";
+      });
+    });
+  }
+
+  const btnKf = document.getElementById("btnOpenKfFromCbu");
+  if (btnKf) {
+    btnKf.addEventListener("click", () => {
+      closeModal();
+      openKursFarqiModal(selDate);
+    });
+  }
+}
+
+// Kurs Farqini Qayta Baholash Modali (BHMS 22)
+function openKursFarqiModal(asOfDate) {
+  const d = (asOfDate || STORE.settings.filterTo || todayISO()).trim();
+  const kf = computeKursFarqlari(d);
+
+  openModal(`
+    <div style="max-width:780px;width:100%;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+            <svg class="ic" viewBox="0 0 24 24" style="color:var(--primary);"><use href="#i-scale"/></svg>
+            Valyutani qayta baholash va kurs farqlari (BHMS 22)
+          </h3>
+          <p class="modal-sub" style="margin:4px 0 0;">5210 valyuta hisobvarag'i va xorijiy valyuta mablag'larini davr yakunida qayta baholash</p>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <label style="font-size:12px;font-weight:600;">Sana holatiga:</label>
+          <input type="date" id="kfAsOfDate" value="${escapeHtml(d)}" style="padding:4px 8px;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg-elevated);color:var(--text);">
+        </div>
+      </div>
+
+      <!-- Xulosa panellari -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px;">
+        <div class="card stat-card" style="padding:10px 14px;border-left:4px solid #10b981;">
+          <div style="font-size:11.5px;font-weight:700;color:var(--text-muted);">9540 — Kurs farqidan daromad</div>
+          <div style="font-size:18px;font-weight:800;color:#10b981;margin-top:4px;">+${fmtSum(kf.jamiIjobiy)} <small style="font-size:11px;">so'm</small></div>
+        </div>
+        <div class="card stat-card" style="padding:10px 14px;border-left:4px solid #ef4444;">
+          <div style="font-size:11.5px;font-weight:700;color:var(--text-muted);">9640 — Kurs farqidan zarar</div>
+          <div style="font-size:18px;font-weight:800;color:#ef4444;margin-top:4px;">-${fmtSum(kf.jamiSalbiy)} <small style="font-size:11px;">so'm</small></div>
+        </div>
+        <div class="card stat-card" style="padding:10px 14px;border-left:4px solid var(--primary);">
+          <div style="font-size:11.5px;font-weight:700;color:var(--text-muted);">Sof moliyaviy natija</div>
+          <div style="font-size:18px;font-weight:800;color:${kf.sofKursFarqi >= 0 ? "var(--primary)" : "#ef4444"};margin-top:4px;">
+            ${kf.sofKursFarqi >= 0 ? "+" : ""}${fmtSum(kf.sofKursFarqi)} <small style="font-size:11px;">so'm</small>
+          </div>
+        </div>
+      </div>
+
+      <!-- Qayta baholash hisob-kitob jadvali -->
+      <div style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;margin-bottom:14px;">
+        <table class="cbu-rates-table">
+          <thead>
+            <tr style="background:var(--bg-sunken);position:sticky;top:0;">
+              <th>Valyuta</th>
+              <th class="num">Qoldiq</th>
+              <th class="num">Hisob kursi</th>
+              <th class="num">Buxg. qiymati</th>
+              <th class="num">MB kursi</th>
+              <th class="num">Qayta baholangan</th>
+              <th class="num">Kurs farqi</th>
+              <th>BHMS 22 provodka</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${!kf.details.length ? `<tr><td colspan="8" style="text-align:center;padding:24px;color:var(--text-faint);">Ushbu sana holatiga 5210 valyuta hisobvarag'ida qoldiq topilmadi. Bank bo'limidan 5210 valyuta operatsiyasini qo'shing.</td></tr>` : ""}
+            ${kf.details.map((row) => `
+              <tr>
+                <td><span class="badge-5210">${escapeHtml(row.ccy)}</span></td>
+                <td class="num" style="font-weight:700;">${fmt(row.valyutaQoldiq)}</td>
+                <td class="num">${fmt(row.avgHistoricalRate)}</td>
+                <td class="num">${fmt(row.buxgalteriyaQiymati)}</td>
+                <td class="num" style="font-weight:700;color:var(--primary);">${fmt(row.cbuRate)}</td>
+                <td class="num" style="font-weight:700;">${fmt(row.qaytaBaholanganQiymat)}</td>
+                <td class="num" style="font-weight:800;color:${row.kursFarqi >= 0 ? "#10b981" : "#ef4444"};">
+                  ${row.kursFarqi >= 0 ? "+" : ""}${fmt(row.kursFarqi)}
+                </td>
+                <td style="font-size:12px;font-weight:600;">${escapeHtml(row.provodka)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note" style="margin-bottom:16px;">
+        <b>BHMS 22 qoidasi:</b> Xorijiy valyuta mablag'lari har bir hisobot davri oxirida O'zbekiston Respublikasi Markaziy Bankining rasmiy kursi bo'yicha majburiy qayta baholanadi. Ijobiy kurs farqi 9540 hisobvarag'i (Daromad), salbiy kurs farqi esa 9640 hisobvarag'i (Zarar) sifatida F2 hisoboti va soliq hisob-kitoblariga kiritiladi.
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" id="btnPrintKfAct" ${!kf.details.length ? "disabled" : ""}><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>A4 Dalolatnoma chop etish</button>
+        <button class="btn btn-primary" id="mCancel">Yopish</button>
+      </div>
+    </div>
+  `);
+
+  const dInp = document.getElementById("kfAsOfDate");
+  if (dInp) {
+    dInp.addEventListener("change", (e) => {
+      openKursFarqiModal(e.target.value);
+    });
+  }
+
+  const btnPrint = document.getElementById("btnPrintKfAct");
+  if (btnPrint) {
+    btnPrint.addEventListener("click", () => {
+      printKursFarqiAct(kf);
+    });
+  }
+}
+
+// Kurs Farqini Qayta Baholash Rasmiy A4 Dalolatnomasi (Chop etish)
+function printKursFarqiAct(kf) {
+  const s = STORE.settings;
+  const kompaniya = s.companyName || "«FORGET KORXONASI»";
+  const inn = s.inn || "—";
+  const rahbar = s.rahbar || "Korxona rahbari";
+  const dateFormatted = format1CDate(kf.asOfDate);
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="uz">
+    <head>
+      <meta charset="utf-8">
+      <title>Valyuta mablag'larini qayta baholash dalolatnomasi — ${dateFormatted}</title>
+      <style>
+        @page { size: A4 portrait; margin: 15mm 15mm 15mm 20mm; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 11pt; color: #000; line-height: 1.35; margin: 0; padding: 10px; }
+        .stamp-block { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .stamp-box { width: 240px; text-align: left; }
+        .title { text-align: center; font-weight: bold; font-size: 13pt; text-transform: uppercase; margin: 15px 0 5px; }
+        .sub { text-align: center; font-size: 10pt; font-style: italic; margin-bottom: 15px; }
+        table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 10pt; }
+        th, td { border: 1px solid #000; padding: 5px 7px; }
+        th { background: #f2f2f2; text-align: center; font-weight: bold; }
+        td.num { text-align: right; }
+        .summary-box { margin: 15px 0; padding: 8px; border: 1px dashed #444; font-size: 10.5pt; }
+        .signatures { display: flex; justify-content: space-between; margin-top: 40px; }
+        .sign-col { width: 45%; }
+        .sign-line { border-bottom: 1px solid #000; height: 30px; margin-top: 5px; }
+        @media print {
+          body { padding: 0; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="stamp-block">
+        <div>
+          <b>${escapeHtml(kompaniya)}</b><br>
+          STIR / INN: ${escapeHtml(inn)}<br>
+          Buxgalteriya hisobi
+        </div>
+        <div class="stamp-box">
+          <b>«TASDIQLAYMAN»</b><br>
+          Rahbar: __________________<br>
+          <b>${escapeHtml(rahbar)}</b><br>
+          «____» ____________ ${kf.asOfDate.slice(0, 4)} y.
+        </div>
+      </div>
+
+      <div class="title">VALYUTA MABLAG'LARINI QAYTA BAHOLASH VA KURS FARQLARI DALOLATNOMASI</div>
+      <div class="sub">O'zbekiston Respublikasi BHMS 22 talablariga muvofiq ${escapeHtml(dateFormatted)} holatiga</div>
+
+      <p style="text-indent: 25px; margin: 10px 0;">
+        Ushbu dalolatnoma tuzildi shul haqdakim, <b>${escapeHtml(kompaniya)}</b> buxgalteriyasi tomonidan hisobot sanasidagi O'zbekiston Respublikasi Markaziy Bankining rasmiy valyuta kurslari asosida korxonaning 5210 "Mamlakat ichidagi valyuta hisobvaraqlari" qoldiqlari qayta baholandi va quyidagi kurs farqlari aniqlandi:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width:5%;">№</th>
+            <th>Valyuta</th>
+            <th>Qoldiq (valyutada)</th>
+            <th>Hisobga olingan kursi</th>
+            <th>Qayta baholashgacha balans (so'm)</th>
+            <th>Markaziy Bank kursi</th>
+            <th>Qayta baholangan yangi balans (so'm)</th>
+            <th>Kurs farqi (so'm)</th>
+            <th>Buxgalteriya o'tkazmasi</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${kf.details.map((r, i) => `
+            <tr>
+              <td style="text-align:center;">${i + 1}</td>
+              <td style="text-align:center;font-weight:bold;">${escapeHtml(r.ccy)}</td>
+              <td class="num">${fmt(r.valyutaQoldiq)}</td>
+              <td class="num">${fmt(r.avgHistoricalRate)}</td>
+              <td class="num">${fmt(r.buxgalteriyaQiymati)}</td>
+              <td class="num" style="font-weight:bold;">${fmt(r.cbuRate)}</td>
+              <td class="num" style="font-weight:bold;">${fmt(r.qaytaBaholanganQiymat)}</td>
+              <td class="num" style="font-weight:bold;">${r.kursFarqi >= 0 ? "+" : ""}${fmt(r.kursFarqi)}</td>
+              <td style="font-size:9pt;">${escapeHtml(r.provodka)}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+
+      <div class="summary-box">
+        <b>Xulosa va moliyaviy natijalar:</b><br>
+        1. 9540 hisobvarag'i ("Valyutalar kurs farqidan daromadlar") bo'yicha daromad: <b>${fmt(kf.jamiIjobiy)} so'm</b><br>
+        2. 9640 hisobvarag'i ("Valyutalar kurs farqidan zararlar") bo'yicha xarajat: <b>${fmt(kf.jamiSalbiy)} so'm</b><br>
+        3. Davr yakunidagi sof kurs farqi ta'siri: <b>${kf.sofKursFarqi >= 0 ? "+" : ""}${fmt(kf.sofKursFarqi)} so'm</b>
+      </div>
+
+      <div class="signatures">
+        <div class="sign-col">
+          Bosh buxgalter:<br>
+          <div class="sign-line"></div>
+          (imzo, F.I.Sh.)
+        </div>
+        <div class="sign-col">
+          Moddiy javobgar shaxs / Kassir:<br>
+          <div class="sign-line"></div>
+          (imzo, F.I.Sh.)
+        </div>
+      </div>
+
+      <script>
+        window.onload = function() { window.print(); };
+      </script>
+    </body>
+    </html>
+  `;
+
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  } else {
+    toast("Chop etish darchasini brauzer blokladi — pop-up ruxsatini bering", "err");
   }
 }
 
@@ -14576,6 +15429,12 @@ async function bootAfterAuth() {
   bindGlobalSearch();
   bindKontragentHistoryDelegation();
   document.getElementById("topbarNotifBtn").addEventListener("click", openAttentionModal);
+
+  const topbarCurrencyEl = document.getElementById("topbarCurrencyWidget");
+  if (topbarCurrencyEl) {
+    topbarCurrencyEl.addEventListener("click", () => openCbuRatesModal());
+  }
+  updateCbuTopbarWidget();
 
   await loadAvailableFirmalar();
   // Foydalanuvchi hozirgina "Ro'yxatdan o'tish" orqali ro'yxatdan o'tgan bo'lsa

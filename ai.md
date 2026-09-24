@@ -228,6 +228,30 @@ Dastur kodini chuqur tahlil qilish va haqiqiy bank ko'chirmasi (`TurnoverOperati
 
 ---
 
+### 15-Kamchilik: Ko'p valyutali hisob (5210), Markaziy Bank (CBU) kursi integratsiyasi va BHMS 22 kurs farqlari (9540/9640)
+- **Muammo:** 
+  1. O'zbekiston korxonalarining aksariyati xorijiy valyutada (USD, EUR, RUB) import, eksport yoki valyuta hisobvarag'i operatsiyalarini amalga oshiradi. Dasturda esa barcha operatsiyalar faqat 5110 (Milliy valyuta) hisobida yuritilar, alohida 5210 (Mamlakat ichidagi valyuta hisobvaraqlari) mavjud emas edi.
+  2. Buxgalter har kuni yoki har operatsiyada Markaziy Bank kursini qo'lda qidirib, kalkulyatorda so'mga ko'paytirib yozishga majbur edi.
+  3. O'zbekiston Respublikasi BHMS 22 ("Xorijiy valyutada ifodalangan aktivlar va majburiyatlarning hisobi") talablariga ko'ra, har hisobot davri oxirida valyuta qoldiqlari Markaziy Bankning rasmiy kursi bo'yicha majburiy qayta baholanishi, ijobiy kurs farqi **9540** ("Valyutalar kurs farqidan daromadlar") hisobvarag'iga, salbiy kurs farqi esa **9640** ("Valyutalar kurs farqidan zararlar") hisobvarag'iga o'tkazilishi shart. Dasturda ushbu buxgalteriya zanjiri, qayta baholash dalolatnomasi va F2/F1 integratsiyasi mavjud emas edi.
+- **Yechim:**
+  1. **Markaziy Bank (CBU) rasmiy ochiq API integratsiyasi:**
+     - `api/cbu.js` Vercel Serverless xavfsiz proksi yaratildi: O'zbekiston Markaziy Bankining rasmiy ochiq arxividan (`cbu.uz/uz/arkhiv-kursov-valyut/json/`) barcha valyutalar kurslarini oladi, 1 soatlik xotira keshiga ega va CORS cheklovlarisiz ishlaydi.
+     - Offline rejim uchun zaxira fallback kurslari (USD: 12,850, EUR: 13,900, RUB: 140) va LocalStorage keshi kiritildi.
+     - Dasturning yuqori panelida (Topbar) jonli valyuta vidjeti (`#topbarCurrencyWidget`) joylashtirildi: USD, EUR, RUB kurslari va o'zgarish farqlari (`▲ +` yashil, `▼ -` qizil) real vaqtda aks etadi. Bosilganda Markaziy Bankning to'liq kurslar ro'yxati va jonli Valyuta kalkulyatori ochiladi.
+  2. **5110 va 5210 Hisobvaraqlari bo'yicha ko'p valyutali Bank harakati:**
+     - Bank jadvalida 3 ta rejimli tab filtri o'rnatildi: **Barcha hisoblar**, **5110 So'm**, **5210 Valyuta**.
+     - Valyutali operatsiya qo'shilganda (`+ Valyuta (5210)`): valyuta turi (USD, EUR, RUB, UZS), valyuta summasi, Markaziy Bank kursi va UZS ekvivalenti (`valyutaSumma * kurs`) avtomatik hisoblanadi.
+     - Valyuta summasi yoki kursi o'zgarganda UZS ekvivalenti dinamik yangilanadi.
+     - Bank boshlang'ich qoldig'i 5110 (UZS) va 5210 (Valyuta USD) bo'yicha alohida saqlanadi.
+  3. **BHMS 22 bo'yicha Kurs Farqlari (9540/9640) Avtomatik Dvigateli:**
+     - `computeKursFarqlari(asOfDate)`: Davr oxiriga nisbatan har bir valyuta (USD, EUR, RUB) bo'yicha valyuta qoldig'i, o'rtacha hisobga olish kursi, buxgalteriya qiymati, Markaziy Bankning joriy rasmiy kursi, qayta baholangan yangi qiymat va kurs farqini hisoblaydi.
+     - Kurs farqi > 0 bo'lsa: `Dt 5210 - Kt 9540 (Daromad)` — F2 da sof foydani va F1 da passiv jamg'arilgan foydani oshiradi.
+     - Kurs farqi < 0 bo'lsa: `Dt 9640 - Kt 5210 (Zarar)` — F2 da davr xarajatlariga qo'shiladi va foydani kamaytiradi.
+     - **Rasmiy A4 Bosma Dalolatnoma (`printKursFarqiAct`):** Korxona rahbari tasdiq shtampi, hisobot sanasi, valyuta qoldiqlari, buxgalteriya va MB kurslari, qayta baholangan qiymat, buxgalteriya provodkalari hamda Bosh buxgalter va moddiy javobgar shaxs imzo bloklari bilan to'liq shakllanadi.
+     - **F1 va F2 hisobotlariga to'liq integratsiya:** Bank yakuniy pul mablag'lari 5110 qoldig'i va 5210 qayta baholangan qoldig'i yig'indisi sifatida olinadi, Aktiv va Passiv balansi 100% mutanosib saqlanadi.
+
+---
+
 ## 4. Foydalanuvchi Uchun Yaratilgan Yangi Qulayliklar (UX/UI)
 
 1. **Tezkor Klaviatura Yorliqlari (Hotkeys):**
@@ -264,12 +288,17 @@ Dastur kodini chuqur tahlil qilish va haqiqiy bank ko'chirmasi (`TurnoverOperati
 10. **Avtomatik Backup va 11-Varaqli Arxiv Tizimi:**
     - Bir bosishda butun bazaning 11 ta varaqdan iborat to'liq `.xlsx` kitobini yoki JSON snapshotini olish.
     - Oxirgi zaxiralashdan 7 kun o'tganda bosh sahifada avtomatik eslatuvchi banner va tezkor yuklab olish tugmasi.
+11. **Ko'p Valyutali Hisob va Jonli Markaziy Bank (CBU) Vidjeti:**
+    - Topbar qismida doimiy ko'rinib turuvchi USD, EUR, RUB kurslari va o'zgarish ko'rsatkichlari.
+    - Bir bosishda interaktiv Valyuta kalkulyatori va tarixiy kurslar qidiruvi.
+    - Bank harakatida 5110 (so'm) va 5210 (valyuta) operatsiyalarini alohida filtrlar bilan ko'rish.
+    - BHMS 22 bo'yicha 9540/9640 kurs farqlarini bir zumda hisoblab, rasmiy A4 dalolatnomasini chop etish.
 
 ---
 
 ## 5. Avtotestlar va Sifat Kafolati
 
-Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash, bank importi, kassa operatsiyalari, Didox API integratsiyasi, 1C ayirboshlash va zaxiralash (backup) modullari avtomatik testlar to'plami bilan to'liq qamrab olindi:
+Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash, bank importi, kassa operatsiyalari, Didox API integratsiyasi, 1C ayirboshlash, zaxiralash (backup) va ko'p valyutali CBU hisobi modullari avtomatik testlar to'plami bilan to'liq qamrab olindi:
 
 1. `node test-hisobkitob.js` (31 ta sinov)
 2. `node test-kontragent-tarixi.js` (15 ta sinov)
@@ -280,30 +309,31 @@ Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash
 7. `node test-didox-api.js` (10 ta sinov)
 8. `node test-1c-exchange.js` (10 ta sinov)
 9. `node test-backup-system.js` (7 ta sinov)
+10. `node test-valyuta-cbu.js` (17 ta sinov)
 
-**Jami 119 ta avtomat sinov 100% muvaffaqiyatli o'tdi:**
+**Jami 136 ta avtomat sinov 100% muvaffaqiyatli o'tdi:**
 
 ```
-=== 1C:KORXONA VA KLIENT-BANK AYIRBOSHLASH TESTLARI ===
-  ✓ 1. format1CDate va parse1CDate sanalarni to'g'ri o'girdi
-  ✓ 2. 1CClientBank eksport sarlavhasi va hisobvaraq qismi to'g'ri shakllandi
-  ✓ 3. 1CClientBank to'lov topshiriqnomasi (kirim/chiqim) to'g'ri yaratildi
-  ✓ 4. 1CClientBank parser boshlang'ich qoldiq va qatorlarni to'g'ri o'qidi
-  ✓ 5. 1CClientBank bank komissiyasini (xizmat) to'g'ri belgiladi
-  ✓ 6. 1CClientBank eksport va import ikki tomonlama (round-trip) mos keldi
-  ✓ 7. CommerceML 2.0 XML katalog va tovarlar tuzilmasini to'g'ri shakllantirdi
-  ✓ 8. CommerceML 2.0 XML dan tovarlar va kontragentlar to'g'ri ajratildi
-  ✓ 9. 1C EnterpriseData JSON sxemasi to'g'ri yaratildi
-  ✓ 10. 1C EnterpriseData JSON importi to'g'ri qabul qilindi
+=== KO'P VALYUTALI HISOB VA CBU KURSLARI TEST SUITE ===
+  ✓ 1. Rasmiy CBU JSON ob'ektini to'g'ri maydonlarga o'girishi kerak
+  ✓ 2. Kutilmagan yoki buzilgan satrlarni (probellar, vergullar) xatosiz tozalashi kerak
+  ✓ 3. Noto'g'ri yoki bo'sh ob'ekt kelsa null qaytarishi kerak
+  ✓ 4. UZS uchun har doim 1 qaytarishi kerak
+  ✓ 5. Keshda bo'lmaganda rasmiy fallback kurslarini (USD, EUR, RUB) berishi kerak
+  ✓ 6. Keshda mavjud bo'lganda keshdagi joriy kursni berishi kerak
+  ✓ 7. USD -> UZS konvertatsiyasi (500 USD @ 12,850 = 6,425,000 UZS)
+  ✓ 8. UZS -> USD konvertatsiyasi (12,850,000 UZS @ 12,850 = 1,000 USD)
+  ✓ 9. Cross-valyuta: USD -> EUR (13,900 / 12,850 nisbati bo'yicha)
+  ✓ 10. Qo'lda kiritilgan maxsus kurs (Custom Rate) bilan to'g'ri hisoblashi kerak
+  ✓ 11. 5210 bo'yicha valyuta summasi va kursi orqali UZS ekvivalenti to'g'ri chiqishi kerak
+  ✓ 12. 5210 bo'yicha ko'p operatsiyali qoldiqni hisoblash
+  ✓ 13. Valyuta kursi oshganda 9540 (Daromad) hosil bo'lishi va provodka to'g'ri shakllanishi kerak
+  ✓ 14. Valyuta kursi tushganda 9640 (Zarar) hosil bo'lishi va provodka to'g'ri shakllanishi kerak
+  ✓ 15. BANK_DB_MAP yangi valyuta maydonlarini (schyot, valyuta, valyuta_summa, kurs) o'z ichiga olishi kerak
+  ✓ 16. SETTINGS_DB_MAP valyuta_opening_balance maydonini o'z ichiga olishi kerak
+  ✓ 17. Valyuta kiritilmaganda ijobiy va salbiy kurs farqlari 0 bo'lib qolishi kerak
 
-=== TO'LIQ ZAXIRALASH (BACKUP) VA ESLATMA TIZIMI TESTLARI ===
-  ✓ 1. exportFullBackupXlsx barcha 11 ta varaqni to'liq yaratdi
-  ✓ 2. 11 ta varaqning har biriga tegishli qatorlar to'liq kiritildi
-  ✓ 3. exportFullBackupJson to'liq JSON snapshot yaratdi va versiya 2.0 ni saqladi
-  ✓ 4. checkBackupReminder yangi yoki zaxiralanmagan bazada eslatishni yoqdi
-  ✓ 5. checkBackupReminder 2 kunlik yangi zaxirada eslatish bermadi
-  ✓ 6. checkBackupReminder 8 kunlik eski zaxirada zaxiralash talab etildi deb qaytardi
-  ✓ 7. exportFullBackupXlsx oxirgi zaxira vaqtini localStorage ga saqladi
+>>> BARCHA 10 TA TEST SUITE 100% MUVAFFAQ QILINDI! <<<
 ```
 
 ---
@@ -314,7 +344,8 @@ Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash
 2. [x] **Didox / E-Faktura to'g'ridan-to'g'ri API integratsiyasi:** ✅ Bajarildi (Didox REST v1 & GNK E-faktura o'qish, api/didox.js serverless proksi, 1-klikda yuklab olish, Ombor va Kontragentlar avto-to'ldirilishi, 10 ta avtotest).
 3. [x] **1C:Korxona bilan ikki tomonlama sinxronizatsiya:** ✅ Bajarildi (1CClientBankExchange v1.03 matnli bank ayirboshlash, CommerceML 2.0 XML katalog va hujjatlar, EnterpriseData JSON, 3-tabli interaktiv modal, 10 ta avtotest).
 4. [x] **Avtomatik Backup tizimi:** ✅ Bajarildi (11 ta varaqli to'liq Excel kitobi, JSON snapshot, 7 kunlik tekshiruv, Dashboard ogohlantirish banneri va Sozlamalar integratsiyasi, 7 ta avtotest).
-5. [ ] **Ko'p valyutali hisob va Markaziy Bank (CBU) kursi integratsiyasi:** Valyuta hisobvaraqlari (5210), Markaziy Bankning kunlik rasmiy kurslari API integratsiyasi, kurs farqlari (ijobiy 9540 / salbiy 9640) avtomat hisobi.
+5. [x] **Ko'p valyutali hisob va Markaziy Bank (CBU) kursi integratsiyasi:** ✅ Bajarildi (5210 xorijiy valyuta hisobvarag'i, O'zbekiston Markaziy Banki ochiq API integratsiyasi, api/cbu.js serverless keshli proksi, Topbar valyuta vidjeti va kalkulyator modali, BHMS 22 bo'yicha 9540 Daromad / 9640 Zarar kurs farqlari dvigateli, A4 rasmiy qayta baholash dalolatnomasi, F1 va F2 hisobotlariga to'liq integratsiya, 17 ta avtotest).
 6. [ ] **Xodimlar davomati va elektron Tabel (T-13 shakli):** Ish kunlari va soatlarini qayd qilish, kasallik varaqasi va ta'til pullari kalkulyatsiyasi.
+
 
 
