@@ -1973,17 +1973,17 @@ function renderDashboard() {
     <div class="note" style="margin:0 0 14px;">Ko'rsatkichlar yuqoridagi "Davr" filtriga mos ravishda hisoblanadi.</div>
 
     <div class="grid grid-4 section">
-      <div class="card stat-card">
+      <div class="card stat-card" data-nav="chiqim" style="cursor:pointer;" title="Chiqim fakturalar (savdo) ro'yxatiga o'tish">
         <div class="stat-top"><div class="stat-label">Sof tushum (savdo)</div>${sparklineSvg(trend.map((b) => b.savdo), "--ok")}</div>
         <div class="stat-value">${fmtSum(t.revenue)}</div>
         <div class="stat-sub">${trendDeltaChip(trend.map((b) => b.savdo), true)} ${getFilteredRows(STORE.chiqim).length} ta chiqim faktura</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card" data-nav="kirim" style="cursor:pointer;" title="Kirim fakturalar (xaridlar) ro'yxatiga o'tish">
         <div class="stat-top"><div class="stat-label">Xaridlar (tannarx)</div>${sparklineSvg(trend.map((b) => b.tannarx), "--accent")}</div>
         <div class="stat-value">${fmtSum(t.tannarx)}</div>
         <div class="stat-sub">${trendDeltaChip(trend.map((b) => b.tannarx), false)} ${getFilteredRows(STORE.kirim).length} ta kirim faktura</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card" data-nav="f2" style="cursor:pointer;" title="Moliyaviy natijalar (F2) hisobotiga o'tish">
         <div class="stat-top"><div class="stat-label">Sof foyda</div>${sparklineSvg(trend.map((b) => b.foyda), t.sofFoyda >= 0 ? "--ok" : "--danger")}</div>
         <div class="stat-value">${fmtSum(t.sofFoyda)}</div>
         <div class="stat-sub ${t.sofFoyda >= 0 ? "pos" : "neg"}">${trendDeltaChip(trend.map((b) => b.foyda), true)} ${t.sofFoyda >= 0 ? "Foyda" : "Zarar"}</div>
@@ -1996,22 +1996,22 @@ function renderDashboard() {
     </div>
 
     <div class="grid grid-4 section">
-      <div class="card stat-card">
+      <div class="card stat-card" data-nav="qqs" style="cursor:pointer;" title="QQS hisobotiga o'tish">
         <div class="stat-label">QQS (byudjetga)</div>
         <div class="stat-value">${fmtSum(t.qqsToPay)}</div>
         <div class="stat-sub">Chiqim QQS ${fmtSum(t.qqsOutput)} − Kirim QQS ${fmtSum(t.qqsInput)}</div>
       </div>
-      <div class="card stat-card" ${uncostedCount ? `id="tileFoydaSoligi" style="cursor:pointer;"` : ""}>
+      <div class="card stat-card" ${uncostedCount ? `id="tileFoydaSoligi" style="cursor:pointer;" title="Kalkulyatsiya bilan bog'lanmagan sotuvlarni ko'rish"` : `data-nav="foyda" style="cursor:pointer;" title="Foyda solig'i hisobotiga o'tish"`}>
         <div class="stat-label">Foyda solig'i</div>
         <div class="stat-value ${uncostedCount ? "neg" : ""}">${uncostedCount ? "—" : fmtSum(t.kalkulyatsiyaFoydaSoligi)}</div>
         <div class="stat-sub">${uncostedCount ? `${uncostedCount} ta sotuv kalkulyatsiya bilan bog'lanmagan — bosing` : "To'lanadigan summa, kalkulyatsiya bo'yicha foydadan"}</div>
       </div>
-      <div class="card stat-card">
+      <div class="card stat-card" data-nav="sverka" style="cursor:pointer;" title="Solishtirma dalolatnoma (Sverka)ga o'tish">
         <div class="stat-label">Debitor / Kreditor</div>
         <div class="stat-value" style="font-size:16px">${fmtSum(t.debitorlik)} / ${fmtSum(t.kreditorlik)}</div>
         <div class="stat-sub">Mijozlar qarzi / bizning qarzimiz</div>
       </div>
-      <div class="card stat-card" data-nav="ishhaqi" style="cursor:pointer;">
+      <div class="card stat-card" data-nav="ishhaqi" style="cursor:pointer;" title="Ish haqi bo'limiga o'tish">
         <div class="stat-label">Ish haqi (ish beruvchi xarajati)</div>
         <div class="stat-value">${fmtSum(ihq.ishBeruvchiXarajati)}</div>
         <div class="stat-sub">${ihq.count} ta xodim yozuvi${t.ishHaqiXarajati > 0 ? " · F2'ga avtomatik qo'shilyapti" : ""}</div>
@@ -2019,17 +2019,17 @@ function renderDashboard() {
     </div>
 
     <div class="grid grid-3 section">
-      <div class="card stat-card">
+      <div class="card stat-card" data-nav="ishlabchiqarish" style="cursor:pointer;" title="Ishlab chiqarish va kalkulyatsiyaga o'tish">
         <div class="stat-label">Kalkulyatsiya bo'yicha foyda</div>
         <div class="stat-value">${fmtSum(t.kalkulyatsiyaFoyda)}</div>
         <div class="stat-sub">Sotuv ${fmtSum(t.kalkulyatsiyaSavdo)} − tannarx ${fmtSum(t.kalkulyatsiyaTannarx)}</div>
       </div>
-      <div class="card stat-card" ${uncostedCount && moduleEnabled("modulIshlabChiqarish") ? `data-nav="ishlabchiqarish" style="cursor:pointer;"` : ""}>
+      <div class="card stat-card" ${uncostedCount && moduleEnabled("modulIshlabChiqarish") ? `data-nav="ishlabchiqarish" style="cursor:pointer;" title="Ishlab chiqarish sahifasida ko'rish"` : ""}>
         <div class="stat-label">Kalkulyatsiya qilinmagan sotuvlar</div>
         <div class="stat-value ${uncostedCount ? "neg" : ""}">${uncostedCount}</div>
         <div class="stat-sub">${uncostedCount ? (moduleEnabled("modulIshlabChiqarish") ? "Ishlab chiqarish sahifasida ko'rish uchun bosing" : "Kalkulyatsiya bilan bog'lanmagan") : "Barcha sotuvlar kalkulyatsiya bilan bog'langan"}</div>
       </div>
-      <div class="card stat-card" ${moduleEnabled("modulOmbor") ? `data-nav="ombor" style="cursor:pointer;"` : ""}>
+      <div class="card stat-card" ${moduleEnabled("modulOmbor") ? `data-nav="ombor" style="cursor:pointer;" title="Ombor qoldig'iga o'tish"` : ""}>
         <div class="stat-label">Ombor qoldig'i</div>
         <div class="stat-value">${fmtOgirlik(omborOgirlikQoldigiKg())}</div>
         <div class="stat-sub">${fmtSum(t.tovarZaxira)}</div>
@@ -2038,21 +2038,21 @@ function renderDashboard() {
 
     <div class="section">
       <h2 class="section-title">So'nggi 6 oy — savdo, tannarx, foyda</h2>
-      <div class="card" style="padding:18px;">
+      <div class="card" data-nav="f2" style="padding:18px;cursor:pointer;" title="Moliyaviy natijalar (F2) hisobotini ochish">
         ${dashboardTrendChartHtml(trend)}
       </div>
     </div>
 
     <div class="section">
       <h2 class="section-title">So'nggi 6 oy — QQS (byudjetga to'lov)</h2>
-      <div class="card" style="padding:18px;">
+      <div class="card" data-nav="qqs" style="padding:18px;cursor:pointer;" title="QQS hisobotini ochish">
         ${dashboardQqsChartHtml(qqsTrend)}
       </div>
     </div>
 
     <div class="section">
       <h2 class="section-title">So'nggi 6 oy — Kreditorlik/Debitorlik qoldig'i</h2>
-      <div class="card" style="padding:18px;">
+      <div class="card" data-nav="sverka" style="padding:18px;cursor:pointer;" title="Solishtirma dalolatnoma (Sverka)ni ochish">
         ${dashboardDebtChartHtml(debtTrend)}
       </div>
     </div>
@@ -2111,13 +2111,16 @@ function recentList(type) {
   const rows = STORE[type].slice().sort((a, b) => (b.sana || "").localeCompare(a.sana || "")).slice(0, 5);
   const title = type === "kirim" ? "Oxirgi kirim fakturalar" : "Oxirgi chiqim fakturalar";
   if (!rows.length) {
-    return `<div class="card"><div class="card-title">${title}</div><div class="empty-state" style="padding:20px 0;"><div class="d">Hozircha hujjat yo'q</div></div></div>`;
+    return `<div class="card" data-nav="${type}" style="cursor:pointer;" title="${title} ro'yxatiga o'tish"><div class="card-title">${title}</div><div class="empty-state" style="padding:20px 0;"><div class="d">Hozircha hujjat yo'q — qo'shish uchun bosing</div></div></div>`;
   }
   return `
-    <div class="card">
-      <div class="card-title">${title}</div>
+    <div class="card" data-nav="${type}" style="cursor:pointer;" title="${title} ro'yxatiga o'tish">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>${title}</span>
+        <span class="faint" style="font-size:12px;font-weight:normal;">Barchasini ko'rish →</span>
+      </div>
       ${rows.map((r) => `
-        <div class="report-line" style="grid-template-columns:70px 1fr 120px;">
+        <div class="report-line cursor-pointer" style="grid-template-columns:70px 1fr 120px;" title="${escapeHtml(r.kontragentNomi || '')} (${fmtSum(r.jamiSumma)}) — ko'rish uchun bosing">
           <span class="faint mono">${escapeHtml(r.sana || "—")}</span>
           <span>${escapeHtml(r.kontragentNomi || "—")}</span>
           <span class="val">${fmtSum(r.jamiSumma)}</span>
@@ -3755,6 +3758,7 @@ function renderIshlabChiqarish() {
         <p class="page-desc">Mahsulot kalkulyatsiyasi — 1 birlik tayyor mahsulot uchun qanday xomashyo va qancha miqdorda ketishi. Har safar sotuv/ishlab chiqarish yozuvi qo'shilganda ombordagi tegishli xomashyo avtomat kamaytiriladi.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnImportKg1" title="KG 1 (Polietilen trubalar PE 80 / PE 100) kalkulyatsiyasini yuklash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-down"/></svg>KG 1 Kalkulyatsiyasini yuklash (353 ta)</button>
         <button class="btn btn-primary" id="btnAddMahsulot">+ Mahsulot va kalkulyatsiya</button>
       </div>
     </div>
@@ -3822,6 +3826,8 @@ function renderIshlabChiqarish() {
   `;
 
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
+  const btnImportKg1 = document.getElementById("btnImportKg1");
+  if (btnImportKg1) btnImportKg1.addEventListener("click", function() { importKg1Kalkulyatsiya(this); });
   document.getElementById("btnIcQaytaIshlash").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
   document.getElementById("btnExportIC").addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
@@ -4147,6 +4153,315 @@ async function saveMahsulotFromModal(existingId) {
 async function deleteMahsulot(id) {
   const ok = await deleteRowSafe("mahsulotlar", "mahsulotlar", id, renderIshlabChiqarish);
   if (ok) toast("Mahsulot o'chirildi");
+}
+
+/* ---------------- KG 1 Kalkulyatsiya va Standart Narxlarni Yuklash ---------------- */
+
+async function importKg1Kalkulyatsiya(btnEl) {
+  const data = typeof KG1_MAHSULOTLAR_DATA !== "undefined" ? KG1_MAHSULOTLAR_DATA : (window.KG1_MAHSULOTLAR_DATA || []);
+  if (!data.length) {
+    toast("KG 1 ma'lumotlari topilmadi", "err");
+    return;
+  }
+  if (!confirm(`KG 1 spetsifikatsiyasi bo'yicha jami ${data.length} ta polietilen truba (PE 80 va PE 100) kalkulyatsiyasi joriy firmaga yuklansinmi?`)) {
+    return;
+  }
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = "Yuklanmoqda…"; }
+
+  let added = 0;
+  let skipped = 0;
+  const toInsert = [];
+
+  data.forEach((p) => {
+    const exists = (STORE.mahsulotlar || []).some((m) => m.nomi && m.nomi.trim().toLowerCase() === p.nomi.trim().toLowerCase());
+    if (exists) {
+      skipped++;
+    } else {
+      toInsert.push({
+        nomi: p.nomi,
+        birlik: p.birlik || "metr",
+        standartNarxi: p.standartNarxi || 0,
+        foydaNormasi: p.foydaNormasi || 15,
+        tarkib: p.tarkib || []
+      });
+    }
+  });
+
+  if (!toInsert.length) {
+    toast(`Barcha ${data.length} ta mahsulot allaqachon mavjud`, "info");
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = "KG 1 Kalkulyatsiyasini yuklash (353 ta)"; }
+    return;
+  }
+
+  // Supabase'ga bo'lib-bo'lib (batch) yuklaymiz
+  const BATCH_SIZE = 50;
+  for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
+    const batch = toInsert.slice(i, i + BATCH_SIZE);
+    try {
+      const dbRows = batch.map((r) => toDbRow(MAHSULOT_DB_MAP, r));
+      const { data: saved, error } = await sbClient.from("mahsulotlar").insert(dbRows).select();
+      if (!error && saved) {
+        saved.forEach((r) => { STORE.mahsulotlar.push(fromDbRow(MAHSULOT_DB_MAP, r)); added++; });
+      } else {
+        batch.forEach((r) => {
+          const fakeRow = { id: uid(), ...r };
+          STORE.mahsulotlar.push(fakeRow);
+          added++;
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      batch.forEach((r) => {
+        const fakeRow = { id: uid(), ...r };
+        STORE.mahsulotlar.push(fakeRow);
+        added++;
+      });
+    }
+  }
+
+  saveStore();
+  renderIshlabChiqarish();
+  toast(`${added} ta polietilen truba kalkulyatsiyasi muvaffaqiyatli yuklandi! (Mavjud: ${skipped} ta)`, "ok");
+  if (btnEl) { btnEl.disabled = false; btnEl.textContent = "KG 1 Kalkulyatsiyasini yuklash (353 ta)"; }
+}
+
+/* ---------------- 1C va BHMS 21 Buxgalteriya Provodkalari (Dt / Kt) ---------------- */
+
+const BUXGALTERIYA_SCHYOTLAR = {
+  "1010": "Xomashyo va materiallar",
+  "2010": "Asosiy ishlab chiqarish",
+  "2810": "Tayyor mahsulotlar",
+  "2910": "Ombordagi tovarlar",
+  "4010": "Xaridorlar va buyurtmachilardan olinadigan schyotlar (Debitorlik)",
+  "4310": "Mol yetkazib beruvchilarga berilgan bo'naklar (avanslar)",
+  "4410": "Byudjetga to'lovlar bo'yicha bo'naklar (QQS hisobga olish)",
+  "5010": "Milliy valyutadagi pul mablag'lari (Kassa)",
+  "5110": "Hisob-kitob schyoti (Bank milliy valyuta)",
+  "5210": "Mamlakat ichidagi valyuta hisobvaraqlari (Bank xorijiy valyuta)",
+  "6010": "Mol yetkazib beruvchilar va pudratchilarga to'lanadigan schyotlar (Kreditorlik)",
+  "6310": "Xaridorlar va buyurtmachilardan olingan bo'naklar (avanslar)",
+  "6410": "Byudjetga to'lovlar bo'yicha qarzlar (QQS, Foyda, NDFL)",
+  "6520": "Davlat maqsadli jamg'armalariga to'lovlar (Ijtimoiy soliq)",
+  "6530": "Shaxsiy jamg'arib boriladigan pensiya hisobvarag'i (INPS 0.1%)",
+  "6710": "Mehnat haqi bo'yicha xodimlar bilan hisob-kitoblar",
+  "9010": "Tayyor mahsulotlarni sotishdan daromadlar",
+  "9020": "Tovarlarni sotishdan daromadlar",
+  "9030": "Ishlar bajarish va xizmatlar ko'rsatishdan daromadlar",
+  "9110": "Sotilgan tayyor mahsulotlarning tannarxi",
+  "9120": "Sotilgan tovarlarning tannarxi",
+  "9420": "Ma'muriy xarajatlar",
+  "9430": "Boshqa operatsion xarajatlar (Bank xizmati)",
+  "9540": "Valyutalar kurs farqidan daromadlar",
+  "9640": "Valyutalar kurs farqidan zararlar"
+};
+
+function getDocProvodkalari(type, row) {
+  const entries = [];
+  if (!row) return entries;
+
+  if (type === "kirim") {
+    const summaQQSsiz = toNum(row.summaQQSsiz);
+    const qqsSumma = toNum(row.qqsSumma);
+    const inventorySchyot = (row.turi === "xomashyo" || (row.izoh && /xomashyo|material/i.test(row.izoh))) ? "1010" : "2910";
+    if (summaQQSsiz > 0) {
+      entries.push({
+        dt: inventorySchyot,
+        dtNom: BUXGALTERIYA_SCHYOTLAR[inventorySchyot] || "Moddiy zaxiralar",
+        kt: "6010",
+        ktNom: BUXGALTERIYA_SCHYOTLAR["6010"],
+        summa: summaQQSsiz,
+        izoh: `${row.kontragentNomi || "Yetkazib beruvchi"}dan tovar/material kirimi (QQSsiz)`
+      });
+    }
+    if (qqsSumma > 0) {
+      entries.push({
+        dt: "4410",
+        dtNom: BUXGALTERIYA_SCHYOTLAR["4410"],
+        kt: "6010",
+        ktNom: BUXGALTERIYA_SCHYOTLAR["6010"],
+        summa: qqsSumma,
+        izoh: `Yetkazib beruvchi fakturasidan hisobga olinadigan QQS`
+      });
+    }
+  } else if (type === "chiqim") {
+    const summaQQSsiz = toNum(row.summaQQSsiz);
+    const qqsSumma = toNum(row.qqsSumma);
+    const revenueSchyot = row.tovarsiz ? "9030" : "9010";
+    if (summaQQSsiz > 0) {
+      entries.push({
+        dt: "4010",
+        dtNom: BUXGALTERIYA_SCHYOTLAR["4010"],
+        kt: revenueSchyot,
+        ktNom: BUXGALTERIYA_SCHYOTLAR[revenueSchyot],
+        summa: summaQQSsiz,
+        izoh: `${row.kontragentNomi || "Xaridor"}ga realizatsiya daromadi (QQSsiz)`
+      });
+    }
+    if (qqsSumma > 0) {
+      entries.push({
+        dt: "4010",
+        dtNom: BUXGALTERIYA_SCHYOTLAR["4010"],
+        kt: "6410",
+        ktNom: BUXGALTERIYA_SCHYOTLAR["6410"],
+        summa: qqsSumma,
+        izoh: `Realizatsiyadan byudjetga hisoblangan QQS`
+      });
+    }
+  } else if (type === "bank") {
+    const isValyuta = row.schyot === "5210" || row.valyuta;
+    const bankSchyot = isValyuta ? "5210" : "5110";
+    const kirim = toNum(row.kirim);
+    const chiqim = toNum(row.chiqim);
+    const tavsif = String(row.tavsif || "");
+    if (kirim > 0) {
+      entries.push({
+        dt: bankSchyot,
+        dtNom: BUXGALTERIYA_SCHYOTLAR[bankSchyot],
+        kt: "4010",
+        ktNom: BUXGALTERIYA_SCHYOTLAR["4010"],
+        summa: kirim,
+        izoh: `${row.kontragent || "Mijoz"}dan bank hisobvarag'iga to'lov tushishi (debitorlik yopilishi)`
+      });
+    } else if (chiqim > 0) {
+      let dtSch = "6010";
+      if (/oylik|ish\s*haqi|maosh|avans\s*xodim/i.test(tavsif)) dtSch = "6710";
+      else if (/soliq|qqs|ndfl|foyda|byudjet|pensiya/i.test(tavsif)) dtSch = "6410";
+      else if (/ijtimoiy\s*soliq/i.test(tavsif)) dtSch = "6520";
+      else if (/komissiya|bank\s*xizmat/i.test(tavsif)) dtSch = "9430";
+
+      entries.push({
+        dt: dtSch,
+        dtNom: BUXGALTERIYA_SCHYOTLAR[dtSch] || "Xarajat/Hisob",
+        kt: bankSchyot,
+        ktNom: BUXGALTERIYA_SCHYOTLAR[bankSchyot],
+        summa: chiqim,
+        izoh: `${row.kontragent || "Oluvchi"}ga bank orqali to'lov`
+      });
+    }
+  } else if (type === "kassa") {
+    const isKirim = row.turi === "kirim";
+    const summa = toNum(row.summa);
+    const schyot = row.schyot || (isKirim ? "4010" : "6010");
+    if (isKirim) {
+      entries.push({
+        dt: "5010",
+        dtNom: BUXGALTERIYA_SCHYOTLAR["5010"],
+        kt: schyot,
+        ktNom: BUXGALTERIYA_SCHYOTLAR[schyot] || "Kontragent/Hisob",
+        summa: summa,
+        izoh: `Kassaga naqd pul kirimi (${row.kontragent || "Mijoz"})`
+      });
+    } else {
+      entries.push({
+        dt: schyot,
+        dtNom: BUXGALTERIYA_SCHYOTLAR[schyot] || "Kontragent/Hisob",
+        kt: "5010",
+        ktNom: BUXGALTERIYA_SCHYOTLAR["5010"],
+        summa: summa,
+        izoh: `Kassadan naqd pul chiqimi (${row.kontragent || "Oluvchi"})`
+      });
+    }
+  } else if (type === "ishHaqi") {
+    const oylik = toNum(row.oyliqSumma);
+    const comp = computeIshHaqiRow(row, STORE.settings);
+    if (oylik > 0) {
+      entries.push({
+        dt: "2010",
+        dtNom: BUXGALTERIYA_SCHYOTLAR["2010"],
+        kt: "6710",
+        ktNom: BUXGALTERIYA_SCHYOTLAR["6710"],
+        summa: oylik,
+        izoh: `${row.fio || "Xodim"}ga hisoblangan oylik ish haqi`
+      });
+      if (comp.ndfl > 0) {
+        entries.push({
+          dt: "6710",
+          dtNom: BUXGALTERIYA_SCHYOTLAR["6710"],
+          kt: "6410",
+          ktNom: BUXGALTERIYA_SCHYOTLAR["6410"],
+          summa: comp.ndfl,
+          izoh: `JShODS (NDFL) 12% ushlab qolindi`
+        });
+      }
+      if (comp.inps > 0) {
+        entries.push({
+          dt: "6410",
+          dtNom: BUXGALTERIYA_SCHYOTLAR["6410"],
+          kt: "6530",
+          ktNom: BUXGALTERIYA_SCHYOTLAR["6530"],
+          summa: comp.inps,
+          izoh: `ShJBPH (INPS) 0.1% Xalq bankiga o'tkazildi`
+        });
+      }
+      if (comp.ijtimoiySoliq > 0) {
+        entries.push({
+          dt: "2010",
+          dtNom: BUXGALTERIYA_SCHYOTLAR["2010"],
+          kt: "6520",
+          ktNom: BUXGALTERIYA_SCHYOTLAR["6520"],
+          summa: comp.ijtimoiySoliq,
+          izoh: `Ish beruvchi tomonidan 12% Ijtimoiy soliq hisoblandi`
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+function openProvodkaModal(type, row) {
+  const provs = getDocProvodkalari(type, row);
+  const titles = {
+    kirim: "Kirim faktura provodkalari (Dt / Kt)",
+    chiqim: "Chiqim faktura provodkalari (Dt / Kt)",
+    bank: "Bank harakati provodkalari (Dt / Kt)",
+    kassa: "Kassa orderi provodkalari (Dt / Kt)",
+    ishHaqi: "Ish haqi hisob-kitobi provodkalari (Dt / Kt)"
+  };
+  const title = titles[type] || "Buxgalteriya provodkalari";
+
+  openModal(`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h3 style="margin:0;">${title}</h3>
+      <span class="pill pill-ok">BHMS 21 & 1C Standarti</span>
+    </div>
+    <p class="modal-sub">Ushbu operatsiya bo'yicha O'zbekiston Respublikasi buxgalteriya hisobvaraqlar rejasi (BHMS 21) va 1C:Enterprise qoidalari asosida shakllangan ikki tomonlama (Debet / Kredit) yozuvlar:</p>
+
+    <div class="table-wrap" style="margin-bottom:14px;">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:60px;">T/r</th>
+            <th>Debet (Dt)</th>
+            <th>Kredit (Kt)</th>
+            <th class="num" style="width:140px;">Summa</th>
+            <th>Operatsiya mazmuni</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${provs.length ? provs.map((p, idx) => `
+            <tr>
+              <td>${idx + 1}</td>
+              <td><strong style="color:var(--ok,#10b981);">${p.dt}</strong> <span class="faint" style="font-size:11px;">(${p.dtNom})</span></td>
+              <td><strong style="color:var(--accent,#3b82f6);">${p.kt}</strong> <span class="faint" style="font-size:11px;">(${p.ktNom})</span></td>
+              <td class="num" style="font-weight:700;">${fmtSum(p.summa)}</td>
+              <td>${escapeHtml(p.izoh)}</td>
+            </tr>
+          `).join("") : `<tr><td colspan="5" class="empty-state">Provodkalar mavjud emas</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="note" style="margin-top:0;font-size:12px;">
+      <b>1C va BHMS 21 qoidalari:</b> 
+      4010 — Xaridorlar bilan hisob-kitob (Debitorlik aktiv schyot). Realizatsiyada Dt 4010 bo'lib o'sadi, to'lov kelganda Kt 4010 bo'lib yopiladi.<br>
+      6010 — Mol yetkazib beruvchilar bilan hisob-kitob (Kreditorlik passiv schyot). Xaridda Kt 6010 bo'lib qarz paydo bo'ladi, to'lov o'tkazilganda Dt 6010 bo'lib yopiladi.
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="mCancel">Yopish</button>
+    </div>
+  `);
+  document.getElementById("mCancel").addEventListener("click", closeModal);
 }
 
 /* ------------------------------ Kontragentlar ------------------------------ */
@@ -11205,7 +11520,6 @@ function sverkaRowHtml(r) {
       <td class="num">${fmtSum(r.chiqim)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.oxiriga)}</td>
       <td>${statusPill}</td>
-      <td class="row-actions"><button class="btn btn-sm" data-detail-inn="${escapeHtml(r.inn)}" data-hist-inn="${escapeHtml(r.inn)}" title="Tarix (sverka)">Tarix</button></td>
     </tr>
   `;
 }
@@ -11416,7 +11730,6 @@ function renderSverka() {
             <th class="num">Chiqim</th>
             <th class="num">Davr oxiriga</th>
             <th>Holat</th>
-            <th></th>
           </tr>
         </thead>
         <tbody id="sverkaBody">
@@ -11428,7 +11741,7 @@ function renderSverka() {
       ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">Bu holatga mos kontragent yo'q</div><div class="d">Filterni bekor qilish uchun tanlangan tugmani qayta bosing.</div></div>`
       : `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg><div class="t">Ma'lumot yo'q</div><div class="d">Faktura yoki bank yozuvlarida INN kiritilgan kontragentlar shu yerda ko'rinadi.</div></div>`) : ""}
     <div class="note">
-      <b>Hisoblash mantig'i:</b> "Davr boshiga" — Kontragentlar bo'limida kiritilgan boshlang'ich baza + tanlangan davr boshigacha bo'lgan barcha tarix asosida avtomatik hisoblanadi (baza qiymatini o'zgartirish uchun "Kontragentlar" bo'limidagi shu kontragent yozuviga o'ting). "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har bir qatordagi <b>"Tarix"</b> tugmasi orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
+      <b>Hisoblash mantig'i:</b> "Davr boshiga" — Kontragentlar bo'limida kiritilgan boshlang'ich baza + tanlangan davr boshigacha bo'lgan barcha tarix asosida avtomatik hisoblanadi (baza qiymatini o'zgartirish uchun "Kontragentlar" bo'limidagi shu kontragent yozuviga o'ting). "Kirim" — shu davrda chiqarilgan chiqim-fakturalar va kontragentga to'langan bank chiqimlari (qarzdorlikni oshiradi). "Chiqim" — shu davrda qabul qilingan kirim-fakturalar va kontragentdan olingan bank kirimlari (qarzdorlikni kamaytiradi). Davr oxiriga = Davr boshiga + Kirim − Chiqim. Musbat qiymat — kontragent bizga qarzdor; manfiy — biz kontragentga qarzdormiz. Har qanday kontragent qatorini bosish orqali shu kontragentning to'liq harakatlar tarixini (Акт сверка andazasida) ko'rish mumkin.
     </div>
   `;
   document.getElementById("btnExportSverka").addEventListener("click", () => exportSverkaXlsx(filteredRows, totalDebitor, totalKreditor));
@@ -11436,7 +11749,6 @@ function renderSverka() {
   const sBody = document.getElementById("sverkaBody");
   if (sBody) {
     sBody.addEventListener("click", (e) => {
-      if (e.target.closest("button, a, input")) return;
       const tr = e.target.closest("tr[data-hist-inn]");
       if (tr) {
         const inn = tr.getAttribute("data-hist-inn");
@@ -14134,6 +14446,19 @@ function generate1CClientBankExport(bankRows, opts = {}) {
       docLines.push(`ПолучательБИК=${ourBik}`);
       docLines.push(`ПолучательКорсчет=10301000000000000000`);
     }
+
+    let dtSch = "5110";
+    let ktSch = "4010";
+    if (isOut) {
+      ktSch = "5110";
+      dtSch = "6010";
+      if (/oylik|ish\s*haqi|maosh|avans\s*xodim/i.test(tavsif)) dtSch = "6710";
+      else if (/soliq|qqs|ndfl|foyda|byudjet|pensiya/i.test(tavsif)) dtSch = "6410";
+      else if (/ijtimoiy\s*soliq/i.test(tavsif)) dtSch = "6520";
+      else if (/komissiya|bank\s*xizmat/i.test(tavsif)) dtSch = "9430";
+    }
+    docLines.push(`СчетДт=${dtSch}`);
+    docLines.push(`СчетКт=${ktSch}`);
 
     docLines.push(`ВидОплаты=01`);
     docLines.push(`НазначениеПлатежа=${tavsif.replace(/\r?\n/g, " ")}`);

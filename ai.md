@@ -405,6 +405,69 @@ Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash
 4. [x] **Avtomatik Backup tizimi:** ✅ Bajarildi (11 ta varaqli to'liq Excel kitobi, JSON snapshot, 7 kunlik tekshiruv, Dashboard ogohlantirish banneri va Sozlamalar integratsiyasi, 7 ta avtotest).
 5. [x] **Ko'p valyutali hisob va Markaziy Bank (CBU) kursi integratsiyasi:** ✅ Bajarildi (5210 xorijiy valyuta hisobvarag'i, O'zbekiston Markaziy Banki ochiq API integratsiyasi, api/cbu.js serverless keshli proksi, Topbar valyuta vidjeti va kalkulyator modali, BHMS 22 bo'yicha 9540 Daromad / 9640 Zarar kurs farqlari dvigateli, A4 rasmiy qayta baholash dalolatnomasi, F1 va F2 hisobotlariga to'liq integratsiya, 17 ta avtotest).
 6. [x] **Xodimlar davomati va elektron Tabel (T-13 shakli):** ✅ Bajarildi (O'zbekiston T-13 shaklidagi elektron davomat tabeli, 5/6 kunlik ish grafiki va UZ_BAYRAMLARI taqvim me'yori, bayram arafasi -1 soat hisobi, MK 233-modda bo'yicha 25.3 bo'luvchili ta'til (otpusknoy) kalkulyatori, VM 1136-sonli nizom bo'yicha kasallik nafaqasi kalkulyatori, 1-klikda reja bo'yicha to'ldirish, faktik oylik hisobi va Ish haqiga sinxronizatsiya, NDFL/INPS/Ijtimoiy soliq integratsiyasi, rasmiy A4 albom T-13 chop etish va Excel eksport, 13 ta avtotest).
+7. [x] **312804494 firmasi uchun polietilen quvurlar kalkulyatsiyasi (KG 1):** ✅ Bajarildi (`KG 1.pdf` dan 8 betdagi jami 353 ta mahsulot xususiyatlari — PE 80 va PE 100, diametr Ø20..Ø1200 mm, SDR 41..SDR 7.4, bosim 3.2..25 bar, devor qalinligi, og'irligi kg va narxlari to'liq o'qilib, xomashyo sarf me'yori (`tarkib: [{nomi: "Polietilen granulasi...", norma: ogirlikKg}]`) bilan `kg1_mahsulotlar.json`, `kg1_data.js` va `supabase/seed_kalkulyatsiya_312804494.sql` yaratildi. Ishlab chiqarish bo'limida 1-klikda yuklash tugmasi qo'shildi).
+8. [x] **Bosh sahifa (Dashboard) ko'rsatkichlari interaktiv navigatsiyasi:** ✅ Bajarildi (Dashboarddagi barcha kartochkalar, jadvallar va so'nggi hujjatlar satrlari `data-nav` orqali to'g'ridan-to'g'ri tegishli manba sahifalariga — Kirim, Chiqim, F2, QQS, Foyda solig'i, Sverka, Ishlab chiqarish, Omborga biriktirildi).
+9. [x] **Solishtirma dalolatnoma (Sverka) UX soddalashtirilishi:** ✅ Bajarildi (Alohida "Tarix" tugmasi olib tashlandi, butun qator interaktiv bosiladigan qilindi va to'liq o'zaro hisob-kitoblar ko'chirmasi ochilishi ta'minlandi).
+10. [x] **1C andazasidagi Debet/Kredit qoidalarini birlashtirish va 4010-6010 ni avtomatlashtirish:** ✅ Bajarildi (O'zbekiston BHMS 21 hisobvaraqlar rejasi bo'yicha yagona `BUXGALTERIYA_SCHYOTLAR` va `getDocProvodkalari` dvigateli joriy etildi. 1CClientBank formatida `СчетДт` va `СчетКт` avtomatik to'ldirilishi, operatsiya bo'yicha Dt/Kt provodkalarini ko'rish modali `openProvodkaModal` yaratildi).
+11. [x] **O'zbekiston Respublikasi buxgalteriya qonunchiligiga moslashtirish:** ✅ Bajarildi (Yangi Mehnat Kodeksi MK 233, Soliq Kodeksi 12% QQS / 12% NDFL / 12% Ijtimoiy soliq / 15% Foyda solig'i / 4% AOS, BHMS 21, BHMS 22 kurs farqlari 9540/9640, Markaziy Bank 3420 kassa intizomi, E-faktura / MXIK integratsiyasi).
+12. [x] **Ish paneli (Operativ boshqaruv / Dashboard) bilan integratsiya mezonlari:** ✅ Tahlil qilindi va arxitekturaviy spetsifikatsiyasi shakllantirildi (Kassa-bank likvidligi, soliq muddatlari kalendari, muddati o'tgan debitor/kreditorlik, tannarxsiz sotuvlar ogohlantirishi, davomat bo'shliqlari).
+
+---
+
+## 7. Yangi Integratsiyalar va Funksiyalar Tafsiloti
+
+### 7.1. 312804494 Firmasi Polietilen Quvurlar Kalkulyatsiyasi (KG 1)
+- **Manba:** `KG 1.pdf` (8 sahifadan iborat rasmiy texnik narxnoma va kalkulyatsiya jadvali).
+- **Qamrovi:** 
+  - PE 80 va PE 100 markali polietilen quvurlari.
+  - Diametrlar: Ø20 mm dan Ø1200 mm gacha.
+  - SDR toifalari: SDR 41, SDR 33, SDR 26, SDR 21, SDR 17.6, SDR 17, SDR 13.6, SDR 11, SDR 9, SDR 7.4.
+  - Bosim: 3.2 bardan 25 bargacha.
+  - Jami mahsulot turlari: 353 ta.
+- **Buxgalteriya va tannarx hisob-kitobi:**
+  - 1 metr polietilen quvur ishlab chiqarish uchun sarflanadigan asosiy xomashyo (Polietilen granulasi) miqdori uning sof og'irligi (kg) ga teng. Masalan: `PE 100 SDR 17 Ø110x6.6mm (10 bar)` uchun 1 metriga `2.16 kg` granula sarflanadi.
+  - Dasturda har bir mahsulot uchun `tarkib` massivi avtomatik shakllantirilgan:
+    ```json
+    {
+      "nomi": "PE 100 SDR 17 d 110 x 6.6 mm (10 bar)",
+      "birlik": "metr",
+      "reja_narx": 25920,
+      "tarkib": [
+        {
+          "nomi": "Polietilen granulasi PE 100",
+          "birlik": "kg",
+          "norma": 2.16
+        }
+      ]
+    }
+    ```
+- **Baza bilan integratsiya:**
+  - `kg1_mahsulotlar.json` va `kg1_data.js` orqali frontendga ulandi.
+  - `supabase/seed_kalkulyatsiya_312804494.sql` orqali PostgreSQL bazasiga avtomatik kiritish ta'minlandi.
+  - Ishlab chiqarish sahifasida firma INN `312804494` bo'lganda (yoki alohida tugma orqali) 1-klikda barcha 353 ta kalkulyatsiyani import qilish imkoniyati yaratildi.
+
+### 7.2. 1C Andazasidagi Debet va Kredit Qoidalarining Birlashishi (BHMS 21)
+O'zbekiston Respublikasi Buxgalteriya Hisobining Milliy Standartlari (BHMS 21) asosida quyidagi hisobvaraqlar avtomatik korrespondensiyaga bog'landi:
+
+| Operatsiya turi | Debet (Dt) | Kredit (Kt) | Izoh |
+| :--- | :---: | :---: | :--- |
+| Tovar/xomashyo xaridi (Kirim) | **2910 / 1010** | **6010** | Mol yetkazib beruvchilarga qarz vujudga keladi |
+| Kirimdagi hisobga olinadigan QQS | **4410** | **6010** | QQS alohida ajratib olinadi |
+| Mahsulot/tovar sotuvi (Chiqim) | **4010** | **9010 / 9020** | Xaridordan debitorlik qarzi va tushum |
+| Chiqimdagi hisoblangan QQS | **4010** | **6410** | Byudjetga to'lanishi lozim bo'lgan QQS |
+| Sotilgan tovar tannarxini hisobdan chiqarish | **9110 / 9120** | **2910 / 2810** | Mahsulot ombordan tannarxi bo'yicha chiqadi |
+| Ishlab chiqarishga xomashyo berish | **2010** | **1010** | Asosiy ishlab chiqarish xarajatlari |
+| Tayyor mahsulotni omborga qabul qilish | **2810** | **2010** | Tayyor polietilen quvur omborga olinadi |
+| Xaridordan bankka to'lov kelishi | **5110** | **4010** | 4010 debitorlik yopiladi |
+| Yetkazib beruvchiga bankdan to'lov | **6010** | **5110** | 6010 kreditorlik yopiladi |
+| Bank xizmatlari va komissiyasi | **9430** | **5110** | Boshqa operatsion xarajatlar |
+| Ish haqiga to'lov (plastik/karta) | **6710** | **5110** | Ish haqi qarzini so'ndirish |
+| Byudjetga soliq to'lovlari | **6410 / 6520** | **5110** | Soliqlar va ijtimoiy to'lovlar |
+| Xaridordan kassa orqali naqd pul olish | **5010** | **4010** | Kassa kirim orderi (KO-1) |
+| Yetkazib beruvchiga naqd to'lov | **6010** | **5010** | Kassa chiqim orderi (KO-2) |
+| Kurs ijobiy farqi (valyuta oshganda) | **5210** | **9540** | Moliyaviy faoliyat daromadi (BHMS 22) |
+| Kurs salbiy farqi (valyuta tushganda) | **9640** | **5210** | Moliyaviy faoliyat xarajati (BHMS 22) |
+
 
 
 
