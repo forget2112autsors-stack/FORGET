@@ -10,7 +10,25 @@
 const THEME_KEY = "bux2112_theme";
 const FILTERS_KEY = "bux2112_filters";
 
-const STATUS_INVALID = ["Отказ", "Bekor qilingan", "Отменён", "Отменен", "Rad etilgan", "Не настоящий"];
+function normStatus(s) {
+  if (s == null) return "";
+  return String(s)
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ");
+}
+
+const STATUS_INVALID = [
+  "отказ",
+  "bekor qilingan",
+  "отменен",
+  "отклонен",
+  "отозван",
+  "rad etilgan",
+  "не настоящий"
+];
+const STATUS_INVALID_SET = new Set(STATUS_INVALID.map(normStatus));
 
 // Bitta umumiy Supabase loyihasiga ulanadigan client (index.html'dagi
 // SUPABASE_URL/SUPABASE_ANON_KEY orqali) — initSupabaseClient() ishga
@@ -44,6 +62,13 @@ const BANK_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami", kontragent: "kontragent",
   kontragentInn: "kontragent_inn", tavsif: "tavsif", kirim: "kirim", chiqim: "chiqim", faylId: "fayl_id",
   xizmat: "xizmat"
+};
+const KASSA_DB_MAP = {
+  sana: "sana", hujjatRaqami: "hujjat_raqami", turi: "turi",
+  kontragent: "kontragent", kontragentInn: "kontragent_inn",
+  schyot: "schyot", summa: "summa", tavsif: "tavsif",
+  kimdanKimga: "kimdan_kimga", hujjatAsosi: "hujjat_asosi",
+  pasport: "pasport", faylId: "fayl_id", createdAt: "created_at"
 };
 const FAYL_DB_MAP = { bolim: "bolim", faylNomi: "fayl_nomi", hajmi: "hajmi", sana: "sana" };
 const ISHHAQI_DB_MAP = {
@@ -102,12 +127,12 @@ const ASOSIY_VOSITA_DB_MAP = {
 // yuklamalari" sahifasi va faylni o'chirishda kaskadli tozalash hech qanday
 // qo'shimcha kod yozmasdan avtomat ishlab ketadi.
 const TABLE_MAPS = {
-  kirim: INVOICE_DB_MAP, chiqim: INVOICE_DB_MAP, bank: BANK_DB_MAP, ishHaqi: ISHHAQI_DB_MAP, ombor: OMBOR_DB_MAP,
+  kirim: INVOICE_DB_MAP, chiqim: INVOICE_DB_MAP, bank: BANK_DB_MAP, kassa: KASSA_DB_MAP, ishHaqi: ISHHAQI_DB_MAP, ombor: OMBOR_DB_MAP,
   mahsulotlar: MAHSULOT_DB_MAP, ishlabChiqarish: ISHLAB_CHIQARISH_DB_MAP, fayllar: FAYL_DB_MAP,
   kontragentlar: KONTRAGENT_DB_MAP, asosiyVositalar: ASOSIY_VOSITA_DB_MAP, chiqimTafsil: CHIQIM_TAFSIL_DB_MAP
 };
 const TABLE_NAMES = {
-  kirim: "kirim", chiqim: "chiqim", bank: "bank", ishHaqi: "ish_haqi", ombor: "ombor",
+  kirim: "kirim", chiqim: "chiqim", bank: "bank", kassa: "kassa", ishHaqi: "ish_haqi", ombor: "ombor",
   mahsulotlar: "mahsulotlar", ishlabChiqarish: "ishlab_chiqarish", fayllar: "fayllar",
   kontragentlar: "kontragentlar", asosiyVositalar: "asosiy_vositalar", chiqimTafsil: "chiqim_tafsil"
 };
@@ -119,6 +144,7 @@ const SETTINGS_DB_MAP = {
   ishHaqiAvtoXarajat: "ish_haqi_avto_xarajat",
   boshqaDaromad: "boshqa_daromad", imtiyozlar: "imtiyozlar", tannarxManual: "tannarx_manual",
   bankOpeningBalance: "bank_opening_balance",
+  kassaOpeningBalance: "kassa_opening_balance",
   f1AsosiyVositalar: "f1_asosiy_vositalar", f1TovarZaxira: "f1_tovar_zaxira", f1Kassa: "f1_kassa",
   f1UstavKapitali: "f1_ustav_kapitali", f1OldingiFoyda: "f1_oldingi_foyda", f1UzoqMajburiyat: "f1_uzoq_majburiyat",
   ijtimoiySoliqStavka: "ijtimoiy_soliq_stavka", ndflStavka: "ndfl_stavka", inpsStavka: "inps_stavka",
@@ -136,7 +162,11 @@ const SETTINGS_DB_MAP = {
   yonalish: "yonalish",
   modulOmbor: "modul_ombor",
   modulIshlabChiqarish: "modul_ishlab_chiqarish",
-  modulAsosiyVositalar: "modul_asosiy_vositalar"
+  modulAsosiyVositalar: "modul_asosiy_vositalar",
+  // Didox / E-Faktura API integratsiyasi
+  didoxToken: "didox_token",
+  didoxApiUrl: "didox_api_url",
+  didoxAutoOmbor: "didox_auto_ombor"
 };
 
 // Excel/CSV fayllardan o'qilgan matnlarda ba'zan uzilgan unicode surrogate
@@ -208,7 +238,7 @@ async function saveSettingsToDb(partial) {
 // faqat ogohlantiradi (saqlashni bloklamaydi).
 const SETTINGS_RATE_FIELDS = ["qqsStavka", "foydaStavka", "ijtimoiySoliqStavka", "ndflStavka", "inpsStavka"];
 const SETTINGS_AMOUNT_FIELDS = [
-  "davrXarajati", "moliyaviyXarajat", "boshqaDaromad", "imtiyozlar", "bankOpeningBalance",
+  "davrXarajati", "moliyaviyXarajat", "boshqaDaromad", "imtiyozlar", "bankOpeningBalance", "kassaOpeningBalance",
   "f1AsosiyVositalar", "f1TovarZaxira", "f1Kassa", "f1UstavKapitali", "f1OldingiFoyda", "f1UzoqMajburiyat"
 ];
 
@@ -524,6 +554,7 @@ function defaultStore() {
       imtiyozlar: 0,
       tannarxManual: null,
       bankOpeningBalance: 0,
+      kassaOpeningBalance: 0,
       filterFrom: "",
       filterTo: "",
       // F1 uchun qo'lda kiritiladigan ko'rsatkichlar
@@ -549,11 +580,15 @@ function defaultStore() {
       yonalish: "",
       modulOmbor: null,
       modulIshlabChiqarish: null,
-      modulAsosiyVositalar: null
+      modulAsosiyVositalar: null,
+      didoxToken: "",
+      didoxApiUrl: "https://api.didox.uz/v1",
+      didoxAutoOmbor: true
     },
     kirim: [],
     chiqim: [],
     bank: [],
+    kassa: [],
     ishHaqi: [],
     ombor: [],
     mahsulotlar: [],
@@ -711,6 +746,13 @@ async function loadAllData() {
     console.error(err);
     STORE.chiqimTafsil = [];
   }
+  try {
+    const kassa = await fetchAllRows("kassa");
+    STORE.kassa = kassa.map((r) => fromDbRow(KASSA_DB_MAP, r));
+  } catch (err) {
+    console.error(err);
+    STORE.kassa = [];
+  }
   recomputeAllPaymentStatus();
   DATA_LOADED = true;
   if (markDataReady) { markDataReady(); markDataReady = null; }
@@ -781,6 +823,50 @@ function recomputeAllPaymentStatus() {
   recomputePaymentStatusForType("chiqim");
 }
 
+function tolanmaganQoldiqAsOf(type, asOfDate) {
+  const bankCol = type === "chiqim" ? "kirim" : "chiqim";
+  const availableByInn = {};
+  STORE.bank.forEach((b) => {
+    if (asOfDate && b.sana && b.sana > asOfDate) return;
+    const inn = (b.kontragentInn || "").trim();
+    if (!inn) return;
+    availableByInn[inn] = (availableByInn[inn] || 0) + toNum(b[bankCol]);
+  });
+
+  let totalUnpaid = 0;
+  const byInn = {};
+
+  STORE[type].forEach((r) => {
+    if (asOfDate && r.sana && r.sana > asOfDate) return;
+    if (!isValidStatus(r.status)) return;
+    const inn = (r.kontragentInn || "").trim();
+    if (!inn) {
+      if (!r.tolandi) totalUnpaid += toNum(r.jamiSumma);
+      return;
+    }
+    if (r.tolandiOverride) {
+      if (!r.tolandi) totalUnpaid += toNum(r.jamiSumma);
+      return;
+    }
+    (byInn[inn] = byInn[inn] || []).push(r);
+  });
+
+  Object.keys(byInn).forEach((inn) => {
+    let avail = availableByInn[inn] || 0;
+    const list = byInn[inn].slice().sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
+    list.forEach((r) => {
+      const amt = toNum(r.jamiSumma);
+      if (amt > 0 && avail >= amt - 1) {
+        avail -= amt;
+      } else {
+        totalUnpaid += amt;
+      }
+    });
+  });
+
+  return totalUnpaid;
+}
+
 /* ------------------------------ utilities ------------------------------ */
 
 function uid() {
@@ -790,7 +876,28 @@ function uid() {
 function toNum(v) {
   if (v === "" || v === null || v === undefined) return 0;
   if (typeof v === "number") return isFinite(v) ? v : 0;
-  const cleaned = String(v).replace(/[^\d.,-]/g, "").replace(/,/g, ".");
+  let s = String(v).trim().replace(/\s+/g, "");
+  if (!s) return 0;
+  if (s.includes(",") && s.includes(".")) {
+    if (s.lastIndexOf(",") < s.lastIndexOf(".")) {
+      s = s.replace(/,/g, "");
+    } else {
+      s = s.replace(/\./g, "").replace(/,/g, ".");
+    }
+  } else if (s.includes(",")) {
+    const commaCount = (s.match(/,/g) || []).length;
+    if (commaCount > 1 || /^\d{1,3},\d{3}$/.test(s)) {
+      s = s.replace(/,/g, "");
+    } else {
+      s = s.replace(/,/g, ".");
+    }
+  } else if (s.includes(".")) {
+    const dotCount = (s.match(/\./g) || []).length;
+    if (dotCount > 1) {
+      s = s.replace(/\./g, "");
+    }
+  }
+  const cleaned = s.replace(/[^\d.-]/g, "");
   const n = parseFloat(cleaned);
   return isFinite(n) ? n : 0;
 }
@@ -845,7 +952,10 @@ function localDateISO(d) {
 }
 
 function isValidStatus(status) {
-  return !STATUS_INVALID.includes(status);
+  if (status == null) return true;
+  const n = normStatus(status);
+  if (!n) return true;
+  return !STATUS_INVALID_SET.has(n);
 }
 
 function inRange(sana, from, to) {
@@ -1055,14 +1165,20 @@ function computeTotals() {
   const asOfKirim = STORE.kirim.filter((r) => !to || r.sana <= to);
   const asOfChiqim = STORE.chiqim.filter((r) => !to || r.sana <= to);
   const asOfBank = STORE.bank.filter((r) => !to || r.sana <= to);
+  const asOfKassa = (STORE.kassa || []).filter((r) => !to || r.sana <= to);
 
   const bankKirim = asOfBank.reduce((a, r) => a + toNum(r.kirim), 0);
   const bankChiqim = asOfBank.reduce((a, r) => a + toNum(r.chiqim), 0);
   const bankOpening = toNum(s.bankOpeningBalance);
   const bankQoldiq = bankOpening + bankKirim - bankChiqim;
 
-  const kreditorlik = asOfKirim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi ? a + toNum(r.jamiSumma) : a), 0);
-  const debitorlik = asOfChiqim.reduce((a, r) => (isValidStatus(r.status) && !r.tolandi ? a + toNum(r.jamiSumma) : a), 0);
+  const kassaKirim = asOfKassa.reduce((a, r) => r.turi === "kirim" ? a + toNum(r.summa) : a, 0);
+  const kassaChiqim = asOfKassa.reduce((a, r) => r.turi === "chiqim" ? a + toNum(r.summa) : a, 0);
+  const kassaOpening = toNum(s.kassaOpeningBalance);
+  const kassaQoldiq = kassaOpening + kassaKirim - kassaChiqim;
+
+  const kreditorlik = tolanmaganQoldiqAsOf("kirim", to);
+  const debitorlik = tolanmaganQoldiqAsOf("chiqim", to);
 
   // Kalkulyatsiya (chiqim_tafsil) asosida davr uchun sotilgan mahsulotlarning
   // xomashyo tannarxi — F2/Foyda solig'ida "Sotilgan mahsulot tannarxi"
@@ -1139,7 +1255,7 @@ function computeTotals() {
   const qqsToPay = qqsOutput - qqsInput;
 
   // ---- F1 ----
-  const pulMablaglari = bankQoldiq + toNum(s.f1Kassa);
+  const pulMablaglari = bankQoldiq + ((STORE.kassa && STORE.kassa.length) || kassaOpening ? kassaQoldiq : toNum(s.f1Kassa));
   // "Asosiy vositalar" sahifasidagi ro'yxat asosida, "to" (davr oxiri) sanasiga
   // nisbatan hisoblangan qoldiq qiymatlar yig'indisi — endi qo'lda kiritilmaydi.
   const asosiyVositalar = STORE.asosiyVositalar.reduce((sum, a) => sum + asosiyVositaQoldiqQiymati(a, to), 0);
@@ -1159,6 +1275,7 @@ function computeTotals() {
     kirimBase, kirimQQS, kirimJami,
     chiqimBase, chiqimQQS, chiqimJami,
     bankKirim, bankChiqim, bankOpening, bankQoldiq,
+    kassaKirim, kassaChiqim, kassaOpening, kassaQoldiq,
     kreditorlik, debitorlik,
     revenue, tannarx, kalkulyatsiyaTannarx, taxminiyTannarx, kalkulyatsiyasizSoni, omborKamomadSoni, kalkulyatsiyaSavdo, kalkulyatsiyaFoyda, kalkulyatsiyaSoliqBazasi, kalkulyatsiyaFoydaSoligi, yalpiFoyda, davrXarajati, ishHaqiXarajati, asosiyFaoliyatFoyda,
     moliyaviyXarajat, soliqqachaFoyda, foydaSoligi, sofFoyda,
@@ -1176,6 +1293,7 @@ const PAGES = {
   kirim: { render: () => renderInvoiceTable("kirim") },
   chiqim: { render: () => renderInvoiceTable("chiqim") },
   bank: { render: renderBank },
+  kassa: { render: renderKassa },
   ombor: { render: renderOmbor },
   kontragentlar: { render: renderKontragentlar },
   asosiyvositalar: { render: renderAsosiyVositalar },
@@ -1286,6 +1404,8 @@ function updateNavBadges() {
   document.getElementById("navKirimCount").textContent = STORE.kirim.length;
   document.getElementById("navChiqimCount").textContent = STORE.chiqim.length;
   document.getElementById("navBankCount").textContent = STORE.bank.length;
+  const elKassa = document.getElementById("navKassaCount");
+  if (elKassa) elKassa.textContent = (STORE.kassa || []).length;
   document.getElementById("navIshHaqiCount").textContent = STORE.ishHaqi.length;
   document.getElementById("navOmborCount").textContent = STORE.ombor.length;
   document.getElementById("navIshlabChiqarishCount").textContent = STORE.ishlabChiqarish.length;
@@ -1379,22 +1499,28 @@ function computeGlobalSearchResults(query) {
 
   STORE.kontragentlar.forEach((k) => {
     if ((k.nomi || "").toLowerCase().includes(q) || (k.inn || "").toLowerCase().includes(q)) {
-      results.push({ type: "Kontragent", label: `${k.nomi || "—"}${k.inn ? " · " + k.inn : ""}`, page: "kontragentlar" });
+      results.push({ type: "Kontragent", label: `${k.nomi || "—"}${k.inn ? " · " + k.inn : ""}`, page: "kontragentlar", inn: (k.inn || "").trim() });
     }
   });
   STORE.kirim.forEach((r) => {
-    if ((r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kontragentNomi || "").toLowerCase().includes(q)) {
-      results.push({ type: "Kirim", label: `${r.hujjatRaqami || "—"} · ${r.kontragentNomi || ""}`, page: "kirim" });
+    if ((r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kontragentNomi || "").toLowerCase().includes(q) || (r.kontragentInn || "").toLowerCase().includes(q)) {
+      results.push({ type: "Kirim", label: `${r.hujjatRaqami || "—"} · ${r.kontragentNomi || ""}${r.kontragentInn ? ` (${r.kontragentInn})` : ""}`, page: "kirim" });
     }
   });
   STORE.chiqim.forEach((r) => {
-    if ((r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kontragentNomi || "").toLowerCase().includes(q)) {
-      results.push({ type: "Chiqim", label: `${r.hujjatRaqami || "—"} · ${r.kontragentNomi || ""}`, page: "chiqim" });
+    if ((r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kontragentNomi || "").toLowerCase().includes(q) || (r.kontragentInn || "").toLowerCase().includes(q)) {
+      results.push({ type: "Chiqim", label: `${r.hujjatRaqami || "—"} · ${r.kontragentNomi || ""}${r.kontragentInn ? ` (${r.kontragentInn})` : ""}`, page: "chiqim" });
     }
   });
   STORE.bank.forEach((r) => {
-    if ((r.tavsif || "").toLowerCase().includes(q) || (r.kontragent || "").toLowerCase().includes(q) || (r.hujjatRaqami || "").toLowerCase().includes(q)) {
-      results.push({ type: "Bank", label: `${r.kontragent || r.tavsif || "—"}`, page: "bank" });
+    if ((r.tavsif || "").toLowerCase().includes(q) || (r.kontragent || "").toLowerCase().includes(q) || (r.kontragentInn || "").toLowerCase().includes(q) || (r.hujjatRaqami || "").toLowerCase().includes(q)) {
+      results.push({ type: "Bank", label: `${r.kontragent || r.tavsif || "—"}${r.kontragentInn ? ` (${r.kontragentInn})` : ""}`, page: "bank" });
+    }
+  });
+  (STORE.kassa || []).forEach((r) => {
+    if ((r.tavsif || "").toLowerCase().includes(q) || (r.kontragent || "").toLowerCase().includes(q) || (r.kontragentInn || "").toLowerCase().includes(q) || (r.hujjatRaqami || "").toLowerCase().includes(q) || (r.kimdanKimga || "").toLowerCase().includes(q)) {
+      const turiLabel = r.turi === "chiqim" ? "KO-2 Chiqim" : "KO-1 Kirim";
+      results.push({ type: "Kassa", label: `${r.hujjatRaqami ? r.hujjatRaqami + " · " : ""}${turiLabel} · ${r.kimdanKimga || r.kontragent || r.tavsif || "—"}`, page: "kassa" });
     }
   });
   STORE.ishHaqi.forEach((r) => {
@@ -1424,7 +1550,11 @@ function renderTopbarSearchResults(results, hasQuery) {
       e.preventDefault();
       const r = results[Number(itemEl.dataset.idx)];
       if (!r) return;
-      navigate(r.page);
+      if (r.type === "Kontragent" && r.inn && typeof openSverkaDetail === "function") {
+        openSverkaDetail(r.inn, "kontragentlar");
+      } else {
+        navigate(r.page);
+      }
       const input = document.getElementById("topbarSearchInput");
       if (input) input.value = "";
       box.classList.remove("show");
@@ -1445,6 +1575,19 @@ function bindGlobalSearch() {
   input.addEventListener("blur", () => { setTimeout(() => box.classList.remove("show"), 150); });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { input.value = ""; box.classList.remove("show"); input.blur(); }
+  });
+
+  // Global hotkeys: Ctrl+K / Cmd+K (qidiruv) va Escape (modal yopish)
+  window.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+    if (e.key === "Escape") {
+      const modal = document.querySelector(".modal");
+      if (modal) closeModal();
+    }
   });
 }
 
@@ -1768,6 +1911,27 @@ function renderDashboard() {
       </div>
     </div>
 
+    ${(() => {
+      const bInfo = checkBackupReminder();
+      if (bInfo && bInfo.needsBackup) {
+        const txt = bInfo.lastDate
+          ? `Oxirgi to'liq zaxira olinganiga ${bInfo.daysSince} kun bo'ldi (${bInfo.lastDate}). Ma'lumotlar xavfsizligi uchun zaxira olish tavsiya etiladi.`
+          : "Tizim ma'lumotlarining zaxira nusxasi hali olinmagan. Ma'lumotlar xavfsizligi uchun zaxira olish tavsiya etiladi.";
+        return `
+          <div class="backup-alert-banner" style="display:flex;align-items:center;justify-content:space-between;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.25);border-radius:8px;padding:10px 14px;margin:0 0 14px;gap:12px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);">
+              <svg class="ic" viewBox="0 0 24 24" style="color:#d97706;width:20px;height:20px;flex-shrink:0;"><use href="#i-warn"/></svg>
+              <span><strong>Zaxira eslatmasi:</strong> ${txt}</span>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0;">
+              <button class="btn btn-sm btn-primary" id="btnDashQuickBackup" style="background:#d97706;border-color:#d97706;"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-doc"/></svg>Zaxiralash (.xlsx)</button>
+            </div>
+          </div>
+        `;
+      }
+      return "";
+    })()}
+
     <div class="note" style="margin:0 0 14px;">Ko'rsatkichlar yuqoridagi "Davr" filtriga mos ravishda hisoblanadi.</div>
 
     <div class="grid grid-4 section">
@@ -1786,10 +1950,10 @@ function renderDashboard() {
         <div class="stat-value">${fmtSum(t.sofFoyda)}</div>
         <div class="stat-sub ${t.sofFoyda >= 0 ? "pos" : "neg"}">${trendDeltaChip(trend.map((b) => b.foyda), true)} ${t.sofFoyda >= 0 ? "Foyda" : "Zarar"}</div>
       </div>
-      <div class="card stat-card">
-        <div class="stat-label">Bank qoldig'i</div>
-        <div class="stat-value">${fmtSum(t.bankQoldiq)}</div>
-        <div class="stat-sub">${STORE.bank.length} ta bank operatsiyasi</div>
+      <div class="card stat-card" data-nav="bank" style="cursor:pointer;" title="Bank va Kassa (pul mablag'lari)">
+        <div class="stat-label">Pul mablag'lari (Bank + Kassa)</div>
+        <div class="stat-value">${fmtSum(t.pulMablaglari)}</div>
+        <div class="stat-sub">Bank: ${fmtSum(t.bankQoldiq)} · Kassa: ${fmtSum(t.kassaQoldiq)}</div>
       </div>
     </div>
 
@@ -1882,6 +2046,8 @@ function renderDashboard() {
   bindDashboardDebtChart(debtTrend);
   const tileFoydaSoligi = document.getElementById("tileFoydaSoligi");
   if (tileFoydaSoligi) tileFoydaSoligi.addEventListener("click", () => openFoydaSoligiTalabModal(uncostedCount));
+  const btnDashQuickBackup = document.getElementById("btnDashQuickBackup");
+  if (btnDashQuickBackup) btnDashQuickBackup.addEventListener("click", exportFullBackupXlsx);
 }
 
 // Bosh sahifadagi "Foyda solig'i" yorlig'i kalkulyatsiya bo'yicha foydadan
@@ -2095,6 +2261,7 @@ function renderInvoiceTable(type) {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
+        <button class="btn" id="btnDidoxSync" title="Didox.uz orqali elektron hisobfakturalarni to'g'ridan-to'g'ri yuklab olish"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px;"><use href="#i-cloud-download"/></svg>Didox API</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
@@ -2148,12 +2315,14 @@ function renderInvoiceTable(type) {
         <tbody id="invoiceBody"></tbody>
       </table>
     </div>
-    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg><div class="t">${INVOICE_DUP_FILTER[type] ? "Takrorlangan hujjat topilmadi" : "Hujjatlar yo'q"}</div><div class="d">${INVOICE_DUP_FILTER[type] ? "Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuv yo'q." : `"Excel'dan import" tugmasi orqali didox.uz eksport faylini yuklang yoki qo'lda qo'shing.`}</div></div>` : ""}
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg><div class="t">${INVOICE_DUP_FILTER[type] ? "Takrorlangan hujjat topilmadi" : "Hujjatlar yo'q"}</div><div class="d">${INVOICE_DUP_FILTER[type] ? "Hujjat raqami+sana+summa+kontragent bo'yicha bir xil yozuv yo'q." : `"Excel'dan import" yoki "Didox API" tugmasi orqali hisobfakturalarni yuklang.`}</div></div>` : ""}
     ${kontragentlarDatalistHtml()}
   `;
 
   document.getElementById("btnAddRow").addEventListener("click", () => addInvoiceRow(type));
   document.getElementById("btnImport").addEventListener("click", () => openImportModal(type));
+  const btnDidox = document.getElementById("btnDidoxSync");
+  if (btnDidox) btnDidox.addEventListener("click", () => openDidoxSyncModal(type));
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: STORE[type], storeType: type,
     fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "kontragentNomi", label: "Kontragent nomi" }],
@@ -2242,6 +2411,7 @@ function invoiceRowHtml(type, r, isDup) {
       <td class="num"><input class="cell-input num num-fmt" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
       <td class="row-actions">
+        ${kontragentHistoryBtnHtml(r.kontragentInn, type)}
         ${type === "chiqim" ? `<button class="icon-btn" data-kalk="${r.id}" title="Kalkulyatsiya — sotilgan mahsulotlar va ombordan sarf"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>` : ""}
         ${type === "kirim" ? `<button class="icon-btn" data-view="${r.id}" title="Hujjatni ko'rish — mahsulot tarkibi va chop etish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>` : ""}
         <button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
@@ -2645,8 +2815,7 @@ function cmpOmbor(a, b) {
 // kamomad (yetishmovchilik) bo'lsa: ilgari kirim bo'lgan bo'lsa sabab="kam" va
 // yetmagan qism oxirgi ma'lum partiya narxida baholanadi (tannarx kam
 // ko'rsatilmasin); umuman kirim bo'lmagan bo'lsa sabab="kirim_yoq", narx 0.
-function buildFifoLedger(nomi) {
-  const rows = STORE.ombor.filter((r) => r.nomi === nomi).slice().sort(cmpOmbor);
+function buildFifoLedgerFromRows(rows) {
   const layers = [];        // {qty, unit}
   let lastUnit = 0, hadKirim = false;
   const byDoc = new Map();
@@ -2699,14 +2868,39 @@ function buildFifoLedger(nomi) {
   };
 }
 
+function buildAllFifoLedgers() {
+  const byName = new Map();
+  STORE.ombor.forEach((r) => {
+    const n = (r.nomi || "").trim();
+    if (!n) return;
+    let list = byName.get(n);
+    if (!list) { list = []; byName.set(n, list); }
+    list.push(r);
+  });
+  const ledgers = new Map();
+  byName.forEach((rows, n) => {
+    rows.sort(cmpOmbor);
+    ledgers.set(n, buildFifoLedgerFromRows(rows));
+  });
+  return ledgers;
+}
+
+function buildFifoLedger(nomi) {
+  return fifoLedger(nomi);
+}
+
 // Render doirasidagi kesh — invalidateFifo() har mutatsiyada (yoki sahifa
 // qayta chizilishida) uni bo'shatadi.
 let FIFO_LEDGERS = null;
 function invalidateFifo() { FIFO_LEDGERS = null; CHIQIM_HOLAT_CACHE = null; }
 function fifoLedger(nomi) {
-  if (!FIFO_LEDGERS) FIFO_LEDGERS = new Map();
-  let l = FIFO_LEDGERS.get(nomi);
-  if (!l) { l = buildFifoLedger(nomi); FIFO_LEDGERS.set(nomi, l); }
+  if (!FIFO_LEDGERS) FIFO_LEDGERS = buildAllFifoLedgers();
+  const key = (nomi || "").trim();
+  let l = FIFO_LEDGERS.get(key);
+  if (!l) {
+    l = buildFifoLedgerFromRows([]);
+    FIFO_LEDGERS.set(key, l);
+  }
   return l;
 }
 
@@ -2830,6 +3024,7 @@ function renderOmborKirim() {
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
         <button class="btn" id="btnUnifyNomi">Nomlarni birlashtirish</button>
+        <button class="btn" id="btnQaytaIshlashKirim">🔄 Qayta ishlash</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
     </div>
@@ -2874,6 +3069,7 @@ function renderOmborKirim() {
   document.getElementById("btnAddRow").addEventListener("click", () => addOmborRow());
   document.getElementById("btnImport").addEventListener("click", () => openOmborImportModal());
   document.getElementById("btnUnifyNomi").addEventListener("click", () => openOmborMergeNomiModal("kirim"));
+  document.getElementById("btnQaytaIshlashKirim").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: omborKirimRows(), storeType: "ombor",
     fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "nomi", label: "Nomi" }],
@@ -2889,6 +3085,7 @@ function renderOmborKirim() {
 
 function omborChiqimRowHtml(r) {
   const icId = (r.hujjatRaqami || "").startsWith("IC-") ? r.hujjatRaqami.slice(3) : "";
+  const qiDoc = (r.hujjatRaqami || "").startsWith("QI-") ? r.hujjatRaqami : "";
   return `
     <tr data-id="${r.id}">
       <td class="mono">${escapeHtml(r.sana || "—")}</td>
@@ -2901,7 +3098,10 @@ function omborChiqimRowHtml(r) {
       <td class="num">${fmtSum(r.qqsSumma)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(r.kontragentNomi || "")}">${escapeHtml(r.kontragentNomi || "")}</td>
-      <td class="row-actions"><button class="icon-btn" data-del-chiqim="${r.id}" data-ic="${icId}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
+      <td class="row-actions">
+        ${qiDoc ? `<button class="icon-btn" data-print-qi="${escapeHtml(qiDoc)}" title="Qayta ishlash dalolatnomasi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>` : ""}
+        <button class="icon-btn" data-del-chiqim="${r.id}" data-ic="${icId}" data-qi="${escapeHtml(qiDoc)}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+      </td>
     </tr>
   `;
 }
@@ -2922,6 +3122,7 @@ function renderOmborChiqim() {
         <button class="btn" id="btnFindReplaceChiqim">Izlash va almashtirish</button>
         <button class="btn" id="btnImportChiqim">Excel'dan import</button>
         <button class="btn" id="btnUnifyNomiChiqim">Nomlarni birlashtirish</button>
+        <button class="btn" id="btnQaytaIshlashChiqim">🔄 Qayta ishlash</button>
         <button class="btn btn-primary" id="btnAddChiqim">+ Chiqim qo'shish</button>
       </div>
     </div>
@@ -2954,6 +3155,7 @@ function renderOmborChiqim() {
   document.getElementById("btnAddChiqim").addEventListener("click", () => openOmborChiqimModal());
   document.getElementById("btnImportChiqim").addEventListener("click", () => openOmborChiqimImportModal());
   document.getElementById("btnUnifyNomiChiqim").addEventListener("click", () => openOmborMergeNomiModal("chiqim"));
+  document.getElementById("btnQaytaIshlashChiqim").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnFindReplaceChiqim").addEventListener("click", () => openFindReplaceModal({
     rows: chiqimRows, storeType: "ombor",
     fields: [{ key: "nomi", label: "Nomi" }, { key: "kontragentNomi", label: "Manba / izoh" }],
@@ -2961,10 +3163,19 @@ function renderOmborChiqim() {
   }));
   const body = document.getElementById("omborChiqimBody");
   if (body) body.addEventListener("click", (e) => {
-    const delId = e.target.dataset.delChiqim;
+    const printQi = e.target.closest("[data-print-qi]");
+    if (printQi) {
+      printQaytaIshlashDalolatnomaByDoc(printQi.dataset.printQi);
+      return;
+    }
+    const delBtn = e.target.closest("[data-del-chiqim]");
+    if (!delBtn) return;
+    const delId = delBtn.dataset.delChiqim;
     if (!delId) return;
-    const icId = e.target.dataset.ic;
+    const icId = delBtn.dataset.ic;
+    const qiDoc = delBtn.dataset.qi;
     if (icId) deleteIshlabChiqarishEntry(icId);
+    else if (qiDoc) deleteQaytaIshlashEntry(qiDoc);
     else deleteOmborChiqimRow(delId);
   });
 }
@@ -3001,6 +3212,7 @@ function renderOmborQoldiq() {
         <p class="page-desc">Har bir xomashyo/mahsulot bo'yicha joriy zaxira — jami kirim va sarflangan (chiqim) miqdor asosida, barcha davr uchun.</p>
       </div>
       <div class="page-actions">
+        <button class="btn btn-primary" id="btnQaytaIshlashQoldiq">🔄 Qayta ishlash</button>
         <button class="btn" id="btnPrintOmborQoldiq">PDF (chop etish)</button>
         <button class="btn" id="btnExportOmborQoldiq">Excel'ga eksport</button>
       </div>
@@ -3023,7 +3235,7 @@ function renderOmborQoldiq() {
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Maxsulot nomi</th><th>O'lchov birligi</th><th class="num">Kirim (jami)</th><th class="num">Sarflandi (chiqim)</th><th class="num">Qoldiq</th><th class="num">Qoldiq qiymati (so'm)</th></tr>
+          <tr><th>Maxsulot nomi</th><th>O'lchov birligi</th><th class="num">Kirim (jami)</th><th class="num">Sarflandi (chiqim)</th><th class="num">Qoldiq</th><th class="num">Qoldiq qiymati (so'm)</th><th style="width:110px;text-align:center;">Amal</th></tr>
         </thead>
         <tbody>
           ${qoldiq.length ? qoldiq.map((q) => `
@@ -3034,14 +3246,19 @@ function renderOmborQoldiq() {
               <td class="num">${fmt(q.chiqim, 3)}</td>
               <td class="num" style="font-weight:700;${q.qoldiq < 0 ? "color:var(--danger,#e5484d)" : ""}">${fmt(q.qoldiq, 3)}</td>
               <td class="num">${fmtSum(q.qiymat)}</td>
+              <td style="text-align:center;">
+                ${q.qoldiq > 0 ? `<button class="btn btn-sm" data-qi-nomi="${escapeHtml(q.nomi)}" title="Ushbu mahsulotni qayta ishlash" style="padding:2px 8px;font-size:11.5px;white-space:nowrap;">🔄 Qayta ishlash</button>` : `<span class="faint">—</span>`}
+              </td>
             </tr>
-          `).join("") : `<tr><td colspan="6" class="faint" style="text-align:center;padding:16px;">Hozircha ma'lumot yo'q</td></tr>`}
+          `).join("") : `<tr><td colspan="7" class="faint" style="text-align:center;padding:16px;">Hozircha ma'lumot yo'q</td></tr>`}
         </tbody>
       </table>
     </div>
   `;
 
   bindOmborTabBar(main);
+  document.getElementById("btnQaytaIshlashQoldiq").addEventListener("click", () => openOmborQaytaIshlashModal());
+  main.querySelectorAll("[data-qi-nomi]").forEach((b) => b.addEventListener("click", () => openOmborQaytaIshlashModal(b.dataset.qiNomi)));
   document.getElementById("btnExportOmborQoldiq").addEventListener("click", () => exportOmborQoldiqXlsx(qoldiq));
   document.getElementById("btnPrintOmborQoldiq").addEventListener("click", () => printOmborQoldiqPdf(qoldiq));
 }
@@ -3120,6 +3337,7 @@ function printOmborQoldiqPdf(qoldiq) {
 }
 
 function omborRowHtml(r) {
+  const qiDoc = (r.hujjatRaqami || "").startsWith("QI-") ? r.hujjatRaqami : "";
   return `
     <tr data-id="${r.id}">
       <td><input type="date" class="cell-input" data-f="sana" value="${escapeHtml(r.sana || "")}"></td>
@@ -3131,7 +3349,10 @@ function omborRowHtml(r) {
       <td class="num"><input class="cell-input num" data-f="yetkazibBerishNarxi" value="${fmt(r.yetkazibBerishNarxi)}"></td>
       <td class="num"><input class="cell-input num" data-f="qqsSumma" value="${fmt(r.qqsSumma)}"></td>
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.yetkazibBerishNarxiQQSBilan)}</td>
-      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
+      <td class="row-actions">
+        ${qiDoc ? `<button class="icon-btn" data-print-qi="${escapeHtml(qiDoc)}" title="Qayta ishlash dalolatnomasi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>` : ""}
+        <button class="icon-btn" data-del="${r.id}" data-qi="${escapeHtml(qiDoc)}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+      </td>
     </tr>
   `;
 }
@@ -3173,8 +3394,20 @@ function bindOmborRowEvents() {
     }
   });
   body.addEventListener("click", (e) => {
-    const delId = e.target.dataset.del;
-    if (delId) deleteRowSafe("ombor", "ombor", delId, renderOmbor);
+    const printQi = e.target.closest("[data-print-qi]");
+    if (printQi) {
+      printQaytaIshlashDalolatnomaByDoc(printQi.dataset.printQi);
+      return;
+    }
+    const delBtn = e.target.closest("[data-del]");
+    if (!delBtn) return;
+    const delId = delBtn.dataset.del;
+    const qiDoc = delBtn.dataset.qi;
+    if (qiDoc) {
+      deleteQaytaIshlashEntry(qiDoc);
+    } else if (delId) {
+      deleteRowSafe("ombor", "ombor", delId, renderOmbor);
+    }
   });
 }
 
@@ -3458,13 +3691,14 @@ function icRowHtml(r) {
   return `
     <tr data-id="${r.id}">
       <td class="mono">${escapeHtml(r.sana || "—")}</td>
-      <td>${escapeHtml(r.mahsulotNomi || "—")}</td>
+      <td><b>${escapeHtml(r.mahsulotNomi || "—")}</b></td>
       <td class="num">${fmt(r.miqdor, 3)}</td>
       <td>${escapeHtml(r.birlik || "")}</td>
-      <td class="num">${fmtSum(r.tannarx)}</td>
-      <td>${escapeHtml(r.izoh || "")}</td>
+      <td class="num"><b>${fmtSum(r.tannarx)}</b></td>
+      <td>${escapeHtml(getDisplayIzoh(r.izoh) || "—")}</td>
       <td class="row-actions">
         <button class="icon-btn" data-print-ic="${r.id}" title="Ishlab chiqarish dalolatnomasi (chop etish)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>
+        <button class="icon-btn" data-print-kalk="${r.id}" title="1 birlik mahsulot tannarxi kalkulyatsiyasi (chop etish)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>
         <button class="icon-btn" data-del-ic="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
@@ -3535,6 +3769,7 @@ function renderIshlabChiqarish() {
         <div class="page-actions">
           <button class="btn" id="btnFindReplaceIC">Izlash va almashtirish</button>
           <button class="btn" id="btnExportIC">Excel'ga eksport</button>
+          <button class="btn" id="btnIcQaytaIshlash">🔄 Mahsulotni qayta ishlash</button>
           <button class="btn btn-primary" id="btnAddIC">+ Yozuv qo'shish</button>
         </div>
       </div>
@@ -3549,6 +3784,7 @@ function renderIshlabChiqarish() {
   `;
 
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
+  document.getElementById("btnIcQaytaIshlash").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
   document.getElementById("btnExportIC").addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
   document.getElementById("btnFindReplaceIC").addEventListener("click", () => openFindReplaceModal({
@@ -3565,7 +3801,9 @@ function renderIshlabChiqarish() {
     const delId = e.target.dataset.delIc;
     if (delId) { deleteIshlabChiqarishEntry(delId); return; }
     const printId = e.target.dataset.printIc;
-    if (printId) printIshlabChiqarishDalolatnoma(printId);
+    if (printId) { printIshlabChiqarishDalolatnoma(printId); return; }
+    const printKalkId = e.target.dataset.printKalk;
+    if (printKalkId) { printIshlabChiqarishKalkulyatsiya(printKalkId); return; }
   });
   const uncostedBody = document.getElementById("uncostedBody");
   if (uncostedBody) uncostedBody.addEventListener("click", (e) => {
@@ -3941,19 +4179,53 @@ function renderKontragentlar() {
   document.getElementById("searchBox").addEventListener("input", (e) => filterKontragentRows(e.target.value));
   const body = document.getElementById("kontragentBody");
   if (body) body.addEventListener("click", (e) => {
-    const editId = e.target.dataset.edit;
-    const delId = e.target.dataset.del;
-    const detailInn = e.target.dataset.detailInn;
-    if (editId) openKontragentModal(editId);
-    else if (delId) deleteKontragent(delId);
-    else if (detailInn) openSverkaDetail(detailInn, "kontragentlar");
+    const editBtn = e.target.closest("[data-edit]");
+    if (editBtn) {
+      e.stopPropagation();
+      openKontragentModal(editBtn.dataset.edit);
+      return;
+    }
+    const delBtn = e.target.closest("[data-del]");
+    if (delBtn) {
+      e.stopPropagation();
+      deleteKontragent(delBtn.dataset.del);
+      return;
+    }
+    const detailBtn = e.target.closest("[data-detail-inn]");
+    if (detailBtn) {
+      e.stopPropagation();
+      const inn = detailBtn.dataset.detailInn;
+      if (inn) openSverkaDetail(inn, "kontragentlar");
+      return;
+    }
+    const tr = e.target.closest("tr");
+    if (tr) {
+      if (e.target.closest("button, input, select, textarea, a, .icon-btn")) return;
+      const inn = tr.getAttribute("data-hist-inn");
+      if (inn) {
+        openSverkaDetail(inn, "kontragentlar");
+      }
+    }
   });
 }
 
+function kontragentHistoryBtnHtml(inn, back = "") {
+  const trimmed = (inn || "").trim();
+  if (!trimmed) return "";
+  return `<button class="icon-btn" data-hist-inn="${escapeHtml(trimmed)}" data-hist-back="${escapeHtml(back)}" title="Kontragent tarixi (sverka)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-history"/></svg></button>`;
+}
+
+function kontragentHistoryCellHtml(nomi, inn, back = "") {
+  const trimmed = (inn || "").trim();
+  if (!trimmed) return escapeHtml(nomi || "");
+  return `<a href="#" class="kontragent-hist-link" data-hist-inn="${escapeHtml(trimmed)}" data-hist-back="${escapeHtml(back)}" title="Tarixni ko'rish">${escapeHtml(nomi || "")}</a>`;
+}
+
 function kontragentRowHtml(k) {
+  const inn = (k.inn || "").trim();
   return `
-    <tr data-id="${k.id}">
-      <td>${escapeHtml(k.nomi || "")}</td>
+    <tr data-id="${k.id}" ${inn ? `data-hist-inn="${escapeHtml(inn)}"` : ""} class="cursor-pointer kontragent-row" title="Tarixni (sverka) ko'rish uchun bosing">
+      <td><strong>${escapeHtml(k.nomi || "")}</strong></td>
       <td class="mono">${escapeHtml(k.inn || "")}</td>
       <td>${escapeHtml(k.turi || "")}</td>
       <td>${escapeHtml(k.telefon || "")}</td>
@@ -3961,14 +4233,46 @@ function kontragentRowHtml(k) {
       <td class="mono">${escapeHtml(k.bankHisob || "")}</td>
       <td class="mono">${escapeHtml(k.bankMfo || "")}</td>
       <td class="row-actions">
-        ${(k.inn || "").trim()
-          ? `<button class="btn btn-sm" data-detail-inn="${escapeHtml(k.inn)}">Tarix</button>`
+        ${inn
+          ? `<button class="btn btn-sm" data-detail-inn="${escapeHtml(inn)}" data-hist-inn="${escapeHtml(inn)}" title="Tarix (sverka)">Tarix</button>`
           : `<button class="btn btn-sm" disabled title="Tarixni ko'rish uchun avval INN kiriting">Tarix</button>`}
         <button class="icon-btn" data-edit="${k.id}" title="Tahrirlash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg></button>
         <button class="icon-btn" data-del="${k.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
   `;
+}
+
+let KONTRAGENT_HISTORY_BOUND = false;
+function bindKontragentHistoryDelegation() {
+  const main = document.getElementById("main");
+  if (!main || KONTRAGENT_HISTORY_BOUND) return;
+  KONTRAGENT_HISTORY_BOUND = true;
+
+  main.addEventListener("click", (e) => {
+    if (e.target.closest("input, select, textarea, [data-edit], [data-del], [data-view]")) return;
+
+    const btn = e.target.closest("[data-hist-inn]");
+    if (btn && btn.tagName !== "TR") {
+      const inn = btn.getAttribute("data-hist-inn");
+      const back = btn.getAttribute("data-hist-back") || CURRENT_PAGE;
+      if (inn && typeof openSverkaDetail === "function") {
+        e.preventDefault();
+        openSverkaDetail(inn, back);
+      }
+      return;
+    }
+
+    const tr = e.target.closest("tr[data-hist-inn]");
+    if (tr) {
+      if (e.target.closest("button, a, .icon-btn")) return;
+      const inn = tr.getAttribute("data-hist-inn");
+      const back = CURRENT_PAGE;
+      if (inn && typeof openSverkaDetail === "function") {
+        openSverkaDetail(inn, back);
+      }
+    }
+  });
 }
 
 function exportKontragentlarXlsx(rows) {
@@ -4332,35 +4636,454 @@ async function deleteAsosiyVosita(id) {
   if (ok) toast("Asosiy vosita o'chirildi");
 }
 
+function parseIshlabChiqarishDetails(icRow) {
+  if (!icRow || !icRow.izoh) return null;
+  try {
+    const raw = String(icRow.izoh);
+    if (raw.startsWith("{") && raw.endsWith("}")) {
+      const obj = JSON.parse(raw);
+      if (obj.kalkulyatsiya) return obj.kalkulyatsiya;
+    }
+    const match = raw.match(/\[KALK:(.*?)\]$/);
+    if (match) {
+      return JSON.parse(match[1]);
+    }
+  } catch (e) {}
+  return null;
+}
+
+function getDisplayIzoh(izoh) {
+  if (!izoh) return "";
+  const raw = String(izoh);
+  const match = raw.match(/^(.*?)(\s*\[KALK:.*?\])?$/);
+  if (match && match[1] !== undefined) return match[1].trim();
+  if (raw.startsWith("{") && raw.includes("kalkulyatsiya")) return "";
+  return raw;
+}
+
+function formatIshlabChiqarishIzoh(userText, kalkDetails) {
+  const base = (userText || "").trim();
+  if (!kalkDetails) return base;
+  return base ? `${base} [KALK:${JSON.stringify(kalkDetails)}]` : `[KALK:${JSON.stringify(kalkDetails)}]`;
+}
+
+function getXomashyoBirlikNarx(nomi, miqdor, asOfDate) {
+  if (!nomi) return 0;
+  const fifo = fifoUsulActive();
+  if (!fifo) return avgOmborNarx(nomi, asOfDate);
+  const h = fifoHypotheticalCost(nomi, miqdor || 1, asOfDate);
+  if (h && h.tannarx > 0) return h.tannarx / (miqdor || 1);
+  return avgOmborNarx(nomi, asOfDate);
+}
+
 function openIshlabChiqarishModal() {
   if (!STORE.mahsulotlar.length) { toast("Avval mahsulot va kalkulyatsiya qo'shing", "err"); return; }
+
   openModal(`
-    <h3>Ishlab chiqarish / sotuv yozuvi</h3>
-    <div class="field"><label>Mahsulot</label>
-      <select id="icMahsulot">${STORE.mahsulotlar.map((m) => `<option value="${m.id}">${escapeHtml(m.nomi)}</option>`).join("")}</select>
-    </div>
-    <div class="field"><label>Sana</label><input type="date" id="icSana" value="${todayISO()}"></div>
-    <div class="field"><label>Miqdor</label><input id="icMiqdor" placeholder="masalan: 120"></div>
-    <div class="field"><label>Foyda normasi (1 birlik uchun, so'm)</label><input id="icFoydaNormasi" value="${fmt(toNum(STORE.mahsulotlar[0] && STORE.mahsulotlar[0].foydaNormasi) || 100)}"></div>
-    <div class="field"><label>Izoh (ixtiyoriy)</label><input id="icIzoh" placeholder=""></div>
-    <div class="note" id="icPreview"></div>
-    <div class="modal-actions">
-      <button class="btn" id="mCancel">Bekor qilish</button>
-      <button class="btn btn-primary" id="mSave">Saqlash</button>
+    <div style="max-width:820px;width:100%;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div>
+          <h3 style="margin:0 0 4px;font-size:17px;display:flex;align-items:center;gap:6px;">
+            <svg class="ic" viewBox="0 0 24 24" style="width:20px;height:20px;color:var(--ok,#2f6f5e);"><use href="#i-factory"/></svg>
+            Ishlab chiqarish dalolatnomasi va Kalkulyatsiya
+          </h3>
+          <p class="modal-sub" style="margin:0;">O'zbekiston Respublikasi VM 54-son qarori va 21-son BHMS talablariga mos ishlab chiqarish hisoboti</p>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1.5fr;gap:10px;margin-bottom:14px;background:var(--bg-sunken);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+        <div class="field" style="margin:0;">
+          <label style="font-size:12px;font-weight:600;">Tayyor mahsulot</label>
+          <select id="icMahsulot" style="width:100%;">
+            ${STORE.mahsulotlar.map((m) => `<option value="${m.id}">${escapeHtml(m.nomi)} (${escapeHtml(m.birlik || "birlik")})</option>`).join("")}
+          </select>
+        </div>
+        <div class="field" style="margin:0;">
+          <label style="font-size:12px;font-weight:600;">Sana</label>
+          <input type="date" id="icSana" value="${todayISO()}">
+        </div>
+        <div class="field" style="margin:0;">
+          <label style="font-size:12px;font-weight:600;">Miqdori <span id="icBirlikLabel" class="faint" style="font-weight:normal;"></span></label>
+          <input type="number" id="icMiqdor" step="any" placeholder="masalan: 100" value="100">
+        </div>
+        <div class="field" style="margin:0;">
+          <label style="font-size:12px;font-weight:600;">Smena / Mas'ullar</label>
+          <input id="icSmena" placeholder="1-smena, Usta Karimov">
+        </div>
+      </div>
+
+      <!-- SARFLANGAN XOMASHYO JADVALI -->
+      <div style="margin-bottom:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <h4 style="margin:0;font-size:13.5px;font-weight:700;">1. Sarflangan xomashyo va materiallar (Norma va Faktik sarf)</h4>
+          <button type="button" class="btn btn-sm" id="btnIcAddMaterial">+ Boshqa xomashyo qo'shish</button>
+        </div>
+        <div class="table-wrap" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);">
+          <table style="width:100%;margin:0;font-size:12px;">
+            <thead>
+              <tr style="background:var(--bg-sunken);">
+                <th>Xomashyo nomi</th>
+                <th style="width:60px;">Birlik</th>
+                <th class="num" style="width:90px;" title="Retseptura bo'yicha rejaviy sarf">Reja (norma)</th>
+                <th class="num" style="width:105px;" title="Haqiqatda sarflangan xomashyo miqdori">Faktik sarf</th>
+                <th class="num" style="width:110px;" title="Ombordagi ushbu sana holatidagi qoldiq">Ombordagi qoldiq</th>
+                <th class="num" style="width:95px;">Birlik narx</th>
+                <th class="num" style="width:110px;">Summa</th>
+                <th style="width:36px;"></th>
+              </tr>
+            </thead>
+            <tbody id="icMaterialsBody"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:4px;font-size:12.5px;">
+          <span>Xomashyo jami tannarxi: <b id="icMatTotal">0 so'm</b></span>
+        </div>
+      </div>
+
+      <!-- QO'SHIMCHA XARAJATLAR (VM 54 MODDALARI) -->
+      <div style="margin-bottom:14px;background:var(--bg-sunken);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+        <h4 style="margin:0 0 8px;font-size:13.5px;font-weight:700;">2. Qo'shimcha ishlab chiqarish xarajatlari (VM 54-son qarori)</h4>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;">
+          <div class="field" style="margin:0;">
+            <label style="font-size:11.5px;font-weight:600;" title="Sex ishchilariga hisoblangan ish haqi">Ishlab chiqarish ish haqi</label>
+            <input type="number" id="icIshHaqi" value="0" placeholder="0 so'm">
+          </div>
+          <div class="field" style="margin:0;">
+            <label style="font-size:11.5px;font-weight:600;" title="Ish haqiga 12% ijtimoiy soliq">Ijtimoiy soliq (12%)</label>
+            <input type="number" id="icIjtimoiySoliq" value="0" placeholder="0 so'm">
+          </div>
+          <div class="field" style="margin:0;">
+            <label style="font-size:11.5px;font-weight:600;" title="Elektr energiyasi, gaz, uskunalar eskirishi (amortizatsiya)">Elektr/amortizatsiya</label>
+            <input type="number" id="icBoshqaXarajat" value="0" placeholder="0 so'm">
+          </div>
+          <div class="field" style="margin:0;">
+            <label style="font-size:11.5px;font-weight:600;color:var(--danger);" title="Ishlab chiqarishdan chiqqan brak yoki chiqindi (tannarxdan chegiriladi)">Chiqindilar (chegiriladi)</label>
+            <input type="number" id="icChiqindi" value="0" placeholder="0 so'm">
+          </div>
+        </div>
+      </div>
+
+      <!-- NATIJA VA KALKULYATSIYA KARTASI -->
+      <div style="background:var(--bg-elevated);border:2px solid var(--border);border-radius:var(--radius-sm);padding:12px;margin-bottom:12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:center;">
+          <div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:3px;">Ishlab chiqarish (sex) tannarxi:</div>
+            <div style="font-size:18px;font-weight:800;color:var(--ok,#2f6f5e);" id="icSummaryJamiTannarx">0 so'm</div>
+            <div style="font-size:12.5px;margin-top:2px;">1 birlik mahsulot tannarxi: <b id="icSummaryBirlikTannarx">0 so'm</b></div>
+          </div>
+          <div style="border-left:1px solid var(--border);padding-left:14px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+              <label style="font-size:11.5px;font-weight:600;margin:0;white-space:nowrap;">Foyda normasi (1 birlik uchun):</label>
+              <input type="number" id="icFoydaNormasi" style="width:110px;padding:3px 6px;font-size:12px;" value="0">
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);">
+              Tavsiya sotish narxi: <b><span id="icSummarySotishQqssiz">0</span> so'm</b> (QQSsiz) / <b><span id="icSummarySotishQqsBilan">0</span> so'm</b> (QQS bilan)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OMBOR TANLOVI VA IZOH -->
+      <div style="margin-bottom:12px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;user-select:none;">
+          <input type="checkbox" id="icOmborgaKirim" checked style="width:16px;height:16px;">
+          <span>Tayyor mahsulotni hisoblangan tannarxda Omborga kirim qilish (2810 schyot)</span>
+        </label>
+        <div style="font-size:11.5px;color:var(--text-muted);margin-left:24px;">Xomashyolar ombordan chiqariladi, tayyor mahsulot esa hisoblangan tannarxi bilan ombor zaxirasiga tushadi.</div>
+      </div>
+      <div class="field" style="margin-bottom:14px;">
+        <input id="icIzoh" placeholder="Izoh yoki shartnoma raqami (ixtiyoriy)">
+      </div>
+
+      <div class="modal-actions" style="display:flex;justify-content:space-between;align-items:center;margin-top:16px;">
+        <button class="btn" id="mCancel">Bekor qilish</button>
+        <div style="display:flex;gap:8px;">
+          <button class="btn" id="mSaveAndPrint" style="display:flex;align-items:center;gap:6px;">
+            <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;"><use href="#i-doc"/></svg>
+            Saqlash va Dalolatnomani chop etish
+          </button>
+          <button class="btn btn-primary" id="mSave">Saqlash</button>
+        </div>
+      </div>
     </div>
   `);
+
+  const modalEl = document.querySelector("#modalBackdrop .modal");
+  if (modalEl) { modalEl.style.width = "820px"; modalEl.style.maxWidth = "calc(100vw - 32px)"; }
+
+  let currentMaterials = [];
+
+  function renderMaterialsRows() {
+    const tbody = document.getElementById("icMaterialsBody");
+    if (!tbody) return;
+    const sana = document.getElementById("icSana").value || todayISO();
+
+    if (!currentMaterials.length) {
+      tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:12px;color:var(--text-faint);">Xomashyo belgilanmagan — "+ Boshqa xomashyo qo'shish" tugmasi orqali kiriting</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = currentMaterials.map((m, idx) => {
+      const qoldiq = omborQoldiqByNomiAsOf(m.nomi, sana);
+      const yetarli = qoldiq >= m.faktMiqdor;
+      const statusColor = yetarli ? "color:var(--ok,#2f6f5e);" : "color:var(--danger,#b3432b);font-weight:700;";
+      const qoldiqText = Number.isFinite(qoldiq) ? fmt(qoldiq, 2) : "0";
+
+      return `
+        <tr data-idx="${idx}">
+          <td>
+            <input class="search-input mat-nomi" style="padding:4px 6px;font-size:12px;width:100%;" list="omborNomiList" value="${escapeHtml(m.nomi)}">
+          </td>
+          <td>
+            <input class="search-input mat-birlik" style="padding:4px 6px;font-size:12px;width:100%;" value="${escapeHtml(m.birlik || "")}">
+          </td>
+          <td class="num font-mono" style="font-size:12px;color:var(--text-muted);">${fmt(m.rejaMiqdor, 3)}</td>
+          <td class="num">
+            <input type="number" step="any" class="search-input mat-fakt" style="padding:4px 6px;font-size:12px;width:95px;text-align:right;font-weight:600;" value="${m.faktMiqdor}">
+          </td>
+          <td class="num font-mono" style="${statusColor};font-size:12px;" title="${yetarli ? "Omborda yetarli" : "Zaxira yetarli emas!"}">
+            ${qoldiqText} ${yetarli ? "" : "⚠️"}
+          </td>
+          <td class="num">
+            <input type="number" step="any" class="search-input mat-narx" style="padding:4px 6px;font-size:12px;width:90px;text-align:right;" value="${Math.round(m.narx)}">
+          </td>
+          <td class="num font-mono mat-summa" style="font-size:12px;font-weight:600;">
+            ${fmtSum(m.summa)}
+          </td>
+          <td style="text-align:center;">
+            <button type="button" class="icon-btn mat-del" data-del-idx="${idx}" title="O'chirish" style="width:24px;height:24px;padding:2px;">
+              <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;"><use href="#i-x"/></svg>
+            </button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function recalcCosting() {
+    const miqdor = toNum(document.getElementById("icMiqdor").value) || 0;
+    const matTotal = currentMaterials.reduce((a, m) => a + toNum(m.summa), 0);
+    const ishHaqi = toNum(document.getElementById("icIshHaqi").value);
+    const ijtimoiySoliq = toNum(document.getElementById("icIjtimoiySoliq").value);
+    const boshqaXarajat = toNum(document.getElementById("icBoshqaXarajat").value);
+    const chiqindi = toNum(document.getElementById("icChiqindi").value);
+    const foydaNormasi = toNum(document.getElementById("icFoydaNormasi").value);
+    const qqsStavka = toNum(STORE.settings.qqsStavka || 12);
+
+    const jamiTannarx = Math.max(0, matTotal + ishHaqi + ijtimoiySoliq + boshqaXarajat - chiqindi);
+    const birlikTannarx = miqdor > 0 ? jamiTannarx / miqdor : 0;
+    const sotishQqssiz = birlikTannarx + foydaNormasi;
+    const sotishQqsBilan = sotishQqssiz * (1 + qqsStavka / 100);
+
+    const matTotalEl = document.getElementById("icMatTotal");
+    if (matTotalEl) matTotalEl.textContent = fmtSum(matTotal);
+
+    const jamiEl = document.getElementById("icSummaryJamiTannarx");
+    if (jamiEl) jamiEl.textContent = fmtSum(jamiTannarx);
+
+    const birlikEl = document.getElementById("icSummaryBirlikTannarx");
+    if (birlikEl) birlikEl.textContent = fmtSum(birlikTannarx);
+
+    const sotishQqssizEl = document.getElementById("icSummarySotishQqssiz");
+    if (sotishQqssizEl) sotishQqssizEl.textContent = fmtSum(sotishQqssiz);
+
+    const sotishQqsBilanEl = document.getElementById("icSummarySotishQqsBilan");
+    if (sotishQqsBilanEl) sotishQqsBilanEl.textContent = fmtSum(sotishQqsBilan);
+  }
+
+  function populateMaterialsFromRecipe() {
+    const mahsulotId = document.getElementById("icMahsulot").value;
+    const miqdor = toNum(document.getElementById("icMiqdor").value) || 1;
+    const sana = document.getElementById("icSana").value || todayISO();
+    const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
+    if (!m) return;
+
+    const bLabel = document.getElementById("icBirlikLabel");
+    if (bLabel) bLabel.textContent = m.birlik ? `(${m.birlik})` : "";
+
+    const fInput = document.getElementById("icFoydaNormasi");
+    if (fInput && (!fInput.value || fInput.value === "0")) {
+      fInput.value = toNum(m.foydaNormasi) || 0;
+    }
+
+    currentMaterials = (m.tarkib || []).map((t) => {
+      const norma = toNum(t.norma);
+      const rejaMiqdor = norma * miqdor;
+      const narx = getXomashyoBirlikNarx(t.nomi, rejaMiqdor || 1, sana);
+      return {
+        nomi: t.nomi,
+        birlik: t.birlik || "",
+        norma: norma,
+        rejaMiqdor: rejaMiqdor,
+        faktMiqdor: rejaMiqdor,
+        narx: narx,
+        summa: rejaMiqdor * narx
+      };
+    });
+    renderMaterialsRows();
+    recalcCosting();
+  }
+
+  populateMaterialsFromRecipe();
+
   document.getElementById("mCancel").addEventListener("click", closeModal);
-  document.getElementById("icMahsulot").addEventListener("change", () => {
-    // Mahsulot almashtirilganda, agar foydalanuvchi hali qo'lda o'zgartirmagan
-    // bo'lsa, shu mahsulotning o'z "Foyda normasi"si taklif qilinadi.
-    const m = STORE.mahsulotlar.find((x) => x.id === document.getElementById("icMahsulot").value);
-    if (m) document.getElementById("icFoydaNormasi").value = fmt(toNum(m.foydaNormasi));
-    updateIshlabChiqarishPreview();
+  document.getElementById("icMahsulot").addEventListener("change", populateMaterialsFromRecipe);
+  document.getElementById("icSana").addEventListener("change", () => {
+    const sana = document.getElementById("icSana").value || todayISO();
+    currentMaterials.forEach((m) => {
+      m.narx = getXomashyoBirlikNarx(m.nomi, m.faktMiqdor || 1, sana);
+      m.summa = m.faktMiqdor * m.narx;
+    });
+    renderMaterialsRows();
+    recalcCosting();
   });
-  document.getElementById("icMiqdor").addEventListener("input", updateIshlabChiqarishPreview);
-  document.getElementById("icSana").addEventListener("change", updateIshlabChiqarishPreview);
-  updateIshlabChiqarishPreview();
-  document.getElementById("mSave").addEventListener("click", addIshlabChiqarishEntry);
+
+  document.getElementById("icMiqdor").addEventListener("input", () => {
+    const miqdor = toNum(document.getElementById("icMiqdor").value) || 0;
+    currentMaterials.forEach((m) => {
+      const oldReja = m.rejaMiqdor;
+      m.rejaMiqdor = m.norma * miqdor;
+      if (Math.abs(m.faktMiqdor - oldReja) < 1e-6 || !m.faktMiqdor) {
+        m.faktMiqdor = m.rejaMiqdor;
+      }
+      m.summa = m.faktMiqdor * m.narx;
+    });
+    renderMaterialsRows();
+    recalcCosting();
+  });
+
+  document.getElementById("icIshHaqi").addEventListener("input", (e) => {
+    const oylik = toNum(e.target.value);
+    document.getElementById("icIjtimoiySoliq").value = Math.round(oylik * 0.12);
+    recalcCosting();
+  });
+  document.getElementById("icIjtimoiySoliq").addEventListener("input", recalcCosting);
+  document.getElementById("icBoshqaXarajat").addEventListener("input", recalcCosting);
+  document.getElementById("icChiqindi").addEventListener("input", recalcCosting);
+  document.getElementById("icFoydaNormasi").addEventListener("input", recalcCosting);
+
+  const matBody = document.getElementById("icMaterialsBody");
+  matBody.addEventListener("input", (e) => {
+    const tr = e.target.closest("tr");
+    if (!tr) return;
+    const idx = Number(tr.dataset.idx);
+    if (!currentMaterials[idx]) return;
+
+    if (e.target.classList.contains("mat-fakt") || e.target.classList.contains("mat-narx")) {
+      const fakt = toNum(tr.querySelector(".mat-fakt").value);
+      const narx = toNum(tr.querySelector(".mat-narx").value);
+      currentMaterials[idx].faktMiqdor = fakt;
+      currentMaterials[idx].narx = narx;
+      currentMaterials[idx].summa = fakt * narx;
+      const summaEl = tr.querySelector(".mat-summa");
+      if (summaEl) summaEl.textContent = fmtSum(currentMaterials[idx].summa);
+      recalcCosting();
+    } else if (e.target.classList.contains("mat-nomi")) {
+      currentMaterials[idx].nomi = e.target.value.trim();
+    } else if (e.target.classList.contains("mat-birlik")) {
+      currentMaterials[idx].birlik = e.target.value.trim();
+    }
+  });
+
+  matBody.addEventListener("click", (e) => {
+    const btn = e.target.closest(".mat-del");
+    if (!btn) return;
+    const idx = Number(btn.dataset.delIdx);
+    currentMaterials.splice(idx, 1);
+    renderMaterialsRows();
+    recalcCosting();
+  });
+
+  document.getElementById("btnIcAddMaterial").addEventListener("click", () => {
+    const sana = document.getElementById("icSana").value || todayISO();
+    currentMaterials.push({
+      nomi: "",
+      birlik: "dona",
+      norma: 0,
+      rejaMiqdor: 0,
+      faktMiqdor: 1,
+      narx: 0,
+      summa: 0
+    });
+    renderMaterialsRows();
+    recalcCosting();
+  });
+
+  async function handleSaveProduction(isPrint = false) {
+    const mahsulotId = document.getElementById("icMahsulot").value;
+    const sana = document.getElementById("icSana").value || todayISO();
+    const miqdor = toNum(document.getElementById("icMiqdor").value);
+    const foydaNormasi = toNum(document.getElementById("icFoydaNormasi").value);
+    const izoh = (document.getElementById("icIzoh").value || "").trim();
+    const smena = (document.getElementById("icSmena").value || "").trim();
+    const omborgaKirim = document.getElementById("icOmborgaKirim").checked;
+
+    const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
+    if (!m) { toast("Mahsulot tanlanmadi", "err"); return; }
+    if (!miqdor || miqdor <= 0) { toast("Miqdorni kiriting", "err"); return; }
+
+    const faktMateriallar = currentMaterials.filter((x) => x.nomi && x.faktMiqdor > 0).map((x) => ({
+      nomi: x.nomi,
+      birlik: x.birlik,
+      norma: x.norma,
+      rejaMiqdor: x.rejaMiqdor,
+      faktMiqdor: x.faktMiqdor,
+      farq: x.faktMiqdor - x.rejaMiqdor,
+      narx: x.narx,
+      summa: x.summa
+    }));
+
+    const matTotal = faktMateriallar.reduce((a, c) => a + c.summa, 0);
+    const ishHaqi = toNum(document.getElementById("icIshHaqi").value);
+    const ijtimoiySoliq = toNum(document.getElementById("icIjtimoiySoliq").value);
+    const boshqaXarajat = toNum(document.getElementById("icBoshqaXarajat").value);
+    const chiqindi = toNum(document.getElementById("icChiqindi").value);
+
+    const jamiTannarx = Math.max(0, matTotal + ishHaqi + ijtimoiySoliq + boshqaXarajat - chiqindi);
+    const birlikTannarx = miqdor > 0 ? jamiTannarx / miqdor : 0;
+
+    const kalkDetails = {
+      smena,
+      faktMateriallar,
+      matTotal,
+      ishHaqi,
+      ijtimoiySoliq,
+      boshqaXarajat,
+      chiqindi,
+      jamiTannarx,
+      birlikTannarx,
+      foydaNormasi,
+      omborgaKirim
+    };
+
+    const customConsumptions = faktMateriallar.map((c) => ({
+      nomi: c.nomi,
+      birlik: c.birlik,
+      miqdor: c.faktMiqdor,
+      narx: c.narx,
+      summa: c.summa
+    }));
+
+    const res = await performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi, {
+      customConsumptions,
+      tannarx: jamiTannarx,
+      omborgaKirim,
+      kalkDetails
+    });
+
+    if (!res) return;
+
+    closeModal();
+    renderIshlabChiqarish();
+    toast(omborgaKirim ? "Saqlandi: xomashyo ayirildi va tayyor mahsulot omborga kirim qilindi" : "Saqlandi: xomashyo ombordan ayirildi");
+
+    if (isPrint && res.id) {
+      setTimeout(() => printIshlabChiqarishDalolatnoma(res.id), 300);
+    }
+  }
+
+  document.getElementById("mSave").addEventListener("click", () => handleSaveProduction(false));
+  document.getElementById("mSaveAndPrint").addEventListener("click", () => handleSaveProduction(true));
 }
 
 // Bitta xomashyo nomining joriy qoldig'i — BARCHA "ombor" qatorlari bo'yicha,
@@ -4535,26 +5258,58 @@ async function insertOmborConsumptionRows(consumptions, sana, hujjatRaqami, kont
   return true;
 }
 
+async function insertOmborMahsulotKirimRow(mahsulotNomi, birlik, miqdor, birlikTannarx, sana, hujjatRaqami) {
+  if (!miqdor || miqdor <= 0) return true;
+  const kirimRow = toDbRow(OMBOR_DB_MAP, {
+    sana,
+    hujjatRaqami,
+    kontragentInn: "",
+    kontragentNomi: "Ishlab chiqarishdan kirim (2810)",
+    nomi: mahsulotNomi,
+    birlik: birlik || "",
+    miqdor: miqdor,
+    narx: Math.round(birlikTannarx * 100) / 100,
+    yetkazibBerishNarxi: 0,
+    qqsSumma: 0,
+    yetkazibBerishNarxiQQSBilan: 0,
+    turi: "kirim"
+  });
+  const { data, error } = await sbClient.from("ombor").insert(kirimRow).select().single();
+  if (error) {
+    console.error(error);
+    toast("Xomashyo ayirildi, lekin tayyor mahsulotni omborga kirim qilishda xatolik", "err");
+    return false;
+  }
+  STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, data));
+  invalidateFifo();
+  return true;
+}
+
 // Mahsulot kalkulyatsiyasi (tarkib) asosida bitta ishlab chiqarish/sotuv
 // yozuvini yaratadi: "ishlab_chiqarish" jadvaliga bitta qator + shu
 // mahsulotning har bir xomashyo tarkibiy qismi uchun "ombor" jadvaliga
 // turi="chiqim" qatorlari yoziladi (hujjatRaqami="IC-<yozuv id>" — shu orqali
-// keyinchalik birgalikda o'chirish/topish mumkin). "Ombor chiqimi" bo'limidan
-// mahsulot nomi kiritilganda ham, "Ishlab chiqarish" jurnalidan qo'shilganda
-// ham xuddi shu funksiya ishlatiladi — ikkala joyda bitta manba/mantiq.
-// foydaNormasi berilmasa (undefined/null), mahsulotning o'zidagi standart
-// qiymatga tushadi — "Ombor chiqimi" bo'limidan mahsulot nomi orqali topilib
-// chaqirilganda (saveOmborChiqim) foyda alohida so'ralmaydi, shu sabab shu
-// yerda avtomatik mahsulot.foydaNormasi ishlatiladi.
-async function performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi) {
-  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor, sana);
-  const foyda = (foydaNormasi !== undefined && foydaNormasi !== null) ? toNum(foydaNormasi) : toNum(m.foydaNormasi);
+// keyinchalik birgalikda o'chirish/topish mumkin). Shuningdek opts.omborgaKirim
+// bo'yicha tayyor mahsulot "kirim" (2810) qatori yoziladi.
+async function performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi, opts = {}) {
+  const customConsumptions = opts.customConsumptions;
+  let consumptions, tannarx;
 
-  const payload = { sana, mahsulotId: m.id, mahsulotNomi: m.nomi, miqdor, birlik: m.birlik, tannarx, izoh, foydaNormasi: foyda };
+  if (customConsumptions && customConsumptions.length) {
+    consumptions = customConsumptions;
+    tannarx = opts.tannarx !== undefined ? toNum(opts.tannarx) : customConsumptions.reduce((a, c) => a + toNum(c.summa || (c.miqdor * c.narx)), 0);
+  } else {
+    const computed = computeMahsulotConsumption(m, miqdor, sana);
+    consumptions = computed.consumptions;
+    tannarx = computed.tannarx;
+  }
+
+  const foyda = (foydaNormasi !== undefined && foydaNormasi !== null) ? toNum(foydaNormasi) : toNum(m.foydaNormasi);
+  const finalIzoh = opts.kalkDetails ? formatIshlabChiqarishIzoh(izoh, opts.kalkDetails) : izoh;
+
+  const payload = { sana, mahsulotId: m.id, mahsulotNomi: m.nomi, miqdor, birlik: m.birlik, tannarx, izoh: finalIzoh, foydaNormasi: foyda };
   let { data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, payload)).select().single();
   if (error && isMissingColumnError(error)) {
-    // "foyda_normasi" ustuni migratsiyasi hali ishga tushirilmagan — shu
-    // maydonsiz qayta urinamiz (qarang migration_foyda_normasi.sql).
     const { foydaNormasi: _drop, ...rest } = payload;
     ({ data, error } = await sbClient.from("ishlab_chiqarish").insert(toDbRow(ISHLAB_CHIQARISH_DB_MAP, rest)).select().single());
   }
@@ -4562,10 +5317,17 @@ async function performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi) {
   const icRow = fromDbRow(ISHLAB_CHIQARISH_DB_MAP, data);
   STORE.ishlabChiqarish.push(icRow);
 
+  // 1. Ombordan xomashyo chiqimi
   await insertOmborConsumptionRows(consumptions, sana, `IC-${icRow.id}`, `Ishlab chiqarish: ${m.nomi}`);
 
+  // 2. Tayyor mahsulotni omborga kirim qilish (2810 schyot)
+  if (opts.omborgaKirim !== false) {
+    const birlikTannarx = miqdor > 0 ? tannarx / miqdor : 0;
+    await insertOmborMahsulotKirimRow(m.nomi, m.birlik, miqdor, birlikTannarx, sana, `IC-${icRow.id}`);
+  }
+
   updateNavBadges();
-  return true;
+  return icRow;
 }
 
 /* ------------------- Chiqim faktura → kalkulyatsiya bog'lash ------------------- */
@@ -5319,6 +6081,15 @@ function sonSozBilan(n) {
   return parts.join(" ");
 }
 
+function summaSozBilan(n) {
+  const num = toNum(n);
+  const butun = Math.floor(Math.abs(num));
+  const tiyin = Math.round((Math.abs(num) - butun) * 100);
+  const text = sonSozBilan(butun);
+  const capitalized = text ? (text.charAt(0).toUpperCase() + text.slice(1)) : "Nol";
+  return `${capitalized} so'm ${String(tiyin).padStart(2, "0")} tiyin`;
+}
+
 // Bitta chiqim fakturaning kalkulyatsiyasi asosida "Mahsulotlarni ishlab
 // chiqarishga sarflash to'g'risida DALOLATNOMA" — rasmiy andaza bo'yicha
 // (foydalanuvchi bergan namunaga so'zma-so'z mos). Hujjat raqami/sanasi
@@ -5449,57 +6220,83 @@ function printIshlabChiqarishDalolatnoma(icId) {
   if (!icRow) return;
   const mahsulot = icRow.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === icRow.mahsulotId) : null;
   const s = STORE.settings;
-
-  // Sarflangan xomashyo — mahsulot hali mavjud bo'lsa aynan shu yozuv sanasi
-  // bo'yicha computeMahsulotConsumption bilan (yozuv saqlangandagi bilan bir
-  // xil natija beradi); mahsulot keyinchalik o'chirilgan bo'lsa, "ombor"
-  // jadvalidagi shu yozuvga tegishli (IC-<id>) chiqim qatorlaridan nomi/miqdor
-  // olinib, narxi shu sanaga nisbatan qayta hisoblanadi.
-  // Xomashyo birlik narxi — FIFO usulida shu yozuvning (IC-<id>) partiya
-  // qiymatidan, "ortacha" usulida esa avgOmborNarx'dan olinadi.
-  const fifo = fifoUsulActive();
-  const xomashyoNarx = (nomi, miqdor) => {
-    if (!fifo) return avgOmborNarx(nomi, icRow.sana);
-    const d = fifoLedger(nomi).byDoc.get(`IC-${icId}`);
-    const summa = d ? d.tannarx : fifoHypotheticalCost(nomi, miqdor, icRow.sana).tannarx;
-    return miqdor ? summa / miqdor : 0;
-  };
-  const agg = new Map();
-  const addAgg = (nomi, birlik, miqdor) => {
-    const cur = agg.get(nomi) || { nomi, birlik, miqdor: 0 };
-    cur.miqdor += toNum(miqdor);
-    agg.set(nomi, cur);
-  };
-  if (mahsulot) {
-    computeMahsulotConsumption(mahsulot, icRow.miqdor, icRow.sana).consumptions
-      .forEach((c) => addAgg(c.nomi, c.birlik, c.miqdor));
-  } else {
-    STORE.ombor
-      .filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `IC-${icId}`)
-      .forEach((r) => addAgg(r.nomi, r.birlik, r.miqdor));
-  }
-  const materials = Array.from(agg.values()).map((c) => {
-    const narx = xomashyoNarx(c.nomi, c.miqdor);
-    return { nomi: c.nomi, birlik: c.birlik, miqdor: c.miqdor, narx, summa: c.miqdor * narx };
-  });
-  const materialsTotal = materials.reduce((a, c) => a + c.summa, 0);
-  const materialRows = materials.map((c) => `
-      <tr>
-        <td>${escapeHtml(c.nomi)}</td>
-        <td class="num">${escapeHtml(c.birlik || "")}</td>
-        <td class="num">${fmt(c.miqdor, 3)}</td>
-        <td class="num">${fmtSum(c.narx)}</td>
-        <td class="num">${fmtSum(c.summa)}</td>
-      </tr>
-    `).join("");
+  const details = parseIshlabChiqarishDetails(icRow);
 
   const miqdor = toNum(icRow.miqdor);
   const foydaNormasi = toNum(icRow.foydaNormasi);
-  const birlikTannarx = miqdor ? toNum(icRow.tannarx) / miqdor : 0;
+  let materials = [];
+  let materialsTotal = 0;
+  let ishHaqi = 0, ijtimoiySoliq = 0, boshqaXarajat = 0, chiqindi = 0;
+
+  if (details && details.faktMateriallar && details.faktMateriallar.length) {
+    materials = details.faktMateriallar.map((m) => ({
+      nomi: m.nomi,
+      birlik: m.birlik || "",
+      rejaMiqdor: toNum(m.rejaMiqdor),
+      faktMiqdor: toNum(m.faktMiqdor),
+      farq: toNum(m.farq !== undefined ? m.farq : (m.faktMiqdor - m.rejaMiqdor)),
+      narx: toNum(m.narx),
+      summa: toNum(m.summa)
+    }));
+    materialsTotal = toNum(details.matTotal || materials.reduce((a, c) => a + c.summa, 0));
+    ishHaqi = toNum(details.ishHaqi);
+    ijtimoiySoliq = toNum(details.ijtimoiySoliq);
+    boshqaXarajat = toNum(details.boshqaXarajat);
+    chiqindi = toNum(details.chiqindi);
+  } else {
+    // Eski yozuvlar uchun fallback
+    const fifo = fifoUsulActive();
+    const xomashyoNarx = (nomi, mMiqdor) => {
+      if (!fifo) return avgOmborNarx(nomi, icRow.sana);
+      const d = fifoLedger(nomi).byDoc.get(`IC-${icId}`);
+      const summa = d ? d.tannarx : fifoHypotheticalCost(nomi, mMiqdor, icRow.sana).tannarx;
+      return mMiqdor ? summa / mMiqdor : 0;
+    };
+    const agg = new Map();
+    const addAgg = (nomi, birlik, mMiqdor) => {
+      const cur = agg.get(nomi) || { nomi, birlik, miqdor: 0 };
+      cur.miqdor += toNum(mMiqdor);
+      agg.set(nomi, cur);
+    };
+    if (mahsulot) {
+      computeMahsulotConsumption(mahsulot, icRow.miqdor, icRow.sana).consumptions
+        .forEach((c) => addAgg(c.nomi, c.birlik, c.miqdor));
+    } else {
+      STORE.ombor
+        .filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `IC-${icId}`)
+        .forEach((r) => addAgg(r.nomi, r.birlik, r.miqdor));
+    }
+    materials = Array.from(agg.values()).map((c) => {
+      const narx = xomashyoNarx(c.nomi, c.miqdor);
+      return { nomi: c.nomi, birlik: c.birlik, rejaMiqdor: c.miqdor, faktMiqdor: c.miqdor, farq: 0, narx, summa: c.miqdor * narx };
+    });
+    materialsTotal = materials.reduce((a, c) => a + c.summa, 0);
+  }
+
+  const jamiTannarx = toNum(icRow.tannarx) || Math.max(0, materialsTotal + ishHaqi + ijtimoiySoliq + boshqaXarajat - chiqindi);
+  const birlikTannarx = miqdor ? jamiTannarx / miqdor : 0;
   const birlikNarxQqssiz = birlikTannarx + foydaNormasi;
-  const qqsStavka = toNum(s.qqsStavka);
+  const qqsStavka = toNum(s.qqsStavka || 12);
   const birlikQqsSumma = birlikNarxQqssiz * (qqsStavka / 100);
   const birlikNarxQqsBilan = birlikNarxQqssiz + birlikQqsSumma;
+
+  const materialRows = materials.map((c) => {
+    const farqSign = c.farq > 0 ? `+${fmt(c.farq, 3)}` : fmt(c.farq, 3);
+    const farqColor = c.farq > 0 ? "color:#b3432b;" : (c.farq < 0 ? "color:#2f6f5e;" : "");
+    return `
+      <tr>
+        <td>${escapeHtml(c.nomi)}</td>
+        <td class="num">${escapeHtml(c.birlik || "")}</td>
+        <td class="num">${fmt(c.rejaMiqdor, 3)}</td>
+        <td class="num"><b>${fmt(c.faktMiqdor, 3)}</b></td>
+        <td class="num" style="${farqColor}">${farqSign}</td>
+        <td class="num">${fmtSum(c.narx)}</td>
+        <td class="num"><b>${fmtSum(c.summa)}</b></td>
+      </tr>
+    `;
+  }).join("");
+
+  const smenaText = details && details.smena ? ` &nbsp; <b>Smena/Brigada:</b> ${escapeHtml(details.smena)}` : "";
 
   const html = `
     <!doctype html>
@@ -5509,75 +6306,100 @@ function printIshlabChiqarishDalolatnoma(icId) {
       <title>Ishlab chiqarish dalolatnomasi ${escapeHtml(icRow.sana || "")}</title>
       <style>
         @page{size:A4; margin:14mm 12mm;}
-        body{font-family:Arial, "Segoe UI", sans-serif; padding:32px; color:#1c2530; font-size:12.5px;}
-        .approve{float:right; text-align:center; width:260px; font-size:12px;}
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:24px; color:#1c2530; font-size:12px; line-height:1.4;}
+        .approve{float:right; text-align:center; width:270px; font-size:11.5px;}
         .approve .line{margin-top:6px;}
         .approve .dots{border-bottom:1px dotted #1c2530; display:inline-block; min-width:170px;}
-        h1{font-size:19px; text-align:center; margin:70px 0 14px;}
-        .meta{font-size:12.5px; margin-bottom:6px;}
+        h1{font-size:18px; text-align:center; margin:60px 0 10px; text-transform:uppercase;}
+        .meta{font-size:12px; margin-bottom:5px;}
         .meta b{font-weight:700;}
-        .section-title{font-weight:700; margin:20px 0 8px; font-size:13px; break-after:avoid;}
-        table{width:100%; border-collapse:collapse; font-size:11.5px; margin-bottom:6px;}
+        .section-title{font-weight:700; margin:16px 0 6px; font-size:12.5px; break-after:avoid;}
+        table{width:100%; border-collapse:collapse; font-size:11px; margin-bottom:6px;}
         thead{display:table-header-group;}
         tr{break-inside:avoid;}
-        th, td{border:1px solid #1c2530; padding:5px 8px; text-align:left;}
-        th{background:#eceff2; text-align:center;}
+        th, td{border:1px solid #1c2530; padding:5px 7px; text-align:left;}
+        th{background:#eceff2; text-align:center; font-weight:700;}
         td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
-        .jami{margin:6px 0 0; font-weight:700; break-inside:avoid;}
-        .sign{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:48px; font-size:12px; break-inside:avoid;}
-        .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:80%;}
+        .jami{margin:4px 0 0; font-weight:700; break-inside:avoid; text-align:right;}
+        .sign{display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-top:40px; font-size:11.5px; break-inside:avoid;}
+        .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:85%;}
         @media print { body{padding:0;} }
       </style>
     </head>
     <body>
       <div class="approve">
         «ТАСДИҚЛАЙМАН»<br>
-        ${escapeHtml(s.companyName)} rahbari<br>
-        <span class="dots">${escapeHtml(s.rahbar || "")}</span>
+        <b>${escapeHtml(s.companyName || "Korxona")}</b> rahbari<br>
+        <span class="dots" style="margin-top:16px;">${escapeHtml(s.rahbar || "")}</span>
         <div class="line">«____» ______________ 20____ y.</div>
       </div>
       <div style="clear:both;"></div>
+
       <h1>ISHLAB CHIQARISH DALOLATNOMASI</h1>
-      <div class="meta"><b>Sana:</b> ${escapeHtml(icRow.sana || "")} &nbsp; <b>Korxona:</b> ${escapeHtml(s.companyName)} (INN ${escapeHtml(s.inn)})</div>
+      <div class="meta"><b>Sana:</b> ${escapeHtml(icRow.sana || "")} &nbsp;|&nbsp; <b>Korxona:</b> ${escapeHtml(s.companyName)} (INN ${escapeHtml(s.inn)})${smenaText}</div>
       <div class="meta"><b>Asos:</b> O'zbekiston Respublikasi Vazirlar Mahkamasining 1999-yil 5-fevraldagi 54-son qarori bilan tasdiqlangan "Mahsulot (ish, xizmat)lar tannarxiga kiritiladigan xarajatlar tarkibi hamda moliyaviy natijalarni shakllantirish tartibi to'g'risida"gi Nizom.</div>
 
-      <div class="section-title">Komissiya</div>
+      <div class="section-title">1. Ishlab chiqarilgan tayyor mahsulot</div>
       <table>
+        <thead><tr><th>Mahsulot nomi</th><th class="num">Birlik</th><th class="num">Miqdori</th><th class="num">1 birlik tannarxi</th><th class="num">Jami tannarx</th></tr></thead>
         <tbody>
-          <tr><td style="width:220px;">Komissiya raisi</td><td>_____________________________ (F.I.Sh., lavozimi)</td></tr>
-          <tr><td>A'zo</td><td>_____________________________ (F.I.Sh., lavozimi)</td></tr>
-          <tr><td>A'zo</td><td>_____________________________ (F.I.Sh., lavozimi)</td></tr>
+          <tr>
+            <td><b>${escapeHtml(icRow.mahsulotNomi || "")}</b></td>
+            <td class="num">${escapeHtml(icRow.birlik || "")}</td>
+            <td class="num"><b>${fmt(miqdor, 3)}</b></td>
+            <td class="num">${fmtSum(birlikTannarx)}</td>
+            <td class="num"><b>${fmtSum(jamiTannarx)}</b></td>
+          </tr>
         </tbody>
       </table>
 
-      <div class="section-title">1. Ishlab chiqarilgan mahsulot</div>
+      <div class="section-title">2. Sarflangan xomashyo va materiallar (Norma va Faktik sarf)</div>
       <table>
-        <thead><tr><th>Mahsulot nomi</th><th class="num">Birlik</th><th class="num">Miqdori</th></tr></thead>
-        <tbody><tr><td>${escapeHtml(icRow.mahsulotNomi || "")}</td><td class="num">${escapeHtml(icRow.birlik || "")}</td><td class="num">${fmt(miqdor, 3)}</td></tr></tbody>
+        <thead>
+          <tr>
+            <th>Xomashyo nomi</th>
+            <th class="num">Birlik</th>
+            <th class="num">Reja (norma)</th>
+            <th class="num">Faktik sarf</th>
+            <th class="num">Farq (+/-)</th>
+            <th class="num">Narxi</th>
+            <th class="num">Summa</th>
+          </tr>
+        </thead>
+        <tbody>${materialRows || `<tr><td colspan="7" style="text-align:center;">Xomashyo topilmadi</td></tr>`}</tbody>
       </table>
+      <div class="jami">JAMI xomashyo moddiy xarajati: ${fmtSum(materialsTotal)} so'm</div>
 
-      <div class="section-title">2. Sarflangan xomashyo</div>
+      ${(ishHaqi > 0 || boshqaXarajat > 0 || chiqindi > 0) ? `
+      <div class="section-title">3. Boshqa ishlab chiqarish xarajatlari (VM 54-son qarori moddalari)</div>
       <table>
-        <thead><tr><th>Xomashyo nomi</th><th class="num">Birlik</th><th class="num">Miqdori</th><th class="num">Narxi</th><th class="num">Summa</th></tr></thead>
-        <tbody>${materialRows || `<tr><td colspan="5" style="text-align:center;">Xomashyo topilmadi</td></tr>`}</tbody>
+        <thead><tr><th>Xarajat turi</th><th class="num">Jami summa</th><th class="num">1 ${escapeHtml(icRow.birlik || "birlik")} uchun</th></tr></thead>
+        <tbody>
+          ${ishHaqi > 0 ? `<tr><td>Ishlab chiqarish ishchilari ish haqi</td><td class="num">${fmtSum(ishHaqi)}</td><td class="num">${fmtSum(ishHaqi / miqdor)}</td></tr>` : ""}
+          ${ijtimoiySoliq > 0 ? `<tr><td>Ish haqiga ijtimoiy soliq (12%)</td><td class="num">${fmtSum(ijtimoiySoliq)}</td><td class="num">${fmtSum(ijtimoiySoliq / miqdor)}</td></tr>` : ""}
+          ${boshqaXarajat > 0 ? `<tr><td>Boshqa to'g'ridan-to'g'ri xarajatlar (elektr, gaz, amortizatsiya)</td><td class="num">${fmtSum(boshqaXarajat)}</td><td class="num">${fmtSum(boshqaXarajat / miqdor)}</td></tr>` : ""}
+          ${chiqindi > 0 ? `<tr style="color:#b3432b;"><td>Qaytariladigan chiqindilar (tannarxdan chegiriladi)</td><td class="num">-${fmtSum(chiqindi)}</td><td class="num">-${fmtSum(chiqindi / miqdor)}</td></tr>` : ""}
+        </tbody>
       </table>
-      <div class="jami">JAMI: xomashyo tannarxi — ${fmtSum(materialsTotal)}</div>
+      ` : ""}
 
-      <div class="section-title">3. Narx kalkulyatsiyasi (1 ${escapeHtml(icRow.birlik || "birlik")} uchun)</div>
+      <div class="section-title">4. Narx kalkulyatsiyasi va natija (1 ${escapeHtml(icRow.birlik || "birlik")} uchun)</div>
       <table>
         <tbody>
-          <tr><td>Tannarx</td><td class="num">${fmtSum(birlikTannarx)}</td></tr>
-          <tr><td>+ Foyda normasi</td><td class="num">${fmtSum(foydaNormasi)}</td></tr>
-          <tr><td><b>= Sotish narxi (QQSsiz)</b></td><td class="num"><b>${fmtSum(birlikNarxQqssiz)}</b></td></tr>
+          <tr><td style="width:300px;">Ishlab chiqarish tannarxi</td><td class="num"><b>${fmtSum(birlikTannarx)}</b></td></tr>
+          <tr><td>+ Foyda normasi (rentabellik)</td><td class="num">${fmtSum(foydaNormasi)}</td></tr>
+          <tr style="background:#f4f6f8;"><td><b>= Tavsiya sotish narxi (QQSsiz)</b></td><td class="num"><b>${fmtSum(birlikNarxQqssiz)}</b></td></tr>
           <tr><td>+ QQS (${fmt(qqsStavka)}%)</td><td class="num">${fmtSum(birlikQqsSumma)}</td></tr>
-          <tr><td><b>= Sotish narxi (QQS bilan)</b></td><td class="num"><b>${fmtSum(birlikNarxQqsBilan)}</b></td></tr>
+          <tr style="background:#e8ecf0;"><td><b>= Tavsiya sotish narxi (QQS bilan)</b></td><td class="num"><b>${fmtSum(birlikNarxQqsBilan)}</b></td></tr>
         </tbody>
       </table>
-      <div class="jami">JAMI (${fmt(miqdor, 3)} ${escapeHtml(icRow.birlik || "")}): ${fmtSum(birlikNarxQqssiz * miqdor)} (QQSsiz) / ${fmtSum(birlikNarxQqsBilan * miqdor)} (QQS bilan)</div>
+      <div class="jami">JAMI partiya qiymati (${fmt(miqdor, 3)} ${escapeHtml(icRow.birlik || "")}): ${fmtSum(birlikNarxQqssiz * miqdor)} so'm (QQSsiz) / ${fmtSum(birlikNarxQqsBilan * miqdor)} so'm (QQS bilan)</div>
 
+      <div class="section-title" style="margin-top:20px;">Komissiya a'zolari:</div>
       <div class="sign">
-        <div>Komissiya raisi<div class="line"></div></div>
-        <div>Buxgalter<div class="line"></div></div>
+        <div>Sex boshlig'i / Usta<div class="line"></div>(imzo, F.I.Sh.)</div>
+        <div>Bosh texnolog<div class="line"></div>(imzo, F.I.Sh.)</div>
+        <div>Bosh buxgalter<div class="line"></div>(imzo, F.I.Sh.)</div>
       </div>
     </body>
     </html>
@@ -5585,6 +6407,175 @@ function printIshlabChiqarishDalolatnoma(icId) {
 
   const win = window.open("", "_blank");
   if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 300);
+}
+
+function printIshlabChiqarishKalkulyatsiya(icId) {
+  const icRow = STORE.ishlabChiqarish.find((r) => r.id === icId);
+  if (!icRow) return;
+  const s = STORE.settings;
+  const details = parseIshlabChiqarishDetails(icRow);
+
+  const miqdor = toNum(icRow.miqdor) || 1;
+  const birlik = icRow.birlik || "dona";
+  const mahsulotNomi = icRow.mahsulotNomi || "";
+
+  let matTotal = 0, ishHaqi = 0, ijtimoiySoliq = 0, boshqaXarajat = 0, chiqindi = 0;
+  if (details) {
+    matTotal = toNum(details.matTotal);
+    ishHaqi = toNum(details.ishHaqi);
+    ijtimoiySoliq = toNum(details.ijtimoiySoliq);
+    boshqaXarajat = toNum(details.boshqaXarajat);
+    chiqindi = toNum(details.chiqindi);
+  } else {
+    matTotal = toNum(icRow.tannarx);
+  }
+
+  const jamiTannarx = Math.max(0, matTotal + ishHaqi + ijtimoiySoliq + boshqaXarajat - chiqindi);
+  const birlikTannarx = miqdor > 0 ? jamiTannarx / miqdor : 0;
+  const foydaNormasi = toNum(icRow.foydaNormasi);
+  const birlikNarxQqssiz = birlikTannarx + foydaNormasi;
+  const qqsStavka = toNum(s.qqsStavka || 12);
+  const birlikQqsSumma = birlikNarxQqssiz * (qqsStavka / 100);
+  const birlikNarxQqsBilan = birlikNarxQqssiz + birlikQqsSumma;
+
+  const ulush = (val) => jamiTannarx > 0 ? fmt((val / jamiTannarx) * 100, 1) + "%" : "0%";
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Kalkulyatsiya — ${escapeHtml(mahsulotNomi)}</title>
+      <style>
+        @page{size:A4; margin:14mm 12mm;}
+        body{font-family:Arial, "Segoe UI", sans-serif; padding:24px; color:#1c2530; font-size:12px; line-height:1.4;}
+        .approve{float:right; text-align:center; width:280px; font-size:11.5px;}
+        .approve .dots{border-bottom:1px dotted #1c2530; display:inline-block; min-width:180px;}
+        h1{font-size:18px; text-align:center; margin:60px 0 6px; text-transform:uppercase; letter-spacing:0.5px;}
+        .meta{font-size:12px; margin-bottom:5px; text-align:center;}
+        .meta-sub{font-size:11px; color:#444; margin-bottom:14px; text-align:center;}
+        table{width:100%; border-collapse:collapse; font-size:11px; margin:14px 0;}
+        th, td{border:1px solid #1c2530; padding:6px 8px; text-align:left;}
+        th{background:#eceff2; text-align:center; font-weight:700;}
+        td.num, th.num{text-align:right; font-variant-numeric:tabular-nums;}
+        tr.total-row td{font-weight:700; background:#f4f6f8;}
+        tr.main-row td{font-weight:800; background:#e8ecf0;}
+        .sign{display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-top:40px; font-size:11.5px; break-inside:avoid;}
+        .sign .line{margin-top:36px; border-top:1px solid #1c2530; padding-top:4px; width:90%;}
+        @media print { body{padding:0;} }
+      </style>
+    </head>
+    <body>
+      <div class="approve">
+        «ТАСДИҚЛАЙМАН»<br>
+        <b>${escapeHtml(s.companyName || "Korxona")}</b> rahbari<br>
+        <span class="dots" style="margin-top:20px;">${escapeHtml(s.rahbar || "")}</span><br>
+        <span style="font-size:11px;">(imzo, F.I.Sh.)</span>
+        <div style="margin-top:6px;">«____» ______________ 20____ y.</div>
+      </div>
+      <div style="clear:both;"></div>
+
+      <h1>1 BIRLIK MAHSULOT TANNARXI KALKULYATSIYASI</h1>
+      <div class="meta"><b>Mahsulot:</b> ${escapeHtml(mahsulotNomi)} &nbsp;|&nbsp; <b>O'lchov birligi:</b> 1 ${escapeHtml(birlik)} &nbsp;|&nbsp; <b>Partiya hajmi:</b> ${fmt(miqdor, 3)} ${escapeHtml(birlik)}</div>
+      <div class="meta-sub">Asos: O'zbekiston Respublikasi Vazirlar Mahkamasining 1999-yil 5-fevraldagi 54-son qarori (VM-54)</div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width:35px;">№</th>
+            <th>Xarajatlar moddasi nomi</th>
+            <th class="num" style="width:130px;">Jami partiya uchun (so'm)</th>
+            <th class="num" style="width:130px;">1 ${escapeHtml(birlik)} uchun (so'm)</th>
+            <th class="num" style="width:80px;">Tarkibdagi ulushi (%)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="text-align:center;">1</td>
+            <td>Xomashyo va asosiy materiallar (fakt sarf bo'yicha)</td>
+            <td class="num">${fmtSum(matTotal)}</td>
+            <td class="num">${fmtSum(matTotal / miqdor)}</td>
+            <td class="num">${ulush(matTotal)}</td>
+          </tr>
+          <tr>
+            <td style="text-align:center;">2</td>
+            <td>Asosiy ishlab chiqarish ishchilarining ish haqi</td>
+            <td class="num">${fmtSum(ishHaqi)}</td>
+            <td class="num">${fmtSum(ishHaqi / miqdor)}</td>
+            <td class="num">${ulush(ishHaqi)}</td>
+          </tr>
+          <tr>
+            <td style="text-align:center;">3</td>
+            <td>Ish haqiga ijtimoiy soliq (12%)</td>
+            <td class="num">${fmtSum(ijtimoiySoliq)}</td>
+            <td class="num">${fmtSum(ijtimoiySoliq / miqdor)}</td>
+            <td class="num">${ulush(ijtimoiySoliq)}</td>
+          </tr>
+          <tr>
+            <td style="text-align:center;">4</td>
+            <td>Boshqa to'g'ridan-to'g'ri xarajatlar (elektr, texnologik yoqilg'i, amortizatsiya)</td>
+            <td class="num">${fmtSum(boshqaXarajat)}</td>
+            <td class="num">${fmtSum(boshqaXarajat / miqdor)}</td>
+            <td class="num">${ulush(boshqaXarajat)}</td>
+          </tr>
+          ${chiqindi > 0 ? `
+          <tr style="color:#b3432b;">
+            <td style="text-align:center;">5</td>
+            <td>Qaytariladigan chiqindilar (chegiriladi)</td>
+            <td class="num">-${fmtSum(chiqindi)}</td>
+            <td class="num">-${fmtSum(chiqindi / miqdor)}</td>
+            <td class="num">-${ulush(chiqindi)}</td>
+          </tr>
+          ` : ""}
+          <tr class="main-row">
+            <td colspan="2"><b>I. ISHLAB CHIQARISH (SEX) TANNARXI</b></td>
+            <td class="num"><b>${fmtSum(jamiTannarx)}</b></td>
+            <td class="num"><b>${fmtSum(birlikTannarx)}</b></td>
+            <td class="num"><b>100.0%</b></td>
+          </tr>
+          <tr>
+            <td style="text-align:center;">6</td>
+            <td>Korxona foydasi (Foyda normasi / Rentabellik)</td>
+            <td class="num">${fmtSum(foydaNormasi * miqdor)}</td>
+            <td class="num">${fmtSum(foydaNormasi)}</td>
+            <td class="num">—</td>
+          </tr>
+          <tr class="total-row">
+            <td colspan="2"><b>II. ULQURJI SOTISH NARXI (QQSsiz)</b></td>
+            <td class="num"><b>${fmtSum(birlikNarxQqssiz * miqdor)}</b></td>
+            <td class="num"><b>${fmtSum(birlikNarxQqssiz)}</b></td>
+            <td class="num">—</td>
+          </tr>
+          <tr>
+            <td style="text-align:center;">7</td>
+            <td>Qo'shilgan qiymat solig'i (QQS ${fmt(qqsStavka)}%)</td>
+            <td class="num">${fmtSum(birlikQqsSumma * miqdor)}</td>
+            <td class="num">${fmtSum(birlikQqsSumma)}</td>
+            <td class="num">—</td>
+          </tr>
+          <tr class="main-row">
+            <td colspan="2"><b>III. YAKUNIY SOTISH NARXI (QQS bilan)</b></td>
+            <td class="num"><b>${fmtSum(birlikNarxQqsBilan * miqdor)}</b></td>
+            <td class="num"><b>${fmtSum(birlikNarxQqsBilan)}</b></td>
+            <td class="num">—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="sign">
+        <div>Bosh buxgalter<div class="line"></div>(imzo, F.I.Sh.)</div>
+        <div>Iqtisodchi / Texnolog<div class="line"></div>(imzo, F.I.Sh.)</div>
+        <div>Sex boshlig'i<div class="line"></div>(imzo, F.I.Sh.)</div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi", "err"); return; }
   win.document.write(html);
   win.document.close();
   setTimeout(() => { win.focus(); win.print(); }, 300);
@@ -5607,35 +6598,19 @@ async function performXomashyoChiqim(nomi, birlik, miqdor, sana, izoh) {
 }
 
 async function addIshlabChiqarishEntry() {
-  const mahsulotId = document.getElementById("icMahsulot").value;
-  const sana = document.getElementById("icSana").value || todayISO();
-  const miqdor = toNum(document.getElementById("icMiqdor").value);
-  const foydaNormasi = toNum(document.getElementById("icFoydaNormasi").value);
-  const izoh = document.getElementById("icIzoh").value.trim();
-  const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
-  if (!m) { toast("Mahsulot tanlanmadi", "err"); return; }
-  if (!miqdor || miqdor <= 0) { toast("Miqdorni kiriting", "err"); return; }
-
-  const ok = await performMahsulotConsumption(m, miqdor, sana, izoh, foydaNormasi);
-  if (!ok) return;
-
-  closeModal();
-  renderIshlabChiqarish();
-  toast("Yozildi, ombordagi xomashyo avtomat kamaytirildi");
+  openIshlabChiqarishModal();
 }
 
 async function deleteIshlabChiqarishEntry(id) {
   const entryIdx = STORE.ishlabChiqarish.findIndex((r) => r.id === id);
   const entry = entryIdx >= 0 ? STORE.ishlabChiqarish[entryIdx] : null;
-  const linked = STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === `IC-${id}`);
+  // IC-${id} ga bog'langan barcha ombor qatorlari (ham xomashyo chiqimi, ham tayyor mahsulot kirimi)
+  const linked = STORE.ombor.filter((r) => r.hujjatRaqami === `IC-${id}`);
   RECENTLY_DELETED.add(id);
   linked.forEach((r) => RECENTLY_DELETED.add(r.id));
   STORE.ishlabChiqarish = STORE.ishlabChiqarish.filter((r) => r.id !== id);
-  STORE.ombor = STORE.ombor.filter((r) => !(r.turi === "chiqim" && r.hujjatRaqami === `IC-${id}`));
+  STORE.ombor = STORE.ombor.filter((r) => r.hujjatRaqami !== `IC-${id}`);
   updateNavBadges();
-  // Ombor chiqimi tabidan chaqirilganda ham to'g'ri sahifa qayta chizilishi
-  // uchun "Ishlab chiqarish"ga majburan o'tkazib yubormay, joriy sahifani
-  // (qaysi bo'lsa ham) qayta render qilamiz.
   PAGES[CURRENT_PAGE].render();
   const { error } = await sbClient.from("ishlab_chiqarish").delete().eq("id", id);
   if (error) {
@@ -5654,7 +6629,7 @@ async function deleteIshlabChiqarishEntry(id) {
   }
   updateNavBadges();
   PAGES[CURRENT_PAGE].render();
-  toast("O'chirildi, hom ashyo qoldig'i tiklandi");
+  toast("O'chirildi, ombor harakatlari (xomashyo va tayyor mahsulot) bekor qilindi");
 }
 
 function omborChiqimNomiDatalistHtml() {
@@ -5862,6 +6837,831 @@ function openOmborChiqimImportModal() {
   });
 }
 
+/* -------------------- Ombordagi Mahsulotni Qayta Ishlash (Konvertatsiya) -------------------- */
+
+function computeQaytaIshlashCost(params) {
+  const sarfMiqdor = toNum(params.sarfMiqdor);
+  const manbaNarx = toNum(params.manbaNarx);
+  const sarfSumma = sarfMiqdor * manbaNarx;
+
+  const yangiMiqdor = toNum(params.yangiMiqdor);
+  const qoshimchaXarajat = toNum(params.qoshimchaXarajat);
+  const chiqindiSumma = toNum(params.chiqindiSumma);
+
+  const jamiXarajat = Math.max(0, sarfSumma + qoshimchaXarajat - chiqindiSumma);
+  const yangiBirlikNarx = yangiMiqdor > 0 ? jamiXarajat / yangiMiqdor : 0;
+  const yangiJamiSumma = yangiMiqdor * yangiBirlikNarx;
+
+  return {
+    sarfMiqdor,
+    manbaNarx,
+    sarfSumma,
+    yangiMiqdor,
+    qoshimchaXarajat,
+    chiqindiSumma,
+    jamiXarajat,
+    yangiBirlikNarx,
+    yangiJamiSumma
+  };
+}
+
+function computeTexnologikYoqotish(sarfMiqdor, yangiMiqdor, manbaBirlik, yangiBirlik) {
+  sarfMiqdor = toNum(sarfMiqdor);
+  yangiMiqdor = toNum(yangiMiqdor);
+  const sameUnit = String(manbaBirlik || "").trim().toLowerCase() === String(yangiBirlik || "").trim().toLowerCase();
+  if (!sameUnit || sarfMiqdor <= 0) {
+    return { sameUnit: false, yoqotishMiqdor: 0, yoqotishFoiz: 0 };
+  }
+  const yoqotishMiqdor = Math.max(0, sarfMiqdor - yangiMiqdor);
+  const yoqotishFoiz = sarfMiqdor > 0 ? (yoqotishMiqdor / sarfMiqdor) * 100 : 0;
+  return {
+    sameUnit: true,
+    yoqotishMiqdor,
+    yoqotishFoiz: Math.round(yoqotishFoiz * 10) / 10
+  };
+}
+
+function openOmborQaytaIshlashModal(preselectedNomi = null) {
+  const stockList = omborQoldiqList();
+  if (!stockList.length) {
+    toast("Omborda mahsulotlar mavjud emas", "err");
+    return;
+  }
+
+  let selected = null;
+  if (preselectedNomi) {
+    selected = stockList.find((q) => q.nomi === preselectedNomi && q.qoldiq > 0) || stockList.find((q) => q.nomi === preselectedNomi);
+  }
+  if (!selected) {
+    selected = stockList.find((q) => q.qoldiq > 0) || stockList[0];
+  }
+
+  let step = 1;
+  const state = {
+    manbaNomi: selected ? selected.nomi : "",
+    manbaBirlik: selected ? (selected.birlik || "") : "",
+    manbaQoldiq: selected ? selected.qoldiq : 0,
+    manbaNarx: selected ? getXomashyoBirlikNarx(selected.nomi, selected.qoldiq, todayISO()) : 0,
+    sarfMiqdor: selected && selected.qoldiq > 0 ? selected.qoldiq : 0,
+    sarfSumma: 0,
+    yangiTur: "mahsulot",
+    yangiNomi: "",
+    yangiBirlik: selected ? (selected.birlik || "kg") : "kg",
+    yangiMiqdor: 0,
+    qoshimchaXarajat: 0,
+    chiqindiNomi: "",
+    chiqindiMiqdor: 0,
+    chiqindiSumma: 0,
+    sana: todayISO(),
+    hujjatRaqami: "QI-" + todayISO().replace(/-/g, "") + "-" + Math.floor(100 + Math.random() * 900),
+    masul: "",
+    izoh: ""
+  };
+  state.sarfSumma = state.sarfMiqdor * state.manbaNarx;
+
+  function renderModalHtml() {
+    const isStep1 = step === 1;
+    const existingNames = Array.from(new Set([
+      ...STORE.mahsulotlar.map((m) => m.nomi),
+      ...STORE.ombor.map((o) => o.nomi)
+    ])).filter(Boolean);
+    const standardUnits = ["kg", "dona", "metr", "litr", "m2", "m3", "qop", "pachka", "komplekt", "tonna", "gramm"];
+
+    return `
+      <div style="max-width:820px;width:100%;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div>
+            <h3 style="margin:0 0 4px;font-size:17px;display:flex;align-items:center;gap:6px;">
+              <svg class="ic" viewBox="0 0 24 24" style="width:20px;height:20px;color:var(--primary,#2f6f5e);"><use href="#i-refresh"/></svg>
+              Ombordagi Mahsulotni Qayta Ishlash va Konvertatsiya Qilish
+            </h3>
+            <p class="modal-sub" style="margin:0;">Tovarni bir turdan ikkinchi turga o'zgartirish, navini yangilash yoki yangi mahsulot/xomashyoga aylantirish dalolatnomasi</p>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;padding:8px 12px;background:var(--bg-sunken);border-radius:var(--radius-sm);border:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:6px;font-weight:${isStep1 ? "700" : "500"};color:${isStep1 ? "var(--primary)" : "var(--text-muted)"};font-size:13px;">
+            <span style="background:${isStep1 ? "var(--primary)" : "var(--bg-card)"};color:${isStep1 ? "#fff" : "var(--text-faint)"};width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;border:1px solid ${isStep1 ? "transparent" : "var(--border)"};">1</span>
+            1-Qadam: Manba tovar/xomashyoni tanlash
+          </div>
+          <span style="color:var(--text-faint);margin:0 4px;">➔</span>
+          <div style="display:flex;align-items:center;gap:6px;font-weight:${!isStep1 ? "700" : "500"};color:${!isStep1 ? "var(--primary)" : "var(--text-muted)"};font-size:13px;">
+            <span style="background:${!isStep1 ? "var(--primary)" : "var(--bg-card)"};color:${!isStep1 ? "#fff" : "var(--text-faint)"};width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;border:1px solid ${!isStep1 ? "transparent" : "var(--border)"};">2</span>
+            2-Qadam: Yangi mahsulot parametrlarini belgilash
+          </div>
+        </div>
+
+        ${isStep1 ? `
+          <div style="margin-bottom:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+              <span style="font-size:12px;font-weight:600;color:var(--text-muted);">Ombordagi mavjud mahsulotlar va xomashyolar (o'lchov birligi bilan):</span>
+              <span class="faint" style="font-size:11.5px;">${stockList.length} ta pozitsiya</span>
+            </div>
+            <input class="search-input" id="qiSearchManba" placeholder="Ombordagi nom bo'yicha tezkor qidirish..." style="margin-bottom:8px;width:100%;">
+            
+            <div class="table-wrap" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:var(--radius-sm);">
+              <table style="width:100%;margin:0;font-size:12px;" id="qiStockTable">
+                <thead>
+                  <tr style="background:var(--bg-sunken);position:sticky;top:0;z-index:2;">
+                    <th style="width:36px;text-align:center;">Tanlash</th>
+                    <th>Mahsulot / Xomashyo nomi</th>
+                    <th>O'lchov birligi</th>
+                    <th class="num">Mavjud qoldiq</th>
+                    <th class="num">Birlik narxi (so'm)</th>
+                    <th class="num">Jami qiymati</th>
+                  </tr>
+                </thead>
+                <tbody id="qiStockTbody">
+                  ${stockList.map((q) => {
+                    const isSel = q.nomi === state.manbaNomi;
+                    const narx = getXomashyoBirlikNarx(q.nomi, q.qoldiq, todayISO());
+                    const qiymat = q.qoldiq > 0 ? q.qoldiq * narx : 0;
+                    return `
+                      <tr data-nomi="${escapeHtml(q.nomi)}" data-birlik="${escapeHtml(q.birlik || "")}" data-qoldiq="${q.qoldiq}" data-narx="${narx}" style="cursor:pointer;${isSel ? "background:var(--bg-highlight,#eff6ff);" : ""}">
+                        <td style="text-align:center;">
+                          <input type="radio" name="qiManbaRadio" ${isSel ? "checked" : ""} style="cursor:pointer;">
+                        </td>
+                        <td style="font-weight:${isSel ? "700" : "500"};">${escapeHtml(q.nomi)}</td>
+                        <td><span class="badge" style="font-size:11px;">${escapeHtml(q.birlik || "birlik")}</span></td>
+                        <td class="num" style="font-weight:700;color:${q.qoldiq > 0 ? "var(--ok,#2f6f5e)" : "var(--danger,#e5484d)"}">${fmt(q.qoldiq, 3)}</td>
+                        <td class="num">${fmt(narx, 2)}</td>
+                        <td class="num">${fmtSum(qiymat)}</td>
+                      </tr>
+                    `;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="qiManbaSelectedCard" style="background:var(--bg-sunken);padding:12px;border-radius:var(--radius-sm);border:1px solid var(--border);display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:12px;align-items:end;margin-bottom:12px;">
+            <div>
+              <div style="font-size:11px;font-weight:700;color:var(--text-faint);text-transform:uppercase;">Tanlangan tovar:</div>
+              <div id="qiCardName" style="font-weight:700;font-size:14px;color:var(--text-normal);margin-top:2px;">${escapeHtml(state.manbaNomi || "Tanlanmagan")}</div>
+              <div id="qiCardStock" class="faint" style="font-size:11.5px;">Mavjud: ${fmt(state.manbaQoldiq, 3)} ${escapeHtml(state.manbaBirlik)} (1 ${escapeHtml(state.manbaBirlik)} = ${fmt(state.manbaNarx, 2)} so'm)</div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                <label style="font-size:12px;font-weight:600;margin:0;">Qayta ishlanadigan miqdor</label>
+                <button type="button" class="btn btn-sm" id="btnQiAllQty" style="padding:1px 6px;font-size:10px;">Hammasi</button>
+              </div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <input type="number" id="qiSarfInput" step="any" min="0.001" value="${state.sarfMiqdor || ""}" placeholder="0" style="width:100%;">
+                <span id="qiCardUnit" class="faint" style="font-size:12px;min-width:30px;">${escapeHtml(state.manbaBirlik)}</span>
+              </div>
+            </div>
+            <div>
+              <div style="font-size:11px;font-weight:700;color:var(--text-faint);text-transform:uppercase;">Sarflanadigan qiymat:</div>
+              <div id="qiCardSumma" style="font-weight:800;font-size:16px;color:var(--primary);margin-top:4px;">${fmtSum(state.sarfSumma)}</div>
+            </div>
+          </div>
+          <div id="qiSarfWarning" style="display:${state.sarfMiqdor > state.manbaQoldiq ? "block" : "none"};color:var(--danger,#e5484d);font-size:12px;font-weight:600;margin-bottom:12px;">
+            ⚠️ Diqqat: Kiritilgan miqdor ombordagi mavjud qoldiqdan (${fmt(state.manbaQoldiq, 3)} ${escapeHtml(state.manbaBirlik)}) ko'proq!
+          </div>
+
+          <div class="modal-actions" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+            <button class="btn" id="mCancel">Bekor qilish</button>
+            <button class="btn btn-primary" id="btnQiNextStep" style="padding:8px 18px;font-weight:700;">
+              Keyingi qadam: Yangi mahsulotni belgilash ➔
+            </button>
+          </div>
+        ` : `
+          <div style="background:var(--bg-sunken);padding:10px 14px;border-radius:var(--radius-sm);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div>
+              <span class="faint" style="font-size:11px;font-weight:700;text-transform:uppercase;">Sarflanayotgan manba tovar:</span>
+              <div style="font-weight:700;font-size:14px;color:var(--text-normal);margin-top:1px;">
+                ${escapeHtml(state.manbaNomi)} — ${fmt(state.sarfMiqdor, 3)} ${escapeHtml(state.manbaBirlik)} (${fmtSum(state.sarfSumma)})
+              </div>
+            </div>
+            <button type="button" class="btn btn-sm" id="btnQiBackToStep1">⬅️ Manbani o'zgartirish</button>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:14px;margin-bottom:14px;">
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;">
+              <h4 style="margin:0 0 10px;font-size:13px;font-weight:700;color:var(--primary);border-bottom:1px solid var(--border);padding-bottom:6px;">
+                1. Olinadigan Yangi Mahsulot / Xomashyo
+              </h4>
+              
+              <div class="field" style="margin-bottom:10px;">
+                <label style="font-size:12px;font-weight:600;">Olinadigan tovar turi</label>
+                <select id="qiYangiTur" style="width:100%;">
+                  <option value="mahsulot" ${state.yangiTur === "mahsulot" ? "selected" : ""}>Tayyor mahsulot (2810 hisobvarag'i — sotish uchun)</option>
+                  <option value="xomashyo" ${state.yangiTur === "xomashyo" ? "selected" : ""}>Xomashyo / Yarim tayyor mahsulot (1010/2110 — keyingi ishlab chiqarishga)</option>
+                </select>
+              </div>
+
+              <div class="field" style="margin-bottom:10px;">
+                <label style="font-size:12px;font-weight:600;">Yangi mahsulot / xomashyo nomi</label>
+                <input id="qiYangiNomi" list="qiYangiNomiList" value="${escapeHtml(state.yangiNomi)}" placeholder="Masalan: Qiyma 1-nav, Kesilgan taxta, Qadoqlangan shakar...">
+                <datalist id="qiYangiNomiList">
+                  ${existingNames.map((n) => `<option value="${escapeHtml(n)}">`).join("")}
+                </datalist>
+              </div>
+
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+                <div class="field" style="margin:0;">
+                  <label style="font-size:12px;font-weight:600;">O'lchov birligi</label>
+                  <input id="qiYangiBirlik" list="qiBirlikList" value="${escapeHtml(state.yangiBirlik || state.manbaBirlik || "kg")}" placeholder="kg, dona...">
+                  <datalist id="qiBirlikList">
+                    ${standardUnits.map((u) => `<option value="${u}">`).join("")}
+                  </datalist>
+                </div>
+                <div class="field" style="margin:0;">
+                  <label style="font-size:12px;font-weight:600;">Olingan miqdori</label>
+                  <input type="number" id="qiYangiMiqdor" step="any" min="0.001" value="${state.yangiMiqdor || ""}" placeholder="masalan: 48">
+                </div>
+              </div>
+
+              <div id="qiYoqotishBox" style="background:var(--bg-sunken);padding:8px 10px;border-radius:var(--radius-sm);font-size:11.5px;margin-bottom:8px;"></div>
+            </div>
+
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;">
+              <h4 style="margin:0 0 10px;font-size:13px;font-weight:700;color:var(--text-normal);border-bottom:1px solid var(--border);padding-bottom:6px;">
+                2. Xarajatlar va Chiqindilar (Tannarxga ta'siri)
+              </h4>
+
+              <div class="field" style="margin-bottom:10px;">
+                <label style="font-size:12px;font-weight:600;">Qo'shimcha qayta ishlash xarajatlari (mehnat, energiya, so'm)</label>
+                <input type="number" id="qiQoshimchaXarajat" step="any" min="0" value="${state.qoshimchaXarajat || 0}" placeholder="0">
+              </div>
+
+              <div class="field" style="margin-bottom:6px;">
+                <label style="font-size:12px;font-weight:600;">Qaytariladigan chiqindi / brak (agar omborga olinsa)</label>
+                <div style="display:grid;grid-template-columns:1.5fr 1fr;gap:6px;">
+                  <input id="qiChiqindiNomi" value="${escapeHtml(state.chiqindiNomi || "")}" placeholder="Chiqindi nomi (masalan: Yem, Qiyqim)">
+                  <input type="number" id="qiChiqindiSumma" step="any" min="0" value="${state.chiqindiSumma || 0}" placeholder="Summasi (so'm)">
+                </div>
+                <span class="faint" style="font-size:11px;">Chiqindi summasi yangi mahsulot tannarxidan chegiriladi</span>
+              </div>
+
+              <div style="background:var(--bg-sunken);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px;margin-top:10px;">
+                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px;">
+                  <span class="faint">Jami tannarx qiymati:</span>
+                  <b id="qiJamiXarajatLabel">0 so'm</b>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:13px;padding-top:4px;border-top:1px dashed var(--border);">
+                  <span style="font-weight:700;">1 birlik yangi tannarx:</span>
+                  <b id="qiBirlikTannarxLabel" style="color:var(--primary);font-size:15px;">0 so'm</b>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr 1.2fr 1.5fr;gap:10px;background:var(--bg-sunken);padding:10px 12px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:14px;">
+            <div class="field" style="margin:0;">
+              <label style="font-size:11.5px;font-weight:600;">Sana</label>
+              <input type="date" id="qiSana" value="${state.sana || todayISO()}">
+            </div>
+            <div class="field" style="margin:0;">
+              <label style="font-size:11.5px;font-weight:600;">Hujjat №</label>
+              <input id="qiHujjatRaqami" value="${escapeHtml(state.hujjatRaqami)}">
+            </div>
+            <div class="field" style="margin:0;">
+              <label style="font-size:11.5px;font-weight:600;">Mas'ul shaxs (usta / operator)</label>
+              <input id="qiMasul" value="${escapeHtml(state.masul || "")}" placeholder="Usta Ismoilov">
+            </div>
+            <div class="field" style="margin:0;">
+              <label style="font-size:11.5px;font-weight:600;">Izoh</label>
+              <input id="qiIzoh" value="${escapeHtml(state.izoh || "")}" placeholder="Qayta ishlash sababi">
+            </div>
+          </div>
+
+          <div class="modal-actions" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <button class="btn" id="btnQiBack">⬅️ Ortga</button>
+              <button class="btn" id="mCancel">Bekor qilish</button>
+            </div>
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-primary" id="btnQiSave" style="padding:8px 18px;font-weight:700;">
+                ✅ Qayta ishlashni tasdiqlash
+              </button>
+              <button class="btn btn-primary" id="btnQiSavePrint" style="padding:8px 18px;font-weight:700;background:#1d4ed8;border-color:#1d4ed8;">
+                🖨️ Saqlash va Dalolatnoma chop etish
+              </button>
+            </div>
+          </div>
+        `}
+      </div>
+    `;
+  }
+
+  function bindEvents() {
+    document.querySelectorAll("#mCancel").forEach((b) => b.addEventListener("click", closeModal));
+
+    if (step === 1) {
+      const searchInput = document.getElementById("qiSearchManba");
+      if (searchInput) {
+        searchInput.addEventListener("input", (e) => {
+          const q = e.target.value.trim().toLowerCase();
+          document.querySelectorAll("#qiStockTbody tr").forEach((tr) => {
+            const text = tr.dataset.nomi.toLowerCase();
+            tr.style.display = !q || text.includes(q) ? "" : "none";
+          });
+        });
+      }
+
+      document.querySelectorAll("#qiStockTbody tr").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          document.querySelectorAll("#qiStockTbody tr").forEach((r) => {
+            r.style.background = "";
+            const radio = r.querySelector("input[type=radio]");
+            if (radio) radio.checked = false;
+          });
+          tr.style.background = "var(--bg-highlight,#eff6ff)";
+          const radio = tr.querySelector("input[type=radio]");
+          if (radio) radio.checked = true;
+
+          state.manbaNomi = tr.dataset.nomi;
+          state.manbaBirlik = tr.dataset.birlik;
+          state.manbaQoldiq = toNum(tr.dataset.qoldiq);
+          state.manbaNarx = toNum(tr.dataset.narx);
+
+          if (!state.sarfMiqdor || state.sarfMiqdor > state.manbaQoldiq) {
+            state.sarfMiqdor = state.manbaQoldiq > 0 ? state.manbaQoldiq : 0;
+          }
+          state.sarfSumma = state.sarfMiqdor * state.manbaNarx;
+
+          const cardName = document.getElementById("qiCardName");
+          const cardStock = document.getElementById("qiCardStock");
+          const cardUnit = document.getElementById("qiCardUnit");
+          const sarfInput = document.getElementById("qiSarfInput");
+          const cardSumma = document.getElementById("qiCardSumma");
+          const warn = document.getElementById("qiSarfWarning");
+
+          if (cardName) cardName.textContent = state.manbaNomi;
+          if (cardStock) cardStock.textContent = `Mavjud: ${fmt(state.manbaQoldiq, 3)} ${state.manbaBirlik} (1 ${state.manbaBirlik} = ${fmt(state.manbaNarx, 2)} so'm)`;
+          if (cardUnit) cardUnit.textContent = state.manbaBirlik;
+          if (sarfInput) sarfInput.value = state.sarfMiqdor || "";
+          if (cardSumma) cardSumma.textContent = fmtSum(state.sarfSumma);
+          if (warn) warn.style.display = state.sarfMiqdor > state.manbaQoldiq ? "block" : "none";
+        });
+      });
+
+      const sarfInput = document.getElementById("qiSarfInput");
+      if (sarfInput) {
+        sarfInput.addEventListener("input", (e) => {
+          state.sarfMiqdor = toNum(e.target.value);
+          state.sarfSumma = state.sarfMiqdor * state.manbaNarx;
+          const cardSumma = document.getElementById("qiCardSumma");
+          const warn = document.getElementById("qiSarfWarning");
+          if (cardSumma) cardSumma.textContent = fmtSum(state.sarfSumma);
+          if (warn) warn.style.display = state.sarfMiqdor > state.manbaQoldiq ? "block" : "none";
+        });
+      }
+
+      const allBtn = document.getElementById("btnQiAllQty");
+      if (allBtn) {
+        allBtn.addEventListener("click", () => {
+          state.sarfMiqdor = state.manbaQoldiq > 0 ? state.manbaQoldiq : 0;
+          state.sarfSumma = state.sarfMiqdor * state.manbaNarx;
+          if (sarfInput) sarfInput.value = state.sarfMiqdor || "";
+          const cardSumma = document.getElementById("qiCardSumma");
+          const warn = document.getElementById("qiSarfWarning");
+          if (cardSumma) cardSumma.textContent = fmtSum(state.sarfSumma);
+          if (warn) warn.style.display = "none";
+        });
+      }
+
+      const nextBtn = document.getElementById("btnQiNextStep");
+      if (nextBtn) {
+        nextBtn.addEventListener("click", () => {
+          if (!state.manbaNomi) {
+            toast("Qayta ishlanadigan mahsulotni tanlang", "err");
+            return;
+          }
+          if (toNum(state.sarfMiqdor) <= 0) {
+            toast("Sarflanadigan miqdorni kiriting", "err");
+            return;
+          }
+          if (!state.yangiNomi) {
+            state.yangiNomi = state.manbaNomi + " (qayta ishlangan)";
+          }
+          if (!state.yangiBirlik) {
+            state.yangiBirlik = state.manbaBirlik || "kg";
+          }
+          if (!state.yangiMiqdor || state.yangiMiqdor <= 0) {
+            state.yangiMiqdor = state.sarfMiqdor;
+          }
+          step = 2;
+          render();
+        });
+      }
+    } else {
+      const backBtn = document.getElementById("btnQiBack");
+      const backStep1Btn = document.getElementById("btnQiBackToStep1");
+      const onBack = () => { step = 1; render(); };
+      if (backBtn) backBtn.addEventListener("click", onBack);
+      if (backStep1Btn) backStep1Btn.addEventListener("click", onBack);
+
+      function updateStep2Cost() {
+        state.yangiTur = document.getElementById("qiYangiTur").value;
+        state.yangiNomi = document.getElementById("qiYangiNomi").value.trim();
+        state.yangiBirlik = document.getElementById("qiYangiBirlik").value.trim();
+        state.yangiMiqdor = toNum(document.getElementById("qiYangiMiqdor").value);
+        state.qoshimchaXarajat = toNum(document.getElementById("qiQoshimchaXarajat").value);
+        state.chiqindiNomi = document.getElementById("qiChiqindiNomi").value.trim();
+        state.chiqindiSumma = toNum(document.getElementById("qiChiqindiSumma").value);
+        state.sana = document.getElementById("qiSana").value;
+        state.hujjatRaqami = document.getElementById("qiHujjatRaqami").value.trim();
+        state.masul = document.getElementById("qiMasul").value.trim();
+        state.izoh = document.getElementById("qiIzoh").value.trim();
+
+        const cost = computeQaytaIshlashCost({
+          sarfMiqdor: state.sarfMiqdor,
+          manbaNarx: state.manbaNarx,
+          yangiMiqdor: state.yangiMiqdor,
+          qoshimchaXarajat: state.qoshimchaXarajat,
+          chiqindiSumma: state.chiqindiSumma
+        });
+
+        state.yangiBirlikNarx = cost.yangiBirlikNarx;
+        state.yangiJamiSumma = cost.yangiJamiSumma;
+
+        const jamiLabel = document.getElementById("qiJamiXarajatLabel");
+        const birlikLabel = document.getElementById("qiBirlikTannarxLabel");
+        const lossBox = document.getElementById("qiYoqotishBox");
+
+        if (jamiLabel) jamiLabel.textContent = fmtSum(cost.jamiXarajat);
+        if (birlikLabel) birlikLabel.textContent = `${fmt(cost.yangiBirlikNarx, 2)} so'm`;
+
+        if (lossBox) {
+          const loss = computeTexnologikYoqotish(state.sarfMiqdor, state.yangiMiqdor, state.manbaBirlik, state.yangiBirlik);
+          if (loss.sameUnit) {
+            if (loss.yoqotishMiqdor > 0) {
+              lossBox.innerHTML = `<span style="color:var(--text-normal);font-weight:600;">Texnologik yo'qotish (brak/chiqindi): ${fmt(loss.yoqotishMiqdor, 3)} ${escapeHtml(state.yangiBirlik)} (${loss.yoqotishFoiz}%)</span>`;
+            } else if (loss.yoqotishMiqdor < 0) {
+              lossBox.innerHTML = `<span style="color:var(--ok,#2f6f5e);font-weight:600;">Hajm ortishi: +${fmt(Math.abs(loss.yoqotishMiqdor), 3)} ${escapeHtml(state.yangiBirlik)}</span>`;
+            } else {
+              lossBox.innerHTML = `<span style="color:var(--ok,#2f6f5e);">Chiqish: 100% (yo'qotishsiz)</span>`;
+            }
+          } else {
+            lossBox.innerHTML = `<span class="faint">O'lchov birliklari har xil: ${escapeHtml(state.manbaBirlik)} ➔ ${escapeHtml(state.yangiBirlik)}</span>`;
+          }
+        }
+      }
+
+      ["qiYangiTur", "qiYangiNomi", "qiYangiBirlik", "qiYangiMiqdor", "qiQoshimchaXarajat", "qiChiqindiNomi", "qiChiqindiSumma", "qiSana", "qiHujjatRaqami", "qiMasul", "qiIzoh"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+          el.addEventListener("input", updateStep2Cost);
+          el.addEventListener("change", updateStep2Cost);
+        }
+      });
+      updateStep2Cost();
+
+      const saveBtn = document.getElementById("btnQiSave");
+      const savePrintBtn = document.getElementById("btnQiSavePrint");
+
+      const onSave = (andPrint) => {
+        updateStep2Cost();
+        if (!state.yangiNomi) {
+          toast("Yangi mahsulot yoki xomashyo nomini kiriting", "err");
+          return;
+        }
+        if (toNum(state.yangiMiqdor) <= 0) {
+          toast("Olingan mahsulot miqdorini kiriting", "err");
+          return;
+        }
+        executeQaytaIshlash(state, andPrint);
+      };
+
+      if (saveBtn) saveBtn.addEventListener("click", () => onSave(false));
+      if (savePrintBtn) savePrintBtn.addEventListener("click", () => onSave(true));
+    }
+  }
+
+  function render() {
+    openModal(renderModalHtml(), { focus: true });
+    bindEvents();
+  }
+
+  render();
+}
+
+async function executeQaytaIshlash(qiData, andPrint = false) {
+  const docNo = qiData.hujjatRaqami || ("QI-" + Date.now().toString(36).toUpperCase());
+  const sana = qiData.sana || todayISO();
+
+  const chiqimRow = {
+    sana,
+    hujjatRaqami: docNo,
+    kontragentInn: "",
+    kontragentNomi: `Qayta ishlash: "${qiData.yangiNomi}" ga [QI]`,
+    nomi: qiData.manbaNomi,
+    birlik: qiData.manbaBirlik || "",
+    miqdor: toNum(qiData.sarfMiqdor),
+    narx: Math.round(toNum(qiData.manbaNarx) * 100) / 100,
+    yetkazibBerishNarxi: Math.round(toNum(qiData.sarfSumma) * 100) / 100,
+    qqsSumma: 0,
+    yetkazibBerishNarxiQQSBilan: Math.round(toNum(qiData.sarfSumma) * 100) / 100,
+    turi: "chiqim"
+  };
+
+  const kirimRow = {
+    sana,
+    hujjatRaqami: docNo,
+    kontragentInn: "",
+    kontragentNomi: `Qayta ishlashdan kirim ("${qiData.manbaNomi}" dan) [QI]`,
+    nomi: qiData.yangiNomi,
+    birlik: qiData.yangiBirlik || "",
+    miqdor: toNum(qiData.yangiMiqdor),
+    narx: Math.round(toNum(qiData.yangiBirlikNarx) * 100) / 100,
+    yetkazibBerishNarxi: Math.round(toNum(qiData.yangiJamiSumma) * 100) / 100,
+    qqsSumma: 0,
+    yetkazibBerishNarxiQQSBilan: Math.round(toNum(qiData.yangiJamiSumma) * 100) / 100,
+    turi: "kirim"
+  };
+
+  const rowsToInsert = [chiqimRow, kirimRow];
+
+  if (qiData.chiqindiNomi && toNum(qiData.chiqindiSumma) > 0) {
+    rowsToInsert.push({
+      sana,
+      hujjatRaqami: docNo,
+      kontragentInn: "",
+      kontragentNomi: `Qayta ishlash chiqindisi ("${qiData.manbaNomi}" dan) [QI]`,
+      nomi: qiData.chiqindiNomi,
+      birlik: qiData.chiqindiBirlik || qiData.manbaBirlik || "",
+      miqdor: toNum(qiData.chiqindiMiqdor) || 1,
+      narx: toNum(qiData.chiqindiMiqdor) > 0 ? Math.round((toNum(qiData.chiqindiSumma) / toNum(qiData.chiqindiMiqdor)) * 100) / 100 : toNum(qiData.chiqindiSumma),
+      yetkazibBerishNarxi: Math.round(toNum(qiData.chiqindiSumma) * 100) / 100,
+      qqsSumma: 0,
+      yetkazibBerishNarxiQQSBilan: Math.round(toNum(qiData.chiqindiSumma) * 100) / 100,
+      turi: "kirim"
+    });
+  }
+
+  const dbRows = rowsToInsert.map((r) => toDbRow(OMBOR_DB_MAP, r));
+  const { data, error } = await sbClient.from("ombor").insert(dbRows).select();
+  if (error) {
+    console.error(error);
+    toast(isPermissionError(error) ? "Sizda omborga yozish huquqi yo'q" : "Qayta ishlashni saqlashda xatolik yuz berdi", "err");
+    return false;
+  }
+
+  (data || []).forEach((row) => STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, row)));
+  invalidateFifo();
+  updateNavBadges();
+  closeModal();
+
+  if (CURRENT_PAGE === "ombor") renderOmbor();
+  else if (CURRENT_PAGE === "ishlabchiqarish") renderIshlabChiqarish();
+  else PAGES[CURRENT_PAGE].render();
+
+  toast(`Mahsulot muvaffaqiyatli qayta ishlandi va omborga kirim qilindi! (${docNo})`);
+
+  if (andPrint) {
+    printQaytaIshlashDalolatnoma(qiData);
+  }
+  return true;
+}
+
+async function deleteQaytaIshlashEntry(docNo) {
+  if (!docNo) return;
+  const linked = STORE.ombor.filter((r) => r.hujjatRaqami === docNo);
+  if (!linked.length) return;
+
+  const manba = linked.find((r) => r.turi === "chiqim");
+  const yangi = linked.find((r) => r.turi === "kirim" && !r.kontragentNomi.includes("chiqindi"));
+  const desc = manba && yangi ? `"${manba.nomi}" ➔ "${yangi.nomi}"` : docNo;
+
+  if (!confirm(`Ushbu qayta ishlash amaliyotini (${desc}) butunlay bekor qilib, sarflangan va kirim qilingan barcha qatorlarni o'chirishni tasdiqlaysizmi?`)) {
+    return;
+  }
+
+  linked.forEach((r) => RECENTLY_DELETED.add(r.id));
+  STORE.ombor = STORE.ombor.filter((r) => r.hujjatRaqami !== docNo);
+  invalidateFifo();
+  updateNavBadges();
+  if (CURRENT_PAGE === "ombor") renderOmbor();
+  else if (CURRENT_PAGE === "ishlabchiqarish") renderIshlabChiqarish();
+  else PAGES[CURRENT_PAGE].render();
+
+  const { error } = await sbClient.from("ombor").delete().in("id", linked.map((r) => r.id));
+  if (error) {
+    console.error(error);
+    linked.forEach((r) => { RECENTLY_DELETED.delete(r.id); STORE.ombor.push(r); });
+    invalidateFifo();
+    updateNavBadges();
+    if (CURRENT_PAGE === "ombor") renderOmbor();
+    else PAGES[CURRENT_PAGE].render();
+    toast(isPermissionError(error) ? "Sizda bu yozuvni o'chirish huquqi yo'q" : "O'chirishda xatolik", "err");
+    return;
+  }
+
+  toast(`Qayta ishlash hujjati (${docNo}) va unga bog'liq barcha ombor harakatlari bekor qilindi`);
+}
+
+function printQaytaIshlashDalolatnoma(qiData) {
+  const s = STORE.settings;
+  const sameUnit = String(qiData.manbaBirlik || "").trim().toLowerCase() === String(qiData.yangiBirlik || "").trim().toLowerCase();
+  const yoqotishMiqdor = sameUnit ? Math.max(0, toNum(qiData.sarfMiqdor) - toNum(qiData.yangiMiqdor)) : 0;
+  const yoqotishFoiz = (sameUnit && toNum(qiData.sarfMiqdor) > 0) ? Math.round((yoqotishMiqdor / toNum(qiData.sarfMiqdor)) * 1000) / 10 : 0;
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="uz">
+    <head>
+      <meta charset="UTF-8">
+      <title>Qayta ishlash dalolatnomasi № ${escapeHtml(qiData.hujjatRaqami)}</title>
+      <style>
+        @page { size: A4 portrait; margin: 12mm 15mm; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 11pt; line-height: 1.35; color: #000; margin: 0; padding: 0; }
+        .head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+        .firm-info { width: 55%; font-size: 10.5pt; }
+        .firm-title { font-weight: bold; font-size: 13pt; text-transform: uppercase; margin-bottom: 2px; }
+        .approve-block { width: 40%; text-align: right; font-size: 10pt; }
+        .approve-title { font-weight: bold; text-transform: uppercase; margin-bottom: 4px; }
+        h1 { text-align: center; font-size: 14pt; font-weight: bold; text-transform: uppercase; margin: 12px 0 4px; }
+        .doc-sub { text-align: center; font-size: 11pt; margin-bottom: 14px; font-weight: 500; }
+        .meta-text { text-align: justify; text-indent: 24px; margin-bottom: 12px; font-size: 10.5pt; }
+        .sec-title { font-weight: bold; font-size: 11pt; margin: 12px 0 4px; text-transform: uppercase; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 10pt; }
+        th, td { border: 1px solid #000; padding: 4px 6px; }
+        th { background: #f0f0f0; text-align: center; font-weight: bold; }
+        .num { text-align: right; white-space: nowrap; }
+        .center { text-align: center; }
+        .summary-card { background: #fafafa; border: 1px solid #333; padding: 8px 12px; margin-bottom: 14px; font-size: 10.5pt; }
+        .sign-grid { margin-top: 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px 24px; font-size: 10pt; page-break-inside: avoid; }
+        .sign-line { border-bottom: 1px solid #000; display: inline-block; min-width: 140px; }
+      </style>
+    </head>
+    <body>
+      <div class="head">
+        <div class="firm-info">
+          <div class="firm-title">${escapeHtml(s.companyName || "KORXONA")}</div>
+          <div>STIR (INN): <b>${escapeHtml(s.inn || "—")}</b></div>
+          <div>Manzil: ${escapeHtml(s.address || "O'zbekiston Respublikasi")}</div>
+        </div>
+        <div class="approve-block">
+          <div class="approve-title">«TASDIQLAYMAN»</div>
+          <div>Korxona rahbari:</div>
+          <div style="margin-top:20px;"><span class="sign-line"></span> (${escapeHtml(s.director || "__________________")})</div>
+          <div style="margin-top:4px;">«____» ________________ 202___ y.</div>
+        </div>
+      </div>
+
+      <h1>TOVAR-MODDIY ZAXIRALARNI QAYTA ISHLASH (KONVERTATSIYA) DALOLATNOMASI № ${escapeHtml(qiData.hujjatRaqami)}</h1>
+      <div class="doc-sub">Sana: «${escapeHtml((qiData.sana || "").slice(8, 10))}» ${escapeHtml(UZ_MONTH_SHORT[new Date(qiData.sana || todayISO()).getMonth()] || "")} ${escapeHtml((qiData.sana || "").slice(0, 4))} yil</div>
+
+      <div class="meta-text">
+        Ushbu dalolatnoma komissiya a'zolari tomonidan korxona ishlab chiqarish va xo'jalik faoliyatida tovar-moddiy zaxiralarni qayta ishlash, navini saralash, modifikatsiya qilish hamda yangi turdagi tayyor mahsulot/xomashyoga aylantirish natijalarini rasmiylashtirish maqsadida tuzildi.
+      </div>
+
+      <div class="sec-title">1. Qayta ishlashga sarflangan manba tovar-moddiy zaxiralar (Ombor chiqimi)</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:28px;">№</th>
+            <th>Tovar / xomashyo nomi</th>
+            <th style="width:70px;">O'lchov birligi</th>
+            <th style="width:90px;" class="num">Sarflangan miqdor</th>
+            <th style="width:110px;" class="num">Birlik narxi (so'm)</th>
+            <th style="width:120px;" class="num">Jami sarf qiymati (so'm)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="center">1</td>
+            <td><b>${escapeHtml(qiData.manbaNomi)}</b></td>
+            <td class="center">${escapeHtml(qiData.manbaBirlik || "birlik")}</td>
+            <td class="num font-bold"><b>${fmt(qiData.sarfMiqdor, 3)}</b></td>
+            <td class="num">${fmt(qiData.manbaNarx, 2)}</td>
+            <td class="num"><b>${fmtSum(qiData.sarfSumma)}</b></td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="3" style="text-align:right;">JAMI SARF:</th>
+            <th class="num">${fmt(qiData.sarfMiqdor, 3)}</th>
+            <th></th>
+            <th class="num">${fmtSum(qiData.sarfSumma)}</th>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div class="sec-title">2. Qayta ishlash natijasida olingan yangi mahsulot / xomashyo (Ombor kirimi)</div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:28px;">№</th>
+            <th>Yangi mahsulot / xomashyo nomi</th>
+            <th style="width:110px;">Turi / Hisobvaraq</th>
+            <th style="width:70px;">O'lchov birligi</th>
+            <th style="width:90px;" class="num">Olingan miqdor</th>
+            <th style="width:110px;" class="num">Yangi birlik tannarxi</th>
+            <th style="width:120px;" class="num">Jami qiymati (so'm)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="center">1</td>
+            <td><b>${escapeHtml(qiData.yangiNomi)}</b></td>
+            <td class="center">${qiData.yangiTur === "mahsulot" ? "Tayyor mahsulot (2810)" : "Xomashyo (1010/2110)"}</td>
+            <td class="center">${escapeHtml(qiData.yangiBirlik || "birlik")}</td>
+            <td class="num"><b>${fmt(qiData.yangiMiqdor, 3)}</b></td>
+            <td class="num"><b>${fmt(qiData.yangiBirlikNarx, 2)}</b></td>
+            <td class="num"><b>${fmtSum(qiData.yangiJamiSumma)}</b></td>
+          </tr>
+          ${qiData.chiqindiNomi && toNum(qiData.chiqindiSumma) > 0 ? `
+            <tr>
+              <td class="center">2</td>
+              <td>${escapeHtml(qiData.chiqindiNomi)} (Qaytariladigan chiqindi)</td>
+              <td class="center">Chiqindi (1090)</td>
+              <td class="center">${escapeHtml(qiData.chiqindiBirlik || qiData.manbaBirlik || "birlik")}</td>
+              <td class="num">${fmt(qiData.chiqindiMiqdor, 3)}</td>
+              <td class="num">${fmt(toNum(qiData.chiqindiSumma) / (toNum(qiData.chiqindiMiqdor) || 1), 2)}</td>
+              <td class="num">${fmtSum(qiData.chiqindiSumma)}</td>
+            </tr>
+          ` : ""}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th colspan="4" style="text-align:right;">JAMI KIRIM QIYMATI:</th>
+            <th class="num">${fmt(toNum(qiData.yangiMiqdor) + toNum(qiData.chiqindiMiqdor || 0), 3)}</th>
+            <th></th>
+            <th class="num">${fmtSum(toNum(qiData.yangiJamiSumma) + toNum(qiData.chiqindiSumma || 0))}</th>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div class="summary-card">
+        <div style="font-weight:bold;margin-bottom:4px;text-transform:uppercase;">3. Texnologik Ko'rsatkichlar va Xarajatlar Balansi:</div>
+        <div>• Manba sarf qiymati: <b>${fmtSum(qiData.sarfSumma)} so'm</b></div>
+        ${toNum(qiData.qoshimchaXarajat) > 0 ? `<div>• Qo'shimcha qayta ishlash xarajatlari (mehnat, energiya): <b>+${fmtSum(qiData.qoshimchaXarajat)} so'm</b></div>` : ""}
+        ${toNum(qiData.chiqindiSumma) > 0 ? `<div>• Chegirilgan chiqindilar qiymati: <b>-${fmtSum(qiData.chiqindiSumma)} so'm</b></div>` : ""}
+        <div>• Yangi mahsulotning yakuniy to'liq tannarxi: <b>${fmtSum(qiData.yangiJamiSumma)} so'm</b> (1 ${escapeHtml(qiData.yangiBirlik)} = <b>${fmt(qiData.yangiBirlikNarx, 2)} so'm</b>)</div>
+        ${sameUnit ? `<div>• Texnologik yo'qotish (brak/qiyqim/uvol): <b>${fmt(yoqotishMiqdor, 3)} ${escapeHtml(qiData.manbaBirlik)} (${yoqotishFoiz}%)</b></div>` : ""}
+        ${qiData.izoh ? `<div>• Izoh: <i>${escapeHtml(qiData.izoh)}</i></div>` : ""}
+      </div>
+
+      <div class="meta-text" style="margin-top:10px;">
+        Xulosa: Yuqorida sanab o'tilgan manba tovarlar to'liq hajmda texnologik qayta ishlandi, belgilangan sifat talablariga mos yangi mahsulot/xomashyo qabul qilib olindi va tegishli moddiy hisobga kirim qilindi.
+      </div>
+
+      <div class="sign-grid">
+        <div>
+          <div><b>Sex boshlig'i / Qayta ishlovchi:</b></div>
+          <div style="margin-top:18px;"><span class="sign-line"></span> (${escapeHtml(qiData.masul || "__________________")})</div>
+        </div>
+        <div>
+          <div><b>Moddiy javobgar shaxs (Omborchi):</b></div>
+          <div style="margin-top:18px;"><span class="sign-line"></span> (${escapeHtml(s.omborchi || "__________________")})</div>
+        </div>
+        <div>
+          <div><b>Bosh buxgalter:</b></div>
+          <div style="margin-top:18px;"><span class="sign-line"></span> (${escapeHtml(s.accountant || "__________________")})</div>
+        </div>
+        <div>
+          <div><b>Bosh texnolog / Mutaxassis:</b></div>
+          <div style="margin-top:18px;"><span class="sign-line"></span> (__________________)</div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const win = window.open("", "_blank");
+  if (!win) { toast("Chop etish oynasi ochilmadi — brauzer bloklagan bo'lishi mumkin", "err"); return; }
+  win.document.write(html);
+  win.document.close();
+  setTimeout(() => { win.focus(); win.print(); }, 350);
+}
+
+function printQaytaIshlashDalolatnomaByDoc(docNo) {
+  const linked = STORE.ombor.filter((r) => r.hujjatRaqami === docNo);
+  if (!linked.length) {
+    toast("Hujjat bo'yicha ma'lumot topilmadi", "err");
+    return;
+  }
+  const chiqim = linked.find((r) => r.turi === "chiqim") || linked[0];
+  const kirim = linked.find((r) => r.turi === "kirim" && !r.kontragentNomi.includes("chiqindi")) || linked[linked.length - 1];
+  const chiqindi = linked.find((r) => r.turi === "kirim" && r.kontragentNomi.includes("chiqindi"));
+
+  const qiData = {
+    sana: chiqim.sana || todayISO(),
+    hujjatRaqami: docNo,
+    manbaNomi: chiqim.nomi,
+    manbaBirlik: chiqim.birlik,
+    sarfMiqdor: chiqim.miqdor,
+    manbaNarx: chiqim.narx,
+    sarfSumma: chiqim.yetkazibBerishNarxi || (chiqim.miqdor * chiqim.narx),
+    yangiTur: "mahsulot",
+    yangiNomi: kirim.nomi,
+    yangiBirlik: kirim.birlik,
+    yangiMiqdor: kirim.miqdor,
+    yangiBirlikNarx: kirim.narx,
+    yangiJamiSumma: kirim.yetkazibBerishNarxi || (kirim.miqdor * kirim.narx),
+    qoshimchaXarajat: 0,
+    chiqindiNomi: chiqindi ? chiqindi.nomi : "",
+    chiqindiMiqdor: chiqindi ? chiqindi.miqdor : 0,
+    chiqindiSumma: chiqindi ? (chiqindi.yetkazibBerishNarxi || (chiqindi.miqdor * chiqindi.narx)) : 0,
+    masul: "",
+    izoh: chiqim.kontragentNomi || ""
+  };
+  printQaytaIshlashDalolatnoma(qiData);
+}
+
 /* --------------------------------- Bank --------------------------------- */
 
 function renderBank() {
@@ -5881,6 +7681,7 @@ function renderBank() {
       <div class="page-actions">
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnExportBank">Excel'ga eksport</button>
+        <button class="btn" id="btn1CBank"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>1C / Klient-Bank</button>
         <button class="btn" id="btnImport">Fayldan import</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
@@ -5916,6 +7717,7 @@ function renderBank() {
 
   document.getElementById("btnAddRow").addEventListener("click", addBankRow);
   document.getElementById("btnExportBank").addEventListener("click", () => exportBankXlsx(rows));
+  document.getElementById("btn1CBank").addEventListener("click", () => open1CExchangeModal("bank"));
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: STORE.bank, storeType: "bank",
     fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "kontragent", label: "Kontragent" }, { key: "tavsif", label: "Tavsif" }],
@@ -5944,7 +7746,10 @@ function bankRowHtml(r) {
       <td class="num"><input class="cell-input num num-fmt" data-f="kirim" value="${fmt(r.kirim)}"></td>
       <td class="num"><input class="cell-input num num-fmt" data-f="chiqim" value="${fmt(r.chiqim)}"></td>
       <td style="text-align:center;"><input type="checkbox" data-f="xizmat" ${r.xizmat ? "checked" : ""} title="Xizmat xarajati"></td>
-      <td class="row-actions"><button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
+      <td class="row-actions">
+        ${kontragentHistoryBtnHtml(r.kontragentInn, "bank")}
+        <button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+      </td>
     </tr>
   `;
 }
@@ -6027,6 +7832,973 @@ async function addBankRow() {
   renderBank();
 }
 
+/* --------------------------------- Kassa (5010) --------------------------------- */
+// O'zbekiston Respublikasi BHMS 21 va Yuridik shaxslar tomonidan kassa operatsiyalarini
+// amalga oshirish qoidalariga to'liq moslashtirilgan kassa moduli:
+//   - 5010: Milliy valyutadagi kassa
+//   - KO-1: Kirim kassa orderi va kvitansiyasi
+//   - KO-2: Chiqim kassa orderi
+//   - KO-4: Kassa kitobi (kunlik qoldiqlar va operatsiyalar hisobi)
+
+let KASSA_TAB_FILTER = "all"; // "all" | "kirim" | "chiqim"
+
+function kassaQoldiqAsOf(asOfDate) {
+  const s = STORE.settings;
+  let balance = toNum(s.kassaOpeningBalance);
+  const rows = STORE.kassa || [];
+  for (const r of rows) {
+    if (asOfDate && r.sana && r.sana > asOfDate) continue;
+    const amt = toNum(r.summa);
+    if (r.turi === "kirim") balance += amt;
+    else if (r.turi === "chiqim") balance -= amt;
+  }
+  return balance;
+}
+
+function renderKassa() {
+  const allFiltered = getFilteredRows(STORE.kassa || []);
+  const rows = allFiltered.filter((r) => {
+    if (KASSA_TAB_FILTER === "kirim") return r.turi === "kirim";
+    if (KASSA_TAB_FILTER === "chiqim") return r.turi === "chiqim";
+    return true;
+  }).sort((a, b) => (b.sana || "").localeCompare(a.sana || "") || (b.hujjatRaqami || "").localeCompare(a.hujjatRaqami || ""));
+
+  const main = document.getElementById("main");
+  const t = computeTotals();
+  const periodKirim = allFiltered.filter((r) => r.turi === "kirim").reduce((a, r) => a + toNum(r.summa), 0);
+  const periodChiqim = allFiltered.filter((r) => r.turi === "chiqim").reduce((a, r) => a + toNum(r.summa), 0);
+  const isNeg = t.kassaQoldiq < 0;
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Kassa operatsiyalari (5010)</h1>
+        <p class="page-desc">Milliy valyutadagi naqd pul aylanmasi (KO-1 Kirim orderi, KO-2 Chiqim orderi va KO-4 Kassa kitobi). Qoldiq F1 Balansdagi "Pul mablag'lari"ga avtomatik qo'shiladi.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnKassaKitobi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg> Kassa kitobi (KO-4)</button>
+        <button class="btn" id="btnExportKassa">Excel'ga eksport</button>
+        <button class="btn" id="btnImportKassa">Fayldan import</button>
+        <button class="btn btn-secondary" id="btnAddKO2">+ Chiqim orderi (KO-2)</button>
+        <button class="btn btn-primary" id="btnAddKO1">+ Kirim orderi (KO-1)</button>
+      </div>
+    </div>
+
+    ${isNeg ? `<div class="alert alert-danger" style="margin-bottom:14px; display:flex; align-items:center; gap:8px;">
+      <svg class="ic" viewBox="0 0 24 24"><use href="#i-warn"/></svg>
+      <span><b>Diqqat: Kassa qoldig'i manfiy (${fmtSum(t.kassaQoldiq)})!</b> Amaldagi qoidalarga ko'ra, kassada haqiqiy naqd pul qoldig'i noldan kam bo'lishi mumkin emas. Iltimos, chiqim orderlarini yoki boshlang'ich qoldiqni tekshiring.</span>
+    </div>` : ""}
+
+    <div class="grid grid-4 section">
+      <div class="card stat-card">
+        <div class="stat-label">Boshlang'ich qoldiq</div>
+        <input class="cell-input num" id="inKassaOpening" style="font-size:19px;font-weight:700;padding:2px 4px;" value="${fmt(STORE.settings.kassaOpeningBalance)}">
+      </div>
+      <div class="card stat-card"><div class="stat-label">Davr kirimi (KO-1)</div><div class="stat-value" id="statKassaKirim" style="color:var(--ok);">${fmtSum(periodKirim)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Davr chiqimi (KO-2)</div><div class="stat-value" id="statKassaChiqim" style="color:var(--danger);">${fmtSum(periodChiqim)}</div></div>
+      <div class="card stat-card"><div class="stat-label">Joriy kassa qoldig'i</div><div class="stat-value ${isNeg ? "neg" : ""}" id="statKassaQoldiq">${fmtSum(t.kassaQoldiq)}</div></div>
+    </div>
+
+    <div class="filter-bar" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <div class="filter-tabs">
+        <button class="filter-tab ${KASSA_TAB_FILTER === "all" ? "active" : ""}" data-ktab="all">Barchasi (${allFiltered.length})</button>
+        <button class="filter-tab ${KASSA_TAB_FILTER === "kirim" ? "active" : ""}" data-ktab="kirim">Kirim orderlari (${allFiltered.filter((r) => r.turi === "kirim").length})</button>
+        <button class="filter-tab ${KASSA_TAB_FILTER === "chiqim" ? "active" : ""}" data-ktab="chiqim">Chiqim orderlari (${allFiltered.filter((r) => r.turi === "chiqim").length})</button>
+      </div>
+      <div class="faint" style="font-size:12px;">Tanlangan davr bo'yicha: <b>${rows.length}</b> ta operatsiya</div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:100px;">Sana</th>
+            <th style="width:110px;">Hujjat №</th>
+            <th style="width:120px;">Turi</th>
+            <th style="width:80px; text-align:center;">Schyot</th>
+            <th style="width:180px;">Kimdan / Kimga</th>
+            <th style="width:180px;">Kontragent</th>
+            <th>Asosi (Tavsif)</th>
+            <th class="num" style="width:130px;">Kirim (so'm)</th>
+            <th class="num" style="width:130px;">Chiqim (so'm)</th>
+            <th style="width:110px;"></th>
+          </tr>
+        </thead>
+        <tbody id="kassaBody"></tbody>
+      </table>
+    </div>
+    ${!rows.length ? `<div class="empty-state"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cash"/></svg><div class="t">Kassa operatsiyalari yo'q</div><div class="d">"+ Kirim orderi (KO-1)" yoki "+ Chiqim orderi (KO-2)" tugmalari orqali naqd pul harakatini kiriting.</div></div>` : ""}
+    <div class="note"><b>5010 kassa harakatlari:</b> Kirim orderlari (KO-1) va Chiqim orderlari (KO-2) rasmiy A4 blankalarida avtomatik chop etiladi. Kontragent INN ko'rsatilgan bo'lsa, o'zaro hisob-kitoblar Solishtirma dalolatnoma (Sverka)ga to'g'ridan-to'g'ri integratsiya bo'ladi.</div>
+    ${kontragentlarDatalistHtml()}
+  `;
+
+  document.getElementById("btnAddKO1").addEventListener("click", () => openKassaModal("kirim"));
+  document.getElementById("btnAddKO2").addEventListener("click", () => openKassaModal("chiqim"));
+  document.getElementById("btnKassaKitobi").addEventListener("click", openKassaKitobiModal);
+  document.getElementById("btnExportKassa").addEventListener("click", () => exportKassaXlsx(rows));
+  document.getElementById("btnImportKassa").addEventListener("click", openKassaImportModal);
+
+  document.getElementById("inKassaOpening").addEventListener("change", (e) => {
+    const partial = { kassaOpeningBalance: toNum(e.target.value) };
+    if (!guardSettingsPartial(partial)) { e.target.value = fmt(STORE.settings.kassaOpeningBalance); return; }
+    applySettingsChange(partial, { rerender: false });
+    refreshKassaSummary();
+  });
+
+  main.querySelectorAll("[data-ktab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      KASSA_TAB_FILTER = btn.dataset.ktab;
+      renderKassa();
+    });
+  });
+
+  bindKassaRowEvents();
+  renderRowsChunked(document.getElementById("kassaBody"), rows, kassaRowHtml);
+}
+
+function kassaRowHtml(r) {
+  const isKirim = r.turi === "kirim";
+  const summa = toNum(r.summa);
+  const badgeHtml = isKirim
+    ? `<span class="badge-kassa-kirim"><svg class="ic" style="width:12px;height:12px;" viewBox="0 0 24 24"><use href="#i-in"/></svg> KO-1 Kirim</span>`
+    : `<span class="badge-kassa-chiqim"><svg class="ic" style="width:12px;height:12px;" viewBox="0 0 24 24"><use href="#i-out"/></svg> KO-2 Chiqim</span>`;
+
+  const schyotHtml = r.schyot ? `<span class="schyot-tag">${escapeHtml(r.schyot)}</span>` : `<span class="faint">—</span>`;
+  const kontragentHtml = r.kontragent
+    ? `<span>${escapeHtml(r.kontragent)}${r.kontragentInn ? ` <span class="faint">(${escapeHtml(r.kontragentInn)})</span>` : ""}</span>`
+    : `<span class="faint">—</span>`;
+
+  return `
+    <tr data-id="${r.id}">
+      <td>${escapeHtml(r.sana || "")}</td>
+      <td style="font-weight:600;">${escapeHtml(r.hujjatRaqami || "—")}</td>
+      <td>${badgeHtml}</td>
+      <td style="text-align:center;">${schyotHtml}</td>
+      <td>${escapeHtml(r.kimdanKimga || "—")}</td>
+      <td>${kontragentHtml}</td>
+      <td style="max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(r.tavsif || "")}">${escapeHtml(r.tavsif || "—")}</td>
+      <td class="num" style="font-weight:600; color:var(--ok);">${isKirim ? fmtSum(summa) : "—"}</td>
+      <td class="num" style="font-weight:600; color:var(--danger);">${!isKirim ? fmtSum(summa) : "—"}</td>
+      <td class="row-actions">
+        <button class="icon-btn" data-print-kassa="${r.id}" title="${isKirim ? 'KO-1 Kirim orderini chop etish' : 'KO-2 Chiqim orderini chop etish'}">
+          <svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>
+        </button>
+        ${r.kontragentInn ? kontragentHistoryBtnHtml(r.kontragentInn, "kassa") : ""}
+        <button class="icon-btn" data-edit-kassa="${r.id}" title="Tahrirlash">
+          <svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg>
+        </button>
+        <button class="icon-btn" data-del-kassa="${r.id}" title="O'chirish">
+          <svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg>
+        </button>
+      </td>
+    </tr>
+  `;
+}
+
+function refreshKassaSummary() {
+  const t = computeTotals();
+  const allFiltered = getFilteredRows(STORE.kassa || []);
+  const periodKirim = allFiltered.filter((r) => r.turi === "kirim").reduce((a, r) => a + toNum(r.summa), 0);
+  const periodChiqim = allFiltered.filter((r) => r.turi === "chiqim").reduce((a, r) => a + toNum(r.summa), 0);
+  const elK = document.getElementById("statKassaKirim");
+  const elC = document.getElementById("statKassaChiqim");
+  const elQ = document.getElementById("statKassaQoldiq");
+  if (elK) elK.textContent = fmtSum(periodKirim);
+  if (elC) elC.textContent = fmtSum(periodChiqim);
+  if (elQ) {
+    elQ.textContent = fmtSum(t.kassaQoldiq);
+    elQ.classList.toggle("neg", t.kassaQoldiq < 0);
+  }
+}
+
+function bindKassaRowEvents() {
+  const body = document.getElementById("kassaBody");
+  if (!body) return;
+  body.addEventListener("click", (e) => {
+    const printBtn = e.target.closest("[data-print-kassa]");
+    if (printBtn) {
+      const id = printBtn.dataset.printKassa;
+      const r = (STORE.kassa || []).find((x) => x.id === id);
+      if (r) {
+        if (r.turi === "kirim") printKO1(id);
+        else printKO2(id);
+      }
+      return;
+    }
+    const editBtn = e.target.closest("[data-edit-kassa]");
+    if (editBtn) {
+      const id = editBtn.dataset.editKassa;
+      const r = (STORE.kassa || []).find((x) => x.id === id);
+      if (r) openKassaModal(r.turi, r);
+      return;
+    }
+    const delBtn = e.target.closest("[data-del-kassa]");
+    if (delBtn) {
+      const id = delBtn.dataset.delKassa;
+      if (id) {
+        const r = (STORE.kassa || []).find((x) => x.id === id);
+        const nom = r ? `${r.hujjatRaqami || "Kassa orderi"} (${fmtSum(r.summa)})` : "Kassa yozuvi";
+        if (confirm(`${nom} ni o'chirishni tasdiqlaysizmi?`)) {
+          deleteRowSafe("kassa", "kassa", id, renderKassa);
+        }
+      }
+      return;
+    }
+  });
+}
+
+function openKassaModal(turi, editRow) {
+  const isKirim = (turi || (editRow ? editRow.turi : "kirim")) === "kirim";
+  const prefix = isKirim ? "KO-1" : "KO-2";
+  const sameTypeCount = (STORE.kassa || []).filter((x) => x.turi === (isKirim ? "kirim" : "chiqim")).length + 1;
+  const defaultDocNo = editRow ? (editRow.hujjatRaqami || "") : `${prefix}/${String(sameTypeCount).padStart(3, "0")}`;
+
+  const schyotOptions = isKirim ? [
+    { val: "4010", lbl: "4010 — Xaridor va buyurtmachilardan to'lov" },
+    { val: "5110", lbl: "5110 — Bank hisobvarag'idan naqd pul yechish (chek)" },
+    { val: "4210", lbl: "4210 — Hisobdor shaxsdan qaytgan avans qoldig'i" },
+    { val: "4610", lbl: "4610 — Ta'sischilar badallari (ustav kapitali)" },
+    { val: "9390", lbl: "9390 — Boshqa operatsion daromadlar / naqd tushum" }
+  ] : [
+    { val: "6710", lbl: "6710 — Xodimlarga mehnat haqi (ish haqi) to'lash" },
+    { val: "6010", lbl: "6010 — Mol yetkazib beruvchilarga (ta'minotchiga) to'lov" },
+    { val: "4210", lbl: "4210 — Hisobdor shaxsga avans (xizmat safari / xo'jalik)" },
+    { val: "5110", lbl: "5110 — Bankka topshirish (inkassatsiya)" },
+    { val: "9420", lbl: "9420 — Ma'muriy va boshqa davriy xarajatlar" }
+  ];
+
+  const currentSchyot = editRow ? editRow.schyot : (isKirim ? "4010" : "6710");
+
+  openModal(`
+    <h3>${editRow ? "Tahrirlash: " : "Yangi "}${isKirim ? "Kassa kirim orderi (KO-1)" : "Kassa chiqim orderi (KO-2)"}</h3>
+    <p class="modal-sub">${isKirim ? "Mablag' qabul qilish: Dt 5010 (Kassa) / Kt Korrespondent schyot" : "Mablag' to'lash / berish: Dt Korrespondent schyot / Kt 5010 (Kassa)"}</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+      <div class="field">
+        <label>Sana <span style="color:var(--danger)">*</span></label>
+        <input type="date" id="kSana" value="${editRow ? escapeHtml(editRow.sana || "") : todayISO()}">
+      </div>
+      <div class="field">
+        <label>Order raqami <span style="color:var(--danger)">*</span></label>
+        <input id="kHujjatRaqami" value="${escapeHtml(defaultDocNo)}" placeholder="masalan: KO-1/001">
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1.2fr 1fr; gap:12px;">
+      <div class="field">
+        <label>Korrespondent schyot <span style="color:var(--danger)">*</span></label>
+        <select id="kSchyot">
+          ${schyotOptions.map((o) => `<option value="${o.val}" ${o.val === currentSchyot ? "selected" : ""}>${o.lbl}</option>`).join("")}
+          <option value="boshqa" ${!schyotOptions.some((o) => o.val === currentSchyot) && editRow ? "selected" : ""}>Boshqa schyot (qo'lda kiritish)...</option>
+        </select>
+        <input id="kSchyotCustom" style="margin-top:6px; display:${!schyotOptions.some((o) => o.val === currentSchyot) && editRow ? "block" : "none"};" value="${escapeHtml(currentSchyot)}" placeholder="Schyot kodi (masalan: 9410)">
+      </div>
+      <div class="field">
+        <label>Summa (so'm) <span style="color:var(--danger)">*</span></label>
+        <input class="num" id="kSumma" value="${editRow ? fmt(editRow.summa) : ""}" placeholder="0" style="font-size:16px; font-weight:700;">
+        <div id="kSummaSoz" class="faint" style="font-size:11px; margin-top:4px; min-height:16px;"></div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+      <div class="field">
+        <label>${isKirim ? "Kimdan qabul qilindi (F.I.Sh)" : "Kimga to'lansin / berilsin (F.I.Sh)"}</label>
+        <input id="kKimdanKimga" value="${escapeHtml(editRow ? (editRow.kimdanKimga || "") : "")}" placeholder="masalan: Karimov Alisher">
+      </div>
+      <div class="field">
+        <label>Kontragent (agar mavjud bo'lsa)</label>
+        <input id="kKontragent" list="kontragentlarList" value="${escapeHtml(editRow ? (editRow.kontragent || "") : "")}" placeholder="Tashkilot nomi">
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+      <div class="field">
+        <label>Kontragent INN</label>
+        <input id="kKontragentInn" maxlength="9" value="${escapeHtml(editRow ? (editRow.kontragentInn || "") : "")}" placeholder="9 ta raqam">
+      </div>
+      <div class="field">
+        <label>Ilova qilingan hujjatlar</label>
+        <input id="kHujjatAsosi" value="${escapeHtml(editRow ? (editRow.hujjatAsosi || "") : "")}" placeholder="masalan: Shartnoma №12, Chek №44">
+      </div>
+    </div>
+
+    <div class="field">
+      <label>To'lov maqsadi / asosi <span style="color:var(--danger)">*</span></label>
+      <input id="kTavsif" value="${escapeHtml(editRow ? (editRow.tavsif || "") : "")}" placeholder="masalan: 2026-yil sentyabr oyi ish haqi">
+    </div>
+
+    ${!isKirim ? `
+      <div class="field">
+        <label>Oluvchining shaxsini tasdiqlovchi hujjat (Pasport)</label>
+        <input id="kPasport" value="${escapeHtml(editRow ? (editRow.pasport || "") : "")}" placeholder="Seriya, raqam, kim tomonidan va qachon berilgan">
+      </div>
+    ` : ""}
+
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Bekor qilish</button>
+      <button class="btn btn-primary" id="mSaveKassa">Saqlash</button>
+    </div>
+  `);
+
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+
+  const schyotSel = document.getElementById("kSchyot");
+  const schyotCustom = document.getElementById("kSchyotCustom");
+  schyotSel.addEventListener("change", () => {
+    schyotCustom.style.display = schyotSel.value === "boshqa" ? "block" : "none";
+    if (schyotSel.value !== "boshqa") schyotCustom.value = schyotSel.value;
+  });
+
+  const summaInput = document.getElementById("kSumma");
+  const summaSozDiv = document.getElementById("kSummaSoz");
+  const updateSoz = () => {
+    const val = toNum(summaInput.value);
+    summaSozDiv.textContent = val > 0 ? summaSozBilan(val) : "";
+  };
+  summaInput.addEventListener("input", updateSoz);
+  updateSoz();
+
+  const kontragentInp = document.getElementById("kKontragent");
+  const kontragentInnInp = document.getElementById("kKontragentInn");
+  kontragentInp.addEventListener("change", () => {
+    const match = resolveKontragentByNomi(kontragentInp.value);
+    if (match && match.inn && !kontragentInnInp.value.trim()) {
+      kontragentInnInp.value = match.inn;
+    }
+  });
+
+  document.getElementById("mSaveKassa").addEventListener("click", async () => {
+    const sana = document.getElementById("kSana").value.trim();
+    const hujjatRaqami = document.getElementById("kHujjatRaqami").value.trim();
+    const summa = toNum(summaInput.value);
+    const schyot = (schyotSel.value === "boshqa" ? schyotCustom.value.trim() : schyotSel.value) || (isKirim ? "4010" : "6710");
+    const kimdanKimga = document.getElementById("kKimdanKimga").value.trim();
+    const kontragent = kontragentInp.value.trim();
+    const kontragentInn = kontragentInnInp.value.trim();
+    const tavsif = document.getElementById("kTavsif").value.trim();
+    const hujjatAsosi = document.getElementById("kHujjatAsosi").value.trim();
+    const pasport = !isKirim ? document.getElementById("kPasport").value.trim() : "";
+
+    if (!sana) { toast("Sanani tanlang", "err"); return; }
+    if (!hujjatRaqami) { toast("Order raqamini kiriting", "err"); return; }
+    if (summa <= 0) { toast("Summani to'g'ri kiriting", "err"); return; }
+    if (!tavsif) { toast("To'lov asosini (tavsif) kiriting", "err"); return; }
+
+    if (!isKirim) {
+      const currentBalance = kassaQoldiqAsOf(todayISO());
+      const oldSumma = editRow ? toNum(editRow.summa) : 0;
+      if (currentBalance + oldSumma < summa) {
+        if (!confirm(`Diqqat: Kassada joriy qoldiq ${fmtSum(currentBalance)}. Chiqim summasi (${fmtSum(summa)}) mavjud qoldiqdan oshib ketadi va kassa balansi manfiy bo'ladi.\n\nBaribir tasdiqlaysizmi?`)) {
+          return;
+        }
+      }
+    }
+
+    const payload = {
+      sana, hujjatRaqami, turi: isKirim ? "kirim" : "chiqim",
+      schyot, summa, tavsif, kimdanKimga, kontragent, kontragentInn,
+      hujjatAsosi, pasport
+    };
+
+    if (editRow) {
+      Object.assign(editRow, payload);
+      pushFieldsUpdate("kassa", editRow.id, payload);
+      toast("Kassa orderi yangilandi");
+    } else {
+      const dbRow = toDbRow(KASSA_DB_MAP, payload);
+      const { data, error } = await sbClient.from("kassa").insert(dbRow).select().single();
+      if (error) { reportError(error, "Saqlashda xatolik"); return; }
+      const newRow = fromDbRow(KASSA_DB_MAP, data);
+      if (!STORE.kassa) STORE.kassa = [];
+      STORE.kassa.push(newRow);
+      toast(`${isKirim ? "Kirim orderi (KO-1)" : "Chiqim orderi (KO-2)"} saqlandi`);
+    }
+
+    if (kontragentInn) {
+      await ensureKontragentAutoAdded(kontragentInn, kontragent || kimdanKimga);
+    }
+
+    saveStore();
+    closeModal();
+    updateNavBadges();
+    renderKassa();
+  });
+}
+
+function printKO1(kassaId) {
+  const r = (STORE.kassa || []).find((x) => x.id === kassaId);
+  if (!r) return;
+  const s = STORE.settings;
+  const summaSoz = summaSozBilan(r.summa);
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="utf-8">
+      <title>KO-1 Kirim kassa orderi № ${escapeHtml(r.hujjatRaqami || "")}</title>
+      <style>
+        @page { size: A4 landscape; margin: 12mm 15mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 11pt; color: #000; margin: 0; padding: 0; line-height: 1.3; }
+        .ko1-container { display: flex; width: 100%; border: 1px solid #333; }
+        .ko1-order { flex: 65; padding: 12px 18px; border-right: 2px dashed #666; }
+        .ko1-kvit { flex: 35; padding: 12px 16px; }
+        .company-header { font-size: 11pt; font-weight: bold; margin-bottom: 2px; }
+        .company-sub { font-size: 9.5pt; color: #333; margin-bottom: 8px; }
+        .doc-title { text-align: center; font-weight: bold; font-size: 12pt; text-transform: uppercase; margin: 6px 0 2px; }
+        .doc-meta { text-align: center; font-size: 10pt; margin-bottom: 10px; }
+        .tbl-codes { width: 100%; border-collapse: collapse; margin-bottom: 10px; font-size: 9.5pt; }
+        .tbl-codes th, .tbl-codes td { border: 1px solid #000; padding: 4px 6px; text-align: center; }
+        .tbl-codes th { background: #f2f2f2; font-weight: bold; }
+        .line-item { margin: 6px 0; font-size: 10.5pt; display: flex; align-items: flex-end; }
+        .line-item .lbl { white-space: nowrap; font-weight: normal; margin-right: 6px; }
+        .line-item .val { flex: 1; border-bottom: 1px solid #000; font-weight: bold; min-height: 18px; padding-left: 4px; }
+        .sign-row { margin-top: 14px; font-size: 10pt; display: flex; justify-content: space-between; align-items: flex-end; }
+        .sign-row .lbl { font-weight: bold; }
+        .sign-line { border-bottom: 1px solid #000; flex: 1; margin: 0 8px; }
+        .stamp-box { width: 75px; height: 75px; border: 1px dashed #777; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 9pt; color: #777; margin: 15px auto 5px; }
+      </style>
+    </head>
+    <body>
+      <div class="ko1-container">
+        <div class="ko1-order">
+          <div style="float: right; font-size: 9pt; font-style: italic;">Shakl № KO-1</div>
+          <div class="company-header">${escapeHtml(s.companyName || "Korxona")}</div>
+          <div class="company-sub">INN: ${escapeHtml(s.inn || "—")}</div>
+          <div style="clear: both;"></div>
+
+          <div class="doc-title">KIRIM KASSA ORDERI № ${escapeHtml(r.hujjatRaqami || "—")}</div>
+          <div class="doc-meta">Tuzilgan sana: <b>${escapeHtml(r.sana || "")}</b></div>
+
+          <table class="tbl-codes">
+            <thead>
+              <tr>
+                <th rowspan="2">Debet (schyot)</th>
+                <th colspan="2">Kredit</th>
+                <th rowspan="2">Summa, so'm</th>
+                <th rowspan="2">Maqsad kodi</th>
+              </tr>
+              <tr>
+                <th>Korrespondent schyot</th>
+                <th>Subschyot</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><b>5010</b></td>
+                <td><b>${escapeHtml(r.schyot || "4010")}</b></td>
+                <td>—</td>
+                <td style="font-weight:bold;">${fmtSum(r.summa)}</td>
+                <td>—</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <div class="line-item">
+            <span class="lbl">Kimdan qabul qilindi:</span>
+            <span class="val">${escapeHtml(r.kimdanKimga || r.kontragent || "—")}${r.kontragentInn ? " (INN: " + escapeHtml(r.kontragentInn) + ")" : ""}</span>
+          </div>
+          <div class="line-item">
+            <span class="lbl">Asosi:</span>
+            <span class="val">${escapeHtml(r.tavsif || "—")}</span>
+          </div>
+          <div class="line-item">
+            <span class="lbl">Summa so'z bilan:</span>
+            <span class="val">${escapeHtml(summaSoz)}</span>
+          </div>
+          <div class="line-item">
+            <span class="lbl">Ilova:</span>
+            <span class="val">${escapeHtml(r.hujjatAsosi || "—")}</span>
+          </div>
+
+          <div style="margin-top: 22px;">
+            <div class="sign-row">
+              <span class="lbl">Bosh buxgalter:</span>
+              <span class="sign-line"></span>
+              <span>_________________________ (imzo, F.I.Sh)</span>
+            </div>
+            <div class="sign-row" style="margin-top: 12px;">
+              <span class="lbl">Pulni qabul qildim (Kassir):</span>
+              <span class="sign-line"></span>
+              <span>_________________________ (imzo, F.I.Sh)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="ko1-kvit">
+          <div style="font-size: 8.5pt; text-align: right; font-style: italic;">KO-1 ga ilova</div>
+          <div class="company-header" style="font-size: 10pt;">${escapeHtml(s.companyName || "Korxona")}</div>
+          <div class="company-sub" style="font-size: 8.5pt;">INN: ${escapeHtml(s.inn || "—")}</div>
+
+          <div class="doc-title" style="font-size: 10.5pt; margin-top: 10px;">KVITANSIYA</div>
+          <div class="doc-meta" style="font-size: 9pt;">Kirim kassa orderi № <b>${escapeHtml(r.hujjatRaqami || "—")}</b> ga</div>
+          <div class="doc-meta" style="font-size: 9pt; margin-top:-6px;">Sana: <b>${escapeHtml(r.sana || "")}</b></div>
+
+          <div class="line-item" style="font-size: 9.5pt;">
+            <span class="lbl">Qabul qilindi:</span>
+            <span class="val">${escapeHtml(r.kimdanKimga || r.kontragent || "—")}</span>
+          </div>
+          <div class="line-item" style="font-size: 9.5pt;">
+            <span class="lbl">Asosi:</span>
+            <span class="val">${escapeHtml(r.tavsif || "—")}</span>
+          </div>
+          <div class="line-item" style="font-size: 9.5pt;">
+            <span class="lbl">Summa:</span>
+            <span class="val">${fmtSum(r.summa)} so'm</span>
+          </div>
+          <div class="line-item" style="font-size: 9pt;">
+            <span class="lbl">So'z bilan:</span>
+            <span class="val" style="font-size: 8.5pt;">${escapeHtml(summaSoz)}</span>
+          </div>
+
+          <div class="stamp-box">M.O'.<br>(Shtamp)</div>
+
+          <div style="margin-top: 15px; font-size: 9pt;">
+            <div class="sign-row" style="margin-top: 6px;">
+              <span>Bosh buxgalter:</span>
+              <span class="sign-line"></span>
+            </div>
+            <div class="sign-row" style="margin-top: 6px;">
+              <span>Kassir:</span>
+              <span class="sign-line"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  openPrintWindow(html);
+}
+
+function printKO2(kassaId) {
+  const r = (STORE.kassa || []).find((x) => x.id === kassaId);
+  if (!r) return;
+  const s = STORE.settings;
+  const rahbar = s.rahbar || "_________________________";
+  const summaSoz = summaSozBilan(r.summa);
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="utf-8">
+      <title>KO-2 Chiqim kassa orderi № ${escapeHtml(r.hujjatRaqami || "")}</title>
+      <style>
+        @page { size: A4 portrait; margin: 15mm 20mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 11pt; color: #000; margin: 0; padding: 0; line-height: 1.35; }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+        .company-header { font-size: 12pt; font-weight: bold; }
+        .company-sub { font-size: 10pt; color: #333; }
+        .shakl-no { font-size: 9.5pt; font-style: italic; text-align: right; }
+        .doc-title { text-align: center; font-weight: bold; font-size: 14pt; text-transform: uppercase; margin: 14px 0 4px; }
+        .doc-meta { text-align: center; font-size: 11pt; margin-bottom: 14px; }
+        .tbl-codes { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 10pt; }
+        .tbl-codes th, .tbl-codes td { border: 1px solid #000; padding: 5px 8px; text-align: center; }
+        .tbl-codes th { background: #f2f2f2; font-weight: bold; }
+        .line-item { margin: 8px 0; font-size: 11pt; display: flex; align-items: flex-end; }
+        .line-item .lbl { white-space: nowrap; font-weight: normal; margin-right: 6px; }
+        .line-item .val { flex: 1; border-bottom: 1px solid #000; font-weight: bold; min-height: 20px; padding-left: 6px; }
+        .sign-row { margin-top: 14px; font-size: 10.5pt; display: flex; justify-content: space-between; align-items: flex-end; }
+        .sign-row .lbl { font-weight: bold; min-width: 130px; }
+        .sign-line { border-bottom: 1px solid #000; flex: 1; margin: 0 10px; }
+        .received-box { border: 1px solid #000; padding: 12px 16px; margin-top: 20px; }
+        .received-title { font-weight: bold; font-size: 10.5pt; margin-bottom: 6px; }
+      </style>
+    </head>
+    <body>
+      <div class="header-top">
+        <div>
+          <div class="company-header">${escapeHtml(s.companyName || "Korxona")}</div>
+          <div class="company-sub">INN: ${escapeHtml(s.inn || "—")}</div>
+        </div>
+        <div class="shakl-no">
+          O'zbekiston standarti<br>
+          <b>Shakl № KO-2</b>
+        </div>
+      </div>
+
+      <div class="doc-title">CHIQIM KASSA ORDERI № ${escapeHtml(r.hujjatRaqami || "—")}</div>
+      <div class="doc-meta">Tuzilgan sana: <b>${escapeHtml(r.sana || "")}</b></div>
+
+      <table class="tbl-codes">
+        <thead>
+          <tr>
+            <th colspan="2">Debet</th>
+            <th rowspan="2">Kredit (schyot)</th>
+            <th rowspan="2">Summa, so'm</th>
+            <th rowspan="2">Maqsad kodi</th>
+          </tr>
+          <tr>
+            <th>Korrespondent schyot</th>
+            <th>Subschyot</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>${escapeHtml(r.schyot || "6010")}</b></td>
+            <td>—</td>
+            <td><b>5010</b></td>
+            <td style="font-weight:bold;">${fmtSum(r.summa)}</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="line-item">
+        <span class="lbl">Berilsin (Kimga):</span>
+        <span class="val">${escapeHtml(r.kimdanKimga || r.kontragent || "—")}${r.kontragentInn ? " (INN: " + escapeHtml(r.kontragentInn) + ")" : ""}</span>
+      </div>
+      <div class="line-item">
+        <span class="lbl">Asosi:</span>
+        <span class="val">${escapeHtml(r.tavsif || "—")}</span>
+      </div>
+      <div class="line-item">
+        <span class="lbl">Summa so'z bilan:</span>
+        <span class="val">${escapeHtml(summaSoz)}</span>
+      </div>
+      <div class="line-item">
+        <span class="lbl">Ilova:</span>
+        <span class="val">${escapeHtml(r.hujjatAsosi || "—")}</span>
+      </div>
+
+      <div style="margin-top: 24px;">
+        <div class="sign-row">
+          <span class="lbl">Korxona rahbari:</span>
+          <span class="sign-line"></span>
+          <span>${escapeHtml(rahbar)}</span>
+        </div>
+        <div class="sign-row" style="margin-top: 14px;">
+          <span class="lbl">Bosh buxgalter:</span>
+          <span class="sign-line"></span>
+          <span>_________________________ (imzo, F.I.Sh)</span>
+        </div>
+      </div>
+
+      <div class="received-box">
+        <div class="received-title">PULNI OLUVCHI TARKIBI VA TILXATI:</div>
+        <div class="line-item">
+          <span class="lbl">Oldim (summa so'z bilan):</span>
+          <span class="val"></span>
+        </div>
+        <div class="line-item" style="margin-top: 10px;">
+          <span class="lbl">Oluvchining imzosi:</span>
+          <span class="val" style="flex:0.4;"></span>
+          <span class="lbl" style="margin-left: 15px;">Sana:</span>
+          <span class="val" style="flex:0.4;">"____" ______________ 20___ y.</span>
+        </div>
+        <div class="line-item" style="margin-top: 10px;">
+          <span class="lbl">Shaxsini tasdiqlovchi hujjat:</span>
+          <span class="val">${escapeHtml(r.pasport || "Pasport: ____________________________________________________")}</span>
+        </div>
+      </div>
+
+      <div class="sign-row" style="margin-top: 24px;">
+        <span class="lbl">Pulni berdim (Kassir):</span>
+        <span class="sign-line"></span>
+        <span>_________________________ (imzo, F.I.Sh)</span>
+      </div>
+    </body>
+    </html>
+  `;
+  openPrintWindow(html);
+}
+
+function openKassaKitobiModal() {
+  const s = STORE.settings;
+  const initialDate = s.filterTo || todayISO();
+
+  openModal(`
+    <h3>Kassa kitobi (KO-4)</h3>
+    <p class="modal-sub">Tanlangan sana bo'yicha kunlik kassa varag'i, kun boshidagi qoldiq, barcha kirim/chiqim orderlari va yakuniy naqd pul qoldig'i.</p>
+
+    <div class="field" style="margin-bottom:16px;">
+      <label>Sana tanlang</label>
+      <input type="date" id="kkDate" value="${escapeHtml(initialDate)}" style="font-size:15px; font-weight:600;">
+    </div>
+
+    <div id="kkPreview" style="margin-bottom:16px; border:1px solid var(--border); border-radius:8px; padding:12px; background:var(--bg-elevated);"></div>
+
+    <div class="modal-actions">
+      <button class="btn" id="mCancel">Yopish</button>
+      <button class="btn btn-primary" id="mPrintKO4"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg> Rasmiy varaqni chop etish (A4)</button>
+    </div>
+  `);
+
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+
+  const dateInp = document.getElementById("kkDate");
+  const previewDiv = document.getElementById("kkPreview");
+
+  const updatePreview = () => {
+    const targetDate = dateInp.value;
+    const allRows = (STORE.kassa || []).slice().sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
+    let opening = toNum(s.kassaOpeningBalance);
+    allRows.forEach((r) => {
+      if (r.sana && r.sana < targetDate) {
+        if (r.turi === "kirim") opening += toNum(r.summa);
+        else if (r.turi === "chiqim") opening -= toNum(r.summa);
+      }
+    });
+
+    const dayRows = allRows.filter((r) => r.sana === targetDate);
+    const dayKirim = dayRows.filter((r) => r.turi === "kirim").reduce((a, r) => a + toNum(r.summa), 0);
+    const dayChiqim = dayRows.filter((r) => r.turi === "chiqim").reduce((a, r) => a + toNum(r.summa), 0);
+    const closing = opening + dayKirim - dayChiqim;
+
+    previewDiv.innerHTML = `
+      <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+        <span>Kun boshiga qoldiq: <b>${fmtSum(opening)}</b></span>
+        <span>Operatsiyalar soni: <b>${dayRows.length} ta</b></span>
+      </div>
+      <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+        <span style="color:var(--ok);">Kunlik jami kirim: <b>+${fmtSum(dayKirim)}</b></span>
+        <span style="color:var(--danger);">Kunlik jami chiqim: <b>-${fmtSum(dayChiqim)}</b></span>
+      </div>
+      <div style="padding-top:8px; border-top:1px solid var(--border); font-size:14px; font-weight:bold; display:flex; justify-content:space-between;">
+        <span>Kun oxiriga qoldiq:</span>
+        <span style="color:${closing < 0 ? "var(--danger)" : "inherit"};">${fmtSum(closing)} so'm</span>
+      </div>
+    `;
+  };
+
+  dateInp.addEventListener("change", updatePreview);
+  updatePreview();
+
+  document.getElementById("mPrintKO4").addEventListener("click", () => {
+    printKO4(dateInp.value);
+  });
+}
+
+function printKO4(dateFilter) {
+  const s = STORE.settings;
+  const targetDate = dateFilter || s.filterTo || todayISO();
+  const allRows = (STORE.kassa || []).slice().sort((a, b) => (a.sana || "").localeCompare(b.sana || ""));
+
+  let opening = toNum(s.kassaOpeningBalance);
+  allRows.forEach((r) => {
+    if (r.sana && r.sana < targetDate) {
+      if (r.turi === "kirim") opening += toNum(r.summa);
+      else if (r.turi === "chiqim") opening -= toNum(r.summa);
+    }
+  });
+
+  const dayRows = allRows.filter((r) => r.sana === targetDate);
+  const dayKirim = dayRows.filter((r) => r.turi === "kirim").reduce((a, r) => a + toNum(r.summa), 0);
+  const dayChiqim = dayRows.filter((r) => r.turi === "chiqim").reduce((a, r) => a + toNum(r.summa), 0);
+  const closing = opening + dayKirim - dayChiqim;
+
+  const rowsHtml = dayRows.length ? dayRows.map((r, i) => `
+    <tr>
+      <td style="text-align:center;">${i + 1}</td>
+      <td style="text-align:center; font-weight:bold;">${escapeHtml(r.hujjatRaqami || "—")}</td>
+      <td>${escapeHtml(r.kimdanKimga || r.kontragent || r.tavsif || "—")}</td>
+      <td style="text-align:center;"><b>${escapeHtml(r.schyot || (r.turi === "kirim" ? "4010" : "6010"))}</b></td>
+      <td class="num">${r.turi === "kirim" ? fmtSum(r.summa) : "—"}</td>
+      <td class="num">${r.turi === "chiqim" ? fmtSum(r.summa) : "—"}</td>
+    </tr>
+  `).join("") : `<tr><td colspan="6" style="text-align:center; padding:15px; color:#777;">Bu sana uchun kassa operatsiyalari mavjud emas</td></tr>`;
+
+  const html = `
+    <!doctype html>
+    <html lang="uz">
+    <head>
+      <meta charset="utf-8">
+      <title>KO-4 Kassa kitobi — ${escapeHtml(targetDate)}</title>
+      <style>
+        @page { size: A4 portrait; margin: 15mm 20mm; }
+        * { box-sizing: border-box; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 11pt; color: #000; margin: 0; padding: 0; line-height: 1.35; }
+        .header-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
+        .company-header { font-size: 12pt; font-weight: bold; }
+        .company-sub { font-size: 10pt; color: #333; }
+        .doc-title { text-align: center; font-weight: bold; font-size: 14pt; text-transform: uppercase; margin: 15px 0 2px; }
+        .doc-meta { text-align: center; font-size: 11pt; margin-bottom: 15px; }
+        table { width: 100%; border-collapse: collapse; margin-bottom: 15px; font-size: 10pt; }
+        th, td { border: 1px solid #000; padding: 6px 8px; }
+        th { background: #f2f2f2; text-align: center; font-weight: bold; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        .sign-row { margin-top: 25px; font-size: 10.5pt; display: flex; justify-content: space-between; align-items: flex-end; }
+        .sign-line { border-bottom: 1px solid #000; flex: 1; margin: 0 10px; }
+      </style>
+    </head>
+    <body>
+      <div class="header-top">
+        <div>
+          <div class="company-header">${escapeHtml(s.companyName || "Korxona")}</div>
+          <div class="company-sub">INN: ${escapeHtml(s.inn || "—")}</div>
+        </div>
+        <div style="font-size:9.5pt; font-style:italic; text-align:right;">
+          Shakl № KO-4<br>
+          KASSA KITOBI VARAG'I
+        </div>
+      </div>
+
+      <div class="doc-title">KASSA KITOBI VARAG'I</div>
+      <div class="doc-meta">Sana: <b>${escapeHtml(targetDate)}</b></div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width:35px;">№</th>
+            <th style="width:110px;">Hujjat №</th>
+            <th>Kimdan qabul qilindi / Kimga berildi</th>
+            <th style="width:110px;">Korrespondent schyot</th>
+            <th style="width:110px;">Kirim, so'm</th>
+            <th style="width:110px;">Chiqim, so'm</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="background:#fafafa; font-weight:bold;">
+            <td colspan="4" style="text-align:right;">KUN BOSHI QOLDIG'I (Остаток на начало дня):</td>
+            <td colspan="2" class="num">${fmtSum(opening)}</td>
+          </tr>
+          ${rowsHtml}
+          <tr style="background:#f2f2f2; font-weight:bold;">
+            <td colspan="4" style="text-align:right;">KUNLIK JAMI AYLANMA (Итого за день):</td>
+            <td class="num">${fmtSum(dayKirim)}</td>
+            <td class="num">${fmtSum(dayChiqim)}</td>
+          </tr>
+          <tr style="background:#e8f4f0; font-weight:bold; font-size:10.5pt;">
+            <td colspan="4" style="text-align:right;">KUN OXIRI QOLDIG'I (Остаток на конец дня):</td>
+            <td colspan="2" class="num">${fmtSum(closing)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div style="margin-top: 30px; font-size: 10pt;">
+        <div>Kassada jami naqd pul qoldig'i: <b>${escapeHtml(summaSozBilan(closing))}</b></div>
+        <div style="margin-top: 20px;">
+          <div class="sign-row">
+            <span style="font-weight:bold; min-width:140px;">Kassir:</span>
+            <span class="sign-line"></span>
+            <span>_________________________ (imzo, F.I.Sh)</span>
+          </div>
+          <div class="sign-row" style="margin-top: 15px;">
+            <span style="font-weight:bold; min-width:140px;">Kassa yozuvlarini tekshirib qabul qildi (Buxgalter):</span>
+            <span class="sign-line"></span>
+            <span>_________________________ (imzo, F.I.Sh)</span>
+          </div>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+  openPrintWindow(html);
+}
+
+function exportKassaXlsx(rows) {
+  const s = STORE.settings;
+  const t = computeTotals();
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`],
+    ["Kassa operatsiyalari (5010)"],
+    [],
+    ["Sana", "Hujjat №", "Turi", "Korrespondent schyot", "Kimdan / Kimga", "Kontragent", "INN", "To'lov asosi", "Summa"]
+  ];
+  rows.forEach((r) => {
+    aoa.push([
+      r.sana || "",
+      r.hujjatRaqami || "",
+      r.turi === "kirim" ? "KO-1 Kirim" : "KO-2 Chiqim",
+      r.schyot || "",
+      r.kimdanKimga || "",
+      r.kontragent || "",
+      r.kontragentInn || "",
+      r.tavsif || "",
+      toNum(r.summa)
+    ]);
+  });
+  aoa.push([]);
+  aoa.push(["Boshlang'ich qoldiq", "", "", "", "", "", "", "", toNum(s.kassaOpeningBalance)]);
+  aoa.push(["Joriy kassa qoldig'i", "", "", "", "", "", "", "", toNum(t.kassaQoldiq)]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 22 }, { wch: 24 }, { wch: 14 }, { wch: 30 }, { wch: 16 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Kassa");
+  XLSX.writeFile(wb, `FORGET_kassa_${todayISO()}.xlsx`);
+  toast("Kassa Excel fayli yuklab olindi");
+}
+
+function openKassaImportModal() {
+  openGenericImportModal(
+    "Kassa operatsiyalari — Excel'dan import",
+    "Kassa operatsiyalari yozilgan .xlsx faylni yuklang. Ustunlar tartibi: <b>Sana, Hujjat №, Turi (kirim/chiqim), Schyot, Kimdan/Kimga, Kontragent, INN, Tavsif, Summa</b>.",
+    ".xlsx, .xls",
+    handleKassaImport
+  );
+}
+
+async function handleKassaImport(file) {
+  try {
+    await dataReady;
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+
+    let added = 0, skipped = 0;
+    const candidates = [];
+
+    for (let i = 0; i < rawRows.length; i++) {
+      const row = rawRows[i];
+      if (!row || !row.length || row.every((c) => c === "")) continue;
+      const dateCell = row[0];
+      const sana = normalizeDate(dateCell);
+      if (!sana || !/^\d{4}-\d{2}-\d{2}$/.test(sana)) continue;
+
+      const hujjatRaqami = String(row[1] || "").trim();
+      const turiRaw = String(row[2] || "").toLowerCase();
+      const turi = turiRaw.includes("chiqim") || turiRaw.includes("ko-2") ? "chiqim" : "kirim";
+      const schyot = String(row[3] || "").trim();
+      const kimdanKimga = String(row[4] || "").trim();
+      const kontragent = String(row[5] || "").trim();
+      const kontragentInn = String(row[6] || "").replace(/\D/g, "").trim();
+      const tavsif = String(row[7] || "").trim();
+      const summa = toNum(row[8]);
+
+      if (summa <= 0) continue;
+
+      const dup = (STORE.kassa || []).some((k) =>
+        k.sana === sana &&
+        k.hujjatRaqami === hujjatRaqami &&
+        k.turi === turi &&
+        Math.abs(toNum(k.summa) - summa) < 1
+      );
+
+      if (dup) { skipped++; continue; }
+      candidates.push({ sana, hujjatRaqami, turi, schyot, kimdanKimga, kontragent, kontragentInn, tavsif, summa });
+    }
+
+    if (!candidates.length) {
+      closeModal();
+      toast(skipped ? `Barcha (${skipped} ta) yozuvlar oldin kiritilgan takrorlar` : "Faylda mos kassa qatorlari topilmadi", "err");
+      return;
+    }
+
+    const { data, error } = await sbClient.from("kassa").insert(candidates.map((c) => toDbRow(KASSA_DB_MAP, c))).select();
+    if (error) { reportError(error, "Importni saqlashda xatolik"); return; }
+
+    const imported = (data || []).map((r) => fromDbRow(KASSA_DB_MAP, r));
+    if (!STORE.kassa) STORE.kassa = [];
+    STORE.kassa.push(...imported);
+    added = imported.length;
+
+    saveStore();
+    closeModal();
+    updateNavBadges();
+    renderKassa();
+    toast(`Import: ${added} ta kassa operatsiyasi qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}`);
+  } catch (err) {
+    console.error(err);
+    toast("Faylni o'qishda xatolik", "err");
+  }
+}
+
 /* ------------------------------- Ish haqi ------------------------------- */
 // I.X. yuklama.xltx (Ilova №4 — xodimlar bo'yicha tafsilot) andazasi asosida.
 // Ijtimoiy soliq — hisoblangan ish haqidan ish beruvchi tomonidan qo'shimcha to'lanadi (xodim ish haqidan ushlanmaydi).
@@ -6041,7 +8813,7 @@ function computeIshHaqiRow(r, s) {
   const ndfl = soliqBazasi * (toNum(s.ndflStavka) / 100);
   const inps = soliqBazasi * (toNum(s.inpsStavka) / 100);
   const ndflByudjetga = ndfl - inps;
-  const sofIshHaqi = oylik - ndfl - inps;
+  const sofIshHaqi = oylik - ndfl;
   return { oylik, imtiyoz, soliqBazasi, ijtimoiySoliq, ndfl, inps, ndflByudjetga, sofIshHaqi };
 }
 
@@ -6931,6 +9703,7 @@ function computeReconciliationRows() {
   STORE.chiqim.forEach((r) => note(r.kontragentInn, r.kontragentNomi));
   STORE.kirim.forEach((r) => note(r.kontragentInn, r.kontragentNomi));
   STORE.bank.forEach((r) => note(r.kontragentInn, r.kontragent));
+  (STORE.kassa || []).forEach((r) => note(r.kontragentInn, r.kontragent));
   // Boshlang'ich qarzi qo'lda kiritilgan, lekin hozircha faktura/bank
   // yozuvlari bo'lmagan kontragentlar ham (davr harakati nolga teng bo'lsa
   // ham) ro'yxatda ko'rinishi uchun.
@@ -6941,7 +9714,9 @@ function computeReconciliationRows() {
     const kirimAmt = STORE.kirim.filter((r) => (r.kontragentInn || "").trim() === inn && isValidStatus(r.status) && matchFn(r.sana)).reduce((a, r) => a + toNum(r.jamiSumma), 0);
     const bankKirimAmt = STORE.bank.filter((r) => (r.kontragentInn || "").trim() === inn && matchFn(r.sana)).reduce((a, r) => a + toNum(r.kirim), 0);
     const bankChiqimAmt = STORE.bank.filter((r) => (r.kontragentInn || "").trim() === inn && matchFn(r.sana)).reduce((a, r) => a + toNum(r.chiqim), 0);
-    return { kirimCol: chiqimAmt + bankChiqimAmt, chiqimCol: kirimAmt + bankKirimAmt };
+    const kassaKirimAmt = (STORE.kassa || []).filter((r) => (r.kontragentInn || "").trim() === inn && r.turi === "kirim" && matchFn(r.sana)).reduce((a, r) => a + toNum(r.summa), 0);
+    const kassaChiqimAmt = (STORE.kassa || []).filter((r) => (r.kontragentInn || "").trim() === inn && r.turi === "chiqim" && matchFn(r.sana)).reduce((a, r) => a + toNum(r.summa), 0);
+    return { kirimCol: chiqimAmt + bankChiqimAmt + kassaChiqimAmt, chiqimCol: kirimAmt + bankKirimAmt + kassaKirimAmt };
   }
 
   // "Davr boshiga" = Kontragentlar bo'limida qo'lda kiritilgan boshlang'ich baza
@@ -6986,15 +9761,15 @@ function sverkaRowHtml(r) {
   const meta = SVERKA_STATUS_META[sverkaStatusKey(r)];
   const statusPill = `<span class="pill ${meta.pillClass}">${meta.text}</span>`;
   return `
-    <tr>
-      <td>${escapeHtml(r.nomi)}</td>
+    <tr data-hist-inn="${escapeHtml(r.inn)}" class="cursor-pointer kontragent-row" title="Tarixni (sverka) ko'rish uchun bosing">
+      <td><strong>${escapeHtml(r.nomi)}</strong></td>
       <td class="tag-inn">${escapeHtml(r.inn)}</td>
       <td class="num" title="Boshlang'ich baza (Kontragentlar bo'limida tahrirlanadi) + davr boshigacha bo'lgan tarix asosida avtomatik hisoblanadi">${fmtSum(r.boshiga)}</td>
       <td class="num">${fmtSum(r.kirim)}</td>
       <td class="num">${fmtSum(r.chiqim)}</td>
       <td class="num" style="font-weight:700">${fmtSum(r.oxiriga)}</td>
       <td>${statusPill}</td>
-      <td class="row-actions"><button class="btn btn-sm" data-detail-inn="${escapeHtml(r.inn)}">Tarix</button></td>
+      <td class="row-actions"><button class="btn btn-sm" data-detail-inn="${escapeHtml(r.inn)}" data-hist-inn="${escapeHtml(r.inn)}" title="Tarix (sverka)">Tarix</button></td>
     </tr>
   `;
 }
@@ -7083,8 +9858,8 @@ function renderAgingReport(type) {
         <thead><tr><th>${cfg.partyLabel}</th><th>INN</th><th>Hujjat №</th><th>Sana</th><th class="num">Necha kun</th><th class="num">Summa</th><th></th></tr></thead>
         <tbody>
           ${rows.map((r) => `
-            <tr>
-              <td>${escapeHtml(r.kontragentNomi || "")}</td>
+            <tr ${r.kontragentInn ? `data-hist-inn="${escapeHtml(r.kontragentInn)}"` : ""} class="cursor-pointer kontragent-row" title="Tarixni ko'rish uchun bosing">
+              <td><strong>${escapeHtml(r.kontragentNomi || "")}</strong></td>
               <td class="tag-inn">${escapeHtml(r.kontragentInn || "")}</td>
               <td>${escapeHtml(r.hujjatRaqami || "")}</td>
               <td>${escapeHtml(r.sana || "")}</td>
@@ -7101,6 +9876,17 @@ function renderAgingReport(type) {
   document.getElementById("btnExportAging").addEventListener("click", () => exportAgingXlsx(rows, buckets, total, cfg));
   document.getElementById("btnPrintAging").addEventListener("click", () => printAgingPdf(rows, total, cfg));
   main.querySelectorAll("[data-view]").forEach((b) => b.addEventListener("click", () => cfg.viewAction(b.dataset.view)));
+  const agingTbody = main.querySelector("table tbody");
+  if (agingTbody) {
+    agingTbody.addEventListener("click", (e) => {
+      if (e.target.closest("[data-view], button, a, input")) return;
+      const tr = e.target.closest("tr[data-hist-inn]");
+      if (tr) {
+        const inn = tr.getAttribute("data-hist-inn");
+        if (inn) openSverkaDetail(inn, type);
+      }
+    });
+  }
 }
 
 function exportAgingXlsx(rows, buckets, total, cfg) {
@@ -7210,8 +9996,18 @@ function renderSverka() {
     </div>
   `;
   document.getElementById("btnExportSverka").addEventListener("click", () => exportSverkaXlsx(filteredRows, totalDebitor, totalKreditor));
-  document.getElementById("btnPrintSverka").addEventListener("click", () => printSverkaPdf(filteredRows, totalDebitor, totalKreditor));
   main.querySelectorAll("[data-detail-inn]").forEach((b) => b.addEventListener("click", () => openSverkaDetail(b.dataset.detailInn, "sverka")));
+  const sBody = document.getElementById("sverkaBody");
+  if (sBody) {
+    sBody.addEventListener("click", (e) => {
+      if (e.target.closest("button, a, input")) return;
+      const tr = e.target.closest("tr[data-hist-inn]");
+      if (tr) {
+        const inn = tr.getAttribute("data-hist-inn");
+        if (inn) openSverkaDetail(inn, "sverka");
+      }
+    });
+  }
   main.querySelectorAll("[data-status-filter]").forEach((b) => b.addEventListener("click", () => {
     const key = b.dataset.statusFilter;
     SVERKA_STATUS_FILTER = SVERKA_STATUS_FILTER === key ? null : key;
@@ -7332,10 +10128,11 @@ function openSverkaDetail(inn, returnPage) {
   renderSverkaDetail();
 }
 
-function computeKontragentLedger(inn) {
+function computeKontragentLedger(inn, opts = {}) {
   const s = STORE.settings;
-  const from = s.filterFrom;
-  const to = s.filterTo;
+  const butunTarix = !!(opts && opts.butunTarix);
+  const from = butunTarix ? "" : s.filterFrom;
+  const to = butunTarix ? "" : s.filterTo;
 
   function txList(matchFn) {
     const list = [];
@@ -7353,6 +10150,17 @@ function computeKontragentLedger(inn) {
       const hujjatNo = r.hujjatRaqami ? ` (${r.hujjatRaqami})` : "";
       if (toNum(r.chiqim) > 0) list.push({ sana: r.sana, hujjat: `Bank chiqim${izoh}${hujjatNo}`, debet: toNum(r.chiqim), kredit: 0 });
       if (toNum(r.kirim) > 0) list.push({ sana: r.sana, hujjat: `Bank kirim${izoh}${hujjatNo}`, debet: 0, kredit: toNum(r.kirim) });
+    });
+    (STORE.kassa || []).forEach((r) => {
+      if ((r.kontragentInn || "").trim() !== inn || !matchFn(r.sana)) return;
+      const izoh = r.tavsif ? `: ${r.tavsif}` : "";
+      const hujjatNo = r.hujjatRaqami ? ` (${r.hujjatRaqami})` : "";
+      const amt = toNum(r.summa);
+      if (r.turi === "chiqim" && amt > 0) {
+        list.push({ sana: r.sana, hujjat: `Kassa chiqim (KO-2)${izoh}${hujjatNo}`, debet: amt, kredit: 0 });
+      } else if (r.turi === "kirim" && amt > 0) {
+        list.push({ sana: r.sana, hujjat: `Kassa kirim (KO-1)${izoh}${hujjatNo}`, debet: 0, kredit: amt });
+      }
     });
     return list;
   }
@@ -7383,6 +10191,8 @@ function computeKontragentLedger(inn) {
   };
 }
 
+let SVERKA_BUTUN_TARIX = false;
+
 function renderSverkaDetail() {
   const inn = SVERKA_DETAIL_INN;
   const main = document.getElementById("main");
@@ -7392,7 +10202,7 @@ function renderSverkaDetail() {
   const info = summaryRows.find((r) => r.inn === inn);
   const kRecord = STORE.kontragentlar.find((k) => (k.inn || "").trim() === inn);
   const nomi = info ? info.nomi : (kRecord ? kRecord.nomi : inn);
-  const ledger = computeKontragentLedger(inn);
+  const ledger = computeKontragentLedger(inn, { butunTarix: SVERKA_BUTUN_TARIX });
 
   main.innerHTML = `
     <div class="page-header">
@@ -7408,7 +10218,13 @@ function renderSverkaDetail() {
       </div>
     </div>
 
-    <div class="note" style="margin:0 0 14px;">"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+      <div style="display:inline-flex;gap:4px;background:var(--bg-sunken);padding:3px;border-radius:var(--radius-sm);border:1px solid var(--border);">
+        <button class="btn btn-sm ${!SVERKA_BUTUN_TARIX ? "btn-primary" : ""}" id="btnSverkaDavr" style="padding:4px 12px;">Davr bo'yicha</button>
+        <button class="btn btn-sm ${SVERKA_BUTUN_TARIX ? "btn-primary" : ""}" id="btnSverkaButun" style="padding:4px 12px;">Butun tarix</button>
+      </div>
+      <span class="faint" style="font-size:12px;">${SVERKA_BUTUN_TARIX ? "Kontragent bilan birinchi kundan boshlab barcha hisob-kitoblar ko'rsatilmoqda" : `"Davr boshi" — tanlangan sanadan oldingi barcha tarix asosida hisoblanadi.`}</span>
+    </div>
 
     <div class="grid grid-3 section">
       <div class="card stat-card"><div class="stat-label">Saldo boshlang'ich</div><div class="stat-value">${fmtSum(ledger.boshlangichSaldo)}</div></div>
@@ -7445,6 +10261,14 @@ function renderSverkaDetail() {
   document.getElementById("btnBackSverka").addEventListener("click", () => navigate(SVERKA_DETAIL_RETURN_PAGE));
   document.getElementById("btnExportDetail").addEventListener("click", () => exportSverkaDetailXlsx(nomi, inn, ledger));
   document.getElementById("btnPrintDetail").addEventListener("click", () => printSverkaDetailPdf(nomi, inn, ledger));
+  document.getElementById("btnSverkaDavr").addEventListener("click", () => {
+    SVERKA_BUTUN_TARIX = false;
+    renderSverkaDetail();
+  });
+  document.getElementById("btnSverkaButun").addEventListener("click", () => {
+    SVERKA_BUTUN_TARIX = true;
+    renderSverkaDetail();
+  });
 }
 
 function exportSverkaDetailXlsx(nomi, inn, ledger) {
@@ -8297,6 +11121,7 @@ function renderSettings() {
       <button class="tab-btn" data-sec="soliq">Soliq stavkalari</button>
       <button class="tab-btn" data-sec="ishhaqi">Ish haqi stavkalari</button>
       <button class="tab-btn" data-sec="hisobot">Hisobot qiymatlari</button>
+      <button class="tab-btn" data-sec="integratsiya">Integratsiyalar</button>
       <button class="tab-btn" data-sec="malumot">Ma'lumotlar</button>
       ${IS_ADMIN ? `<button class="tab-btn" data-sec="firmalar">Firmalar</button>` : ""}
     </div>
@@ -8402,16 +11227,71 @@ function renderSettings() {
       </div>
     </div>
 
+    <div class="settings-section" data-sec="integratsiya">
+      <div class="card">
+        <div class="card-title">Didox.uz / E-Faktura API integratsiyasi</div>
+        <div class="note" style="margin-bottom:14px;">Didox.uz elektron hisobfakturalar tizimi bilan to'g'ridan-to'g'ri integratsiya sozlamalari. Ushbu sozlama yordamida kiruvchi va chiquvchi fakturalarni Excel fayllarsiz, to'g'ridan-to'g'ri tortib olishingiz mumkin.</div>
+
+        <div class="field">
+          <label>Didox API Token</label>
+          <div style="display:flex;gap:8px;">
+            <input type="password" id="sDidoxToken" placeholder="Didox shaxsiy kabinetidagi token..." value="${escapeHtml(s.didoxToken || "")}" style="flex:1;">
+            <button class="btn btn-sm" id="btnTestDidoxConnection" type="button">Ulanishni tekshirish</button>
+          </div>
+          <div class="note">Didox.uz kabinetidagi Sozlamalar -> API bo'limidan olingan token.</div>
+          <div id="didoxConnStatus" style="font-size:12px;margin-top:6px;display:none;"></div>
+        </div>
+
+        <div class="field" style="margin-top:12px;">
+          <label>Didox API manzili (URL)</label>
+          <input type="text" id="sDidoxApiUrl" placeholder="https://api.didox.uz/v1" value="${escapeHtml(s.didoxApiUrl || "https://api.didox.uz/v1")}">
+          <div class="note">Standart: "https://api.didox.uz/v1" yoki Vercel serverless proksi: "/api/didox".</div>
+        </div>
+
+        <div class="switch-row" style="margin-top:14px;">
+          <span class="switch"><input type="checkbox" id="sDidoxAutoOmbor" ${s.didoxAutoOmbor !== false ? "checked" : ""}><span class="track"></span></span>
+          <label for="sDidoxAutoOmbor">Kirim fakturalaridagi tovarlarni avtomatik Ombor bo'limiga kirim qilish</label>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <div class="card-title" style="display:flex;align-items:center;gap:8px;">
+          <span class="badge-1c">1C:Korxona / 1UZ</span> Ikki tomonlama ma'lumotlar almashinuvi
+        </div>
+        <div class="note" style="margin-bottom:14px;">1C:Бухгалтерия 8.3, Управление торговлей va 1UZ dasturlari bilan to'lovlar, fakturalar, kassa va tovarlar katalogini import/eksport qilish markazi.</div>
+        <div class="page-actions">
+          <button class="btn btn-primary" id="btnSettingsOpen1C"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>1C Sinxronlash markazi</button>
+          <button class="btn" id="btnSettings1CBankExport">Klient-Bank (kl_to_1c.txt)</button>
+          <button class="btn" id="btnSettings1CXmlExport">CommerceML 2.0 (.xml)</button>
+          <button class="btn" id="btnSettings1CJsonExport">EnterpriseData (.json)</button>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-section" data-sec="malumot">
       <div class="card">
-        <div class="card-title">Ma'lumotlar</div>
-        <div class="page-actions">
-          <button class="btn" id="btnExport">Barcha ma'lumotlarni yuklab olish (.json)</button>
+        <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <span>Zaxira nusxa (Backup) va arxivlash</span>
+          ${(() => {
+            const b = checkBackupReminder();
+            if (!b.needsBackup && b.lastDate) {
+              return `<span class="badge-backup">✓ Zaxira yangi (${b.lastDate})</span>`;
+            } else if (b.needsBackup && b.lastDate) {
+              return `<span class="badge" style="background:rgba(217,119,6,0.15);color:#d97706;font-weight:700;">⚠ ${b.daysSince} kundan beri zaxira olinmagan</span>`;
+            } else {
+              return `<span class="badge" style="background:rgba(239,68,68,0.15);color:#ef4444;font-weight:700;">⚠ Zaxira olinmagan</span>`;
+            }
+          })()}
+        </div>
+        <div class="note" style="margin-bottom:14px;">Tizimdagi barcha 11 ta bo'lim (Kirim, Chiqim, Bank, Kassa, Ombor, Kontragentlar, Ishlab chiqarish, Qayta ishlash, Ish haqi, Asosiy vositalar va Sozlamalar) ma'lumotlarini bitta faylga zaxiralash.</div>
+        <div class="page-actions" style="margin-bottom:12px;">
+          <button class="btn btn-primary" id="btnExportFullXlsx"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>To'liq Excel zaxira nusxasi (.xlsx — 11 varaq)</button>
+          <button class="btn" id="btnExport"><svg class="ic" viewBox="0 0 24 24"><use href="#i-database"/></svg>JSON Snapshot yuklab olish (.json)</button>
           <button class="btn" id="btnImportJson">.json fayldan tiklash</button>
           <button class="btn btn-danger" id="btnReset">Hammasini tozalash</button>
         </div>
         <input type="file" id="jsonFile" accept=".json" style="display:none">
-        <div class="note">Ma'lumotlar Supabase bulutida markaziy saqlanadi va jamoa a'zolari orasida real vaqtda sinxronlanadi — sahifa yangilansa ham yo'qolmaydi. ".json" eksport/import faqat zaxira nusxa olish yoki boshqa bazaga ko'chirish uchun kerak.</div>
+        <div class="note">Ma'lumotlar Supabase bulutida markaziy saqlanadi va jamoa a'zolari orasida real vaqtda sinxronlanadi — sahifa yangilansa ham yo'qolmaydi. Excel yoki JSON zaxira nusxasini muntazam olish tavsiya etiladi.</div>
       </div>
     </div>
 
@@ -8431,7 +11311,7 @@ function renderSettings() {
     settingsTabs.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.sec === sec));
     main.querySelectorAll(".settings-section").forEach((el) => el.classList.toggle("active", el.dataset.sec === sec));
     // "Saqlash" paneli faqat tahrirlanadigan bo'limlarda kerak.
-    actionbar.style.display = ["rekvizit", "yonalish", "soliq", "ishhaqi"].includes(sec) ? "" : "none";
+    actionbar.style.display = ["rekvizit", "yonalish", "soliq", "ishhaqi", "integratsiya"].includes(sec) ? "" : "none";
   };
   settingsTabs.querySelectorAll(".tab-btn").forEach((b) => b.addEventListener("click", () => setSettingsSection(b.dataset.sec)));
 
@@ -8463,6 +11343,49 @@ function renderSettings() {
     markSettingsDirty();
   });
 
+  // Didox ulanishini tekshirish tugmasi
+  const btnTestDidox = document.getElementById("btnTestDidoxConnection");
+  if (btnTestDidox) {
+    btnTestDidox.addEventListener("click", async () => {
+      const tok = (document.getElementById("sDidoxToken")?.value || "").trim();
+      const url = (document.getElementById("sDidoxApiUrl")?.value || "").trim();
+      const statusEl = document.getElementById("didoxConnStatus");
+      if (!tok) {
+        if (statusEl) {
+          statusEl.style.display = "";
+          statusEl.style.color = "var(--danger)";
+          statusEl.textContent = "Iltimos, avval Didox API tokenini kiriting.";
+        }
+        return;
+      }
+      if (statusEl) {
+        statusEl.style.display = "";
+        statusEl.style.color = "var(--text-dim)";
+        statusEl.textContent = "Didox API bilan aloqa tekshirilmoqda...";
+      }
+      btnTestDidox.disabled = true;
+      try {
+        const res = await testDidoxConnection(tok, url);
+        if (statusEl) {
+          if (res.ok) {
+            statusEl.style.color = "var(--ok)";
+            statusEl.textContent = "✓ Didox API bilan aloqa muvaffaqiyatli o'rnatildi!";
+          } else {
+            statusEl.style.color = "var(--danger)";
+            statusEl.textContent = "✗ Xatolik: " + (res.message || res.error || "Didox serveriga ulanib bo'lmadi");
+          }
+        }
+      } catch (err) {
+        if (statusEl) {
+          statusEl.style.color = "var(--danger)";
+          statusEl.textContent = "✗ Xatolik: " + err.message;
+        }
+      } finally {
+        btnTestDidox.disabled = false;
+      }
+    });
+  }
+
   if (IS_ADMIN) {
     const host = document.getElementById("firmaManagerHost");
     if (host) renderFirmaManager(host, { withHeader: false });
@@ -8493,7 +11416,10 @@ function renderSettings() {
       yonalish: document.getElementById("sYonalish").value,
       modulOmbor: document.getElementById("sModulOmbor").checked,
       modulIshlabChiqarish: document.getElementById("sModulIshlabChiqarish").checked,
-      modulAsosiyVositalar: document.getElementById("sModulAsosiyVositalar").checked
+      modulAsosiyVositalar: document.getElementById("sModulAsosiyVositalar").checked,
+      didoxToken: (document.getElementById("sDidoxToken")?.value || "").trim(),
+      didoxApiUrl: (document.getElementById("sDidoxApiUrl")?.value || "").trim() || "https://api.didox.uz/v1",
+      didoxAutoOmbor: document.getElementById("sDidoxAutoOmbor") ? document.getElementById("sDidoxAutoOmbor").checked : true
     };
     const { ok, errors, warnings } = validateSettings(next);
     applySettingsFieldMessages(errors, warnings);
@@ -8508,13 +11434,55 @@ function renderSettings() {
     toast("Sozlamalar saqlandi");
   });
 
-  document.getElementById("btnExport").addEventListener("click", () => {
-    const blob = new Blob([JSON.stringify(STORE, null, 2)], { type: "application/json" });
+  // 1C Integratsiyasi tugmalari
+  const btnSettingsOpen1C = document.getElementById("btnSettingsOpen1C");
+  if (btnSettingsOpen1C) btnSettingsOpen1C.addEventListener("click", () => open1CExchangeModal("bank"));
+
+  const btnSettings1CBankExport = document.getElementById("btnSettings1CBankExport");
+  if (btnSettings1CBankExport) btnSettings1CBankExport.addEventListener("click", () => {
+    const text = generate1CClientBankExport(STORE.bank);
+    const blob = new Blob([text], { type: "text/plain;charset=windows-1251" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `FORGET_${todayISO()}.json`;
+    a.download = `kl_to_1c_${todayISO()}.txt`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
+    toast("kl_to_1c.txt fayli yuklab olindi (1C Klient-Bank formati)");
   });
+
+  const btnSettings1CXmlExport = document.getElementById("btnSettings1CXmlExport");
+  if (btnSettings1CXmlExport) btnSettings1CXmlExport.addEventListener("click", () => {
+    const xml = generateCommerceMLExport();
+    const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `forget_1c_commerceml_${todayISO()}.xml`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast("CommerceML 2.0 XML fayli yuklab olindi");
+  });
+
+  const btnSettings1CJsonExport = document.getElementById("btnSettings1CJsonExport");
+  if (btnSettings1CJsonExport) btnSettings1CJsonExport.addEventListener("click", () => {
+    const data = generate1CEnterpriseJson();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `forget_1c_enterprisedata_${todayISO()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    toast("1C EnterpriseData JSON fayli yuklab olindi");
+  });
+
+  // To'liq Zaxira (Backup) tugmalari
+  const btnExportFullXlsx = document.getElementById("btnExportFullXlsx");
+  if (btnExportFullXlsx) btnExportFullXlsx.addEventListener("click", exportFullBackupXlsx);
+
+  const btnExport = document.getElementById("btnExport");
+  if (btnExport) btnExport.addEventListener("click", exportFullBackupJson);
 
   document.getElementById("btnImportJson").addEventListener("click", () => document.getElementById("jsonFile").click());
   document.getElementById("jsonFile").addEventListener("change", async (e) => {
@@ -8774,6 +11742,1990 @@ async function handleReportSettingsImport(file, fieldMap, rerender) {
   }
 }
 
+/* ------------------------------- Didox / E-Faktura API Integratsiyasi ------------------------------- */
+
+/**
+ * Didox REST API yoki Soliq.uz (GNK) E-Faktura JSON hujjatini FORGET ichki tuzilishiga o'giradi.
+ * @param {Object} rawDoc - Didox yoki Soliq.uz'dan olingan xom hujjat ob'ekti
+ * @param {string} [targetType] - 'kirim' | 'chiqim' | 'all' | null
+ * @returns {Object|null}
+ */
+function parseDidoxDocument(rawDoc, targetType) {
+  if (!rawDoc || typeof rawDoc !== "object") return null;
+
+  // 1) Hujjat ob'ektining asosiy qismi
+  const doc = rawDoc.document || rawDoc.data || rawDoc.Factura || rawDoc;
+  const facturaDoc = doc.factura_doc || doc.FacturaDoc || doc.document_info || doc;
+
+  // 2) Hujjat raqami va sanasi
+  const hujjatRaqami = String(
+    facturaDoc.factura_number ||
+    facturaDoc.factura_no ||
+    facturaDoc.FacturaNo ||
+    facturaDoc.number ||
+    rawDoc.number ||
+    rawDoc.hujjat_raqami ||
+    ""
+  ).trim();
+
+  const sanaRaw =
+    facturaDoc.factura_date ||
+    facturaDoc.FacturaDate ||
+    facturaDoc.date ||
+    rawDoc.date ||
+    rawDoc.sana ||
+    "";
+  const sana = normalizeDate(sanaRaw);
+
+  // 3) Ishtirokchilar (Sotuvchi va Xaridor)
+  const seller = doc.seller || doc.Seller || rawDoc.seller || {};
+  const buyer = doc.buyer || doc.Buyer || rawDoc.buyer || {};
+
+  const sellerInn = String(seller.tin || seller.inn || seller.Tin || rawDoc.seller_tin || rawDoc.seller_inn || "").trim();
+  const sellerNomi = String(seller.name || seller.Name || rawDoc.seller_name || rawDoc.seller_nomi || "").trim();
+  const buyerInn = String(buyer.tin || buyer.inn || buyer.Tin || rawDoc.buyer_tin || rawDoc.buyer_inn || "").trim();
+  const buyerNomi = String(buyer.name || buyer.Name || rawDoc.buyer_name || rawDoc.buyer_nomi || "").trim();
+
+  // 4) Yo'nalishni aniqlash (kirim yoki chiqim)
+  const myInn = String((STORE.settings && STORE.settings.inn) || "").trim();
+  let resolvedType = targetType;
+  if (!resolvedType || resolvedType === "all") {
+    if (myInn && buyerInn && myInn === buyerInn) {
+      resolvedType = "kirim"; // Biz xaridormiz -> Kiruvchi faktura
+    } else if (myInn && sellerInn && myInn === sellerInn) {
+      resolvedType = "chiqim"; // Biz sotuvchimiz -> Chiquvchi faktura
+    } else {
+      resolvedType = "kirim"; // Standart kirim
+    }
+  }
+
+  const isKirim = resolvedType === "kirim";
+  const kontragentInn = isKirim ? sellerInn : buyerInn;
+  const kontragentNomi = isKirim ? sellerNomi : buyerNomi;
+
+  // 5) Status normallashtirish
+  // Didox raqamli statuslar:
+  // 30: Podpisan/Qabul qilingan, 40: Otkaz/Rad, 50: Otmenen/Bekor, 10: Chernovik, 20/25: Yuborilgan
+  let status = "Подписан";
+  const rawStatus = rawDoc.status !== undefined ? rawDoc.status : (doc.status !== undefined ? doc.status : doc.DocStatus);
+  const statusName = String(rawDoc.status_name || rawDoc.status_comment || doc.status_name || doc.StatusName || "").trim();
+
+  if (rawStatus === 30 || rawStatus === "30") {
+    status = "Подписан";
+  } else if (rawStatus === 40 || rawStatus === "40") {
+    status = "Отказ";
+  } else if (rawStatus === 50 || rawStatus === "50") {
+    status = "Отменен";
+  } else if (rawStatus === 10 || rawStatus === "10") {
+    status = "Черновик";
+  } else if (rawStatus === 20 || rawStatus === "20" || rawStatus === 25 || rawStatus === "25") {
+    status = "Отправлен";
+  } else if (statusName) {
+    status = statusName;
+  } else if (typeof rawDoc.status === "string") {
+    status = rawDoc.status;
+  }
+
+  // 6) Summalar va QQS
+  const total = doc.total || doc.Total || rawDoc.total || {};
+  let summaQQSsiz = toNum(
+    total.summa ||
+    total.delivery_sum ||
+    doc.TotalSumma ||
+    doc.TotalDeliverySum ||
+    rawDoc.summa_qqssiz ||
+    rawDoc.summa
+  );
+  let qqsSumma = toNum(
+    total.vat_sum ||
+    doc.TotalVatSum ||
+    rawDoc.qqs_summa ||
+    rawDoc.vat_sum
+  );
+  let jamiSumma = toNum(
+    total.delivery_sum_with_vat ||
+    total.total_sum ||
+    doc.TotalDeliverySumWithVat ||
+    rawDoc.jami_summa ||
+    rawDoc.total_sum
+  );
+
+  // 7) Mahsulotlar (Line items)
+  const rawItems =
+    doc.items ||
+    doc.products ||
+    (doc.ProductList && doc.ProductList.Products) ||
+    rawDoc.items ||
+    rawDoc.products ||
+    [];
+
+  const items = [];
+  if (Array.isArray(rawItems)) {
+    for (let i = 0; i < rawItems.length; i++) {
+      const it = rawItems[i];
+      if (!it || typeof it !== "object") continue;
+
+      const ordNo = it.ord_no || it.OrdNo || i + 1;
+      const nomi = String(it.name || it.product_name || it.Name || it.catalog_name || "").trim();
+      const birlik = String(it.package_name || it.unit || it.MeasureId || it.birlik || "dona").trim();
+      const miqdor = toNum(it.count || it.quantity || it.Count || 1);
+      const narx = toNum(it.price || it.Price || 0);
+      const itemSumma = toNum(it.summa || it.delivery_sum || it.Summa || (miqdor * narx));
+      const vatRate = toNum(it.vat_rate || it.VatRate || 12);
+      const itemVat = toNum(it.vat_sum || it.VatSum || 0);
+      const itemJami = toNum(it.delivery_sum_with_vat || it.total_sum || it.DeliverySumWithVat || (itemSumma + itemVat));
+      const mxik = String(it.catalog_code || it.CatalogCode || it.mxik || "").trim();
+
+      if (nomi) {
+        items.push({
+          ordNo,
+          nomi,
+          birlik,
+          miqdor,
+          narx: narx || (miqdor > 0 ? itemSumma / miqdor : 0),
+          summaQQSsiz: itemSumma,
+          qqsStavka: vatRate,
+          qqsSumma: itemVat,
+          jamiSumma: itemJami,
+          mxik
+        });
+      }
+    }
+  }
+
+  // Agar total headerda summa bo'lmasa, mahsulotlardan jamlaymiz
+  if (!summaQQSsiz && items.length) {
+    summaQQSsiz = items.reduce((a, it) => a + it.summaQQSsiz, 0);
+  }
+  if (!qqsSumma && items.length) {
+    qqsSumma = items.reduce((a, it) => a + it.qqsSumma, 0);
+  }
+  if (!jamiSumma) {
+    jamiSumma = summaQQSsiz + qqsSumma;
+  }
+
+  const qqsStavka = summaQQSsiz > 0 && qqsSumma > 0 ? Math.round((qqsSumma / summaQQSsiz) * 100) : (qqsSumma > 0 ? 12 : 0);
+
+  return {
+    turi: resolvedType,
+    hujjatRaqami,
+    sana,
+    status,
+    kontragentInn,
+    kontragentNomi,
+    summaQQSsiz,
+    qqsStavka,
+    qqsSumma,
+    jamiSumma,
+    tolandi: false,
+    rawId: String(rawDoc.id || doc.id || doc.FacturaId || ""),
+    items
+  };
+}
+
+/**
+ * Fakturaning mavjud yozuvlar ichida takrorlanganligini (dublikat) tekshiradi.
+ */
+function isInvoiceDuplicate(row, existingRows) {
+  if (!row || !Array.isArray(existingRows)) return false;
+  const num = String(row.hujjatRaqami || "").trim().toLowerCase();
+  const sana = String(row.sana || "").trim();
+  const sum = Math.round(toNum(row.jamiSumma));
+  const inn = String(row.kontragentInn || "").trim();
+  const nomi = String(row.kontragentNomi || "").trim().toLowerCase();
+
+  return existingRows.some((ex) => {
+    const exNum = String(ex.hujjatRaqami || "").trim().toLowerCase();
+    const exSana = String(ex.sana || "").trim();
+    const exSum = Math.round(toNum(ex.jamiSumma));
+    const exInn = String(ex.kontragentInn || "").trim();
+    const exNomi = String(ex.kontragentNomi || "").trim().toLowerCase();
+
+    if (num && exNum === num && sana && exSana === sana && Math.abs(sum - exSum) < 1) {
+      if (!inn || !exInn || inn === exInn || nomi === exNomi) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+/**
+ * Didox API bilan aloqani tekshiradi (Ping / Profile).
+ */
+async function testDidoxConnection(token, apiUrl) {
+  const base = (apiUrl || (STORE.settings && STORE.settings.didoxApiUrl) || "https://api.didox.uz/v1").replace(/\/+$/, "");
+
+  // 1) Serverless proxy orqali urinish
+  try {
+    const resp = await fetch("/api/didox", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "ping", token, didox_url: base })
+    });
+    if (resp.ok) {
+      return await resp.json();
+    }
+  } catch (e) {
+    // Agar serverless proxy bo'lmasa, to'g'ridan-to'g'ri urinish
+  }
+
+  // 2) To'g'ridan-to'g'ri (Electron yoki CORS ruxsat berilgan muhitda)
+  try {
+    const directResp = await fetch(`${base}/profile`, {
+      headers: {
+        "Authorization": `Bearer ${token}`,
+        "Accept": "application/json"
+      }
+    });
+    if (directResp.ok) {
+      const data = await directResp.json().catch(() => ({}));
+      return { ok: true, message: "Didox API bilan aloqa o'rnatildi", profile: data };
+    }
+    return {
+      ok: false,
+      status: directResp.status,
+      message: directResp.status === 401 ? "Didox API tokeni noto'g'ri yoki muddati o'tgan" : `Didox API xatosi (${directResp.status})`
+    };
+  } catch (err) {
+    return { ok: false, error: err.message || "Didox serveriga ulanib bo'lmadi" };
+  }
+}
+
+/**
+ * Didox API'dan fakturalar ro'yxatini yuklab oladi.
+ */
+async function fetchDidoxDocuments(opts) {
+  const { token, owner, dateFrom, dateTo, status, page = 1, limit = 50, apiUrl } = opts;
+  const base = (apiUrl || (STORE.settings && STORE.settings.didoxApiUrl) || "https://api.didox.uz/v1").replace(/\/+$/, "");
+
+  // 1) Avval Vercel serverless proksi orqali chaqiramiz (brauzerda CORS muammosini oldini olish uchun)
+  try {
+    const resp = await fetch("/api/didox", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "documents",
+        owner,
+        token,
+        date_from: dateFrom,
+        date_to: dateTo,
+        status,
+        page,
+        limit,
+        didox_url: base
+      })
+    });
+    if (resp.ok) {
+      return await resp.json();
+    }
+    const err = await resp.json().catch(() => ({}));
+    if (resp.status !== 404 && resp.status !== 502) {
+      throw new Error(err.error || err.message || `Didox API xatosi (${resp.status})`);
+    }
+  } catch (proxyErr) {
+    // Agar serverless proxy topilmasa va muhit Electron bo'lsa yoki to'g'ridan-to'g'ri qo'llab-quvvatlasa
+    if (typeof window !== "undefined" && (window.process?.versions?.electron || !window.location?.origin?.includes("vercel.app"))) {
+      const q = new URLSearchParams({
+        owner: owner || "incoming",
+        page: String(page || 1),
+        limit: String(limit || 50)
+      });
+      if (dateFrom) q.set("date_from", dateFrom);
+      if (dateTo) q.set("date_to", dateTo);
+      if (status !== "" && status !== null && status !== undefined) q.set("status", String(status));
+
+      const direct = await fetch(`${base}/documents?${q.toString()}`, {
+        headers: { "Authorization": `Bearer ${token}`, "Accept": "application/json" }
+      });
+      if (direct.ok) return await direct.json();
+      const directErr = await direct.json().catch(() => ({}));
+      throw new Error(directErr.error || directErr.message || `Didox API xatosi (${direct.status})`);
+    }
+    throw proxyErr;
+  }
+}
+
+/**
+ * Didox API yoki JSON ma'lumotlaridan fakturalarni FORGET bazasi bilan to'liq sinxronlaydi.
+ */
+async function syncDidoxInvoices(opts = {}) {
+  await dataReady;
+  const {
+    type = "all", // 'kirim', 'chiqim', or 'all'
+    dateFrom = "",
+    dateTo = "",
+    status = "30",
+    token = (STORE.settings && STORE.settings.didoxToken) || "",
+    apiUrl = (STORE.settings && STORE.settings.didoxApiUrl) || "https://api.didox.uz/v1",
+    autoOmbor = STORE.settings ? (STORE.settings.didoxAutoOmbor !== false) : true,
+    rawJsonData = null,
+    onProgress = () => {}
+  } = opts;
+
+  const result = {
+    totalFound: 0,
+    addedKirim: 0,
+    addedChiqim: 0,
+    skipped: 0,
+    omborAdded: 0,
+    kontragentAdded: 0,
+    errors: []
+  };
+
+  try {
+    let docs = [];
+
+    if (rawJsonData) {
+      onProgress("Fayldan ma'lumotlar o'qilmoqda...", 20);
+      if (Array.isArray(rawJsonData)) {
+        docs = rawJsonData;
+      } else if (rawJsonData && typeof rawJsonData === "object") {
+        docs = rawJsonData.data || rawJsonData.documents || rawJsonData.Facturas || [rawJsonData];
+      }
+      onProgress(`${docs.length} ta hujjat topildi. Tahlil qilinmoqda...`, 40);
+    } else {
+      if (!token) {
+        throw new Error("Didox API tokeni kiritilmagan. Iltimos, Didox API tokenini kiriting yoki Sozlamalarda saqlang.");
+      }
+
+      onProgress("Didox API serveriga ulanmoqda...", 10);
+
+      const directionsToFetch = type === "all" ? ["incoming", "outgoing"] : [type === "kirim" ? "incoming" : "outgoing"];
+
+      for (let dIdx = 0; dIdx < directionsToFetch.length; dIdx++) {
+        const owner = directionsToFetch[dIdx];
+        const dirLabel = owner === "incoming" ? "Kiruvchi" : "Chiquvchi";
+        let page = 1;
+        let hasMore = true;
+
+        while (hasMore && page <= 20) {
+          onProgress(`${dirLabel} fakturalar yuklanmoqda (sahifa ${page})...`, 20 + dIdx * 25 + page * 2);
+          const resp = await fetchDidoxDocuments({
+            token,
+            apiUrl,
+            owner,
+            dateFrom,
+            dateTo,
+            status,
+            page,
+            limit: 50
+          });
+
+          const pageDocs = Array.isArray(resp) ? resp : (resp.data || resp.documents || []);
+          if (!pageDocs.length) {
+            hasMore = false;
+            break;
+          }
+
+          pageDocs.forEach((d) => {
+            if (!d._owner) d._owner = owner;
+          });
+          docs = docs.concat(pageDocs);
+
+          if (pageDocs.length < 50 || (resp.total && docs.length >= resp.total)) {
+            hasMore = false;
+          } else {
+            page++;
+          }
+        }
+      }
+    }
+
+    result.totalFound = docs.length;
+    if (!docs.length) {
+      onProgress("Ko'rsatilgan parametrlar bo'yicha hech qanday faktura topilmadi.", 100);
+      return result;
+    }
+
+    onProgress(`${docs.length} ta hujjat tahlil qilinmoqda...`, 60);
+
+    const kirimCandidates = [];
+    const chiqimCandidates = [];
+    const kirimLineItemsMap = new Map();
+    const chiqimLineItemsMap = new Map();
+
+    for (const rawDoc of docs) {
+      const explicitType = rawDoc._owner === "incoming" ? "kirim" : (rawDoc._owner === "outgoing" ? "chiqim" : (type === "all" ? null : type));
+      const parsed = parseDidoxDocument(rawDoc, explicitType);
+      if (!parsed || !parsed.hujjatRaqami || !parsed.sana) {
+        continue;
+      }
+
+      const targetStoreType = parsed.turi === "chiqim" ? "chiqim" : "kirim";
+      const existingRows = STORE[targetStoreType] || [];
+
+      // Dublikat tekshiruvi
+      if (isInvoiceDuplicate(parsed, existingRows)) {
+        result.skipped++;
+        continue;
+      }
+
+      const currentCandidates = targetStoreType === "kirim" ? kirimCandidates : chiqimCandidates;
+      if (isInvoiceDuplicate(parsed, currentCandidates)) {
+        result.skipped++;
+        continue;
+      }
+
+      const invoiceRow = {
+        sana: parsed.sana,
+        hujjatRaqami: parsed.hujjatRaqami,
+        status: parsed.status,
+        kontragentInn: parsed.kontragentInn,
+        kontragentNomi: parsed.kontragentNomi,
+        summaQQSsiz: parsed.summaQQSsiz,
+        qqsStavka: parsed.qqsStavka,
+        qqsSumma: parsed.qqsSumma,
+        jamiSumma: parsed.jamiSumma,
+        tolandi: false
+      };
+
+      const docKey = `${parsed.hujjatRaqami}__${parsed.sana}__${parsed.jamiSumma}`;
+
+      if (targetStoreType === "kirim") {
+        kirimCandidates.push(invoiceRow);
+        if (parsed.items && parsed.items.length) {
+          kirimLineItemsMap.set(docKey, parsed.items);
+        }
+      } else {
+        chiqimCandidates.push(invoiceRow);
+        if (parsed.items && parsed.items.length) {
+          chiqimLineItemsMap.set(docKey, parsed.items);
+        }
+      }
+    }
+
+    onProgress("Kontragentlar ro'yxatga olinmoqda...", 70);
+
+    // Kontragentlarni ro'yxatga olish
+    const allCandidates = [...kirimCandidates, ...chiqimCandidates];
+    const seenKontragents = new Set();
+    for (const c of allCandidates) {
+      if (!c.kontragentNomi) continue;
+      const kKey = (c.kontragentInn || "") + "|" + c.kontragentNomi.toLowerCase();
+      if (!seenKontragents.has(kKey)) {
+        seenKontragents.add(kKey);
+        const kRes = await ensureKontragentAutoAdded(c.kontragentInn, c.kontragentNomi);
+        if (kRes) result.kontragentAdded++;
+      }
+    }
+
+    onProgress("FORGET bazasiga fakturalar yozilmoqda...", 80);
+
+    // 1) Kirim fakturalarini bazaga yozish
+    if (kirimCandidates.length) {
+      let insertedKirim = [];
+      try {
+        insertedKirim = await insertRowsChunked("kirim", kirimCandidates.map((r) => toDbRow(INVOICE_DB_MAP, r)));
+      } catch (err) {
+        result.errors.push("Kirim fakturalarini bazaga yozishda xatolik: " + err.message);
+      }
+
+      if (insertedKirim && insertedKirim.length) {
+        const mappedInserted = insertedKirim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
+        STORE.kirim.push(...mappedInserted);
+        result.addedKirim = mappedInserted.length;
+
+        // Omborga tovarlarni kirim qilish
+        if (autoOmbor && kirimLineItemsMap.size > 0) {
+          onProgress("Ombor qoldiqlari kirim qilinmoqda...", 85);
+          const omborRowsToInsert = [];
+
+          for (const kRow of mappedInserted) {
+            const docKey = `${kRow.hujjatRaqami}__${kRow.sana}__${kRow.jamiSumma}`;
+            const items = kirimLineItemsMap.get(docKey);
+            if (!items || !items.length || !isValidStatus(kRow.status)) continue;
+
+            for (const it of items) {
+              const omborDup = STORE.ombor.some((o) =>
+                o.hujjatRaqami === kRow.hujjatRaqami &&
+                o.sana === kRow.sana &&
+                o.nomi === it.nomi &&
+                Math.abs(o.miqdor - it.miqdor) < 0.001
+              );
+              if (omborDup) continue;
+
+              omborRowsToInsert.push({
+                sana: kRow.sana,
+                hujjatRaqami: kRow.hujjatRaqami,
+                kontragentInn: kRow.kontragentInn,
+                kontragentNomi: kRow.kontragentNomi,
+                nomi: it.nomi,
+                birlik: it.birlik || "dona",
+                miqdor: it.miqdor,
+                narx: it.narx,
+                yetkazibBerishNarxi: it.summaQQSsiz,
+                qqsSumma: it.qqsSumma,
+                yetkazibBerishNarxiQQSBilan: it.jamiSumma,
+                turi: "kirim",
+                kirimId: kRow.id
+              });
+            }
+          }
+
+          if (omborRowsToInsert.length) {
+            try {
+              const insertedOmbor = await insertRowsChunked("ombor", omborRowsToInsert.map((r) => toDbRow(OMBOR_DB_MAP, r)));
+              if (insertedOmbor && insertedOmbor.length) {
+                const mappedOmbor = insertedOmbor.map((r) => fromDbRow(OMBOR_DB_MAP, r));
+                STORE.ombor.push(...mappedOmbor);
+                result.omborAdded = mappedOmbor.length;
+              }
+            } catch (oErr) {
+              result.errors.push("Ombor yozuvlarini qo'shishda xatolik: " + oErr.message);
+            }
+          }
+        }
+      }
+    }
+
+    // 2) Chiqim fakturalarini bazaga yozish
+    if (chiqimCandidates.length) {
+      let insertedChiqim = [];
+      try {
+        insertedChiqim = await insertRowsChunked("chiqim", chiqimCandidates.map((r) => toDbRow(INVOICE_DB_MAP, r)));
+      } catch (err) {
+        result.errors.push("Chiqim fakturalarini bazaga yozishda xatolik: " + err.message);
+      }
+
+      if (insertedChiqim && insertedChiqim.length) {
+        const mappedInserted = insertedChiqim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
+        STORE.chiqim.push(...mappedInserted);
+        result.addedChiqim = mappedInserted.length;
+      }
+    }
+
+    onProgress("To'lov holatlari va hisobotlar qayta hisoblanmoqda...", 95);
+
+    await recomputeAllPaymentStatus();
+    updateNavBadges();
+
+    if (CURRENT_PAGE === "kirim" || CURRENT_PAGE === "chiqim") {
+      renderInvoicePage(CURRENT_PAGE);
+    } else if (CURRENT_PAGE === "dashboard") {
+      renderDashboard();
+    }
+
+    onProgress("Didox sinxronlash muvaffaqiyatli yakunlandi!", 100);
+    return result;
+  } catch (err) {
+    onProgress("Xatolik: " + err.message, 100);
+    result.errors.push(err.message);
+    return result;
+  }
+}
+
+/**
+ * Didox / E-Faktura sinxronlash dialog oynasini ochadi.
+ */
+function openDidoxSyncModal(defaultType = "kirim") {
+  const curPeriod = (STORE.settings && STORE.settings.period) || "";
+  let defaultFrom = "";
+  let defaultTo = todayISO();
+
+  if (STORE.settings && STORE.settings.filterFrom) {
+    defaultFrom = STORE.settings.filterFrom;
+  } else {
+    // Joriy oyning 1-kunini standart qilamiz
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    defaultFrom = `${y}-${m}-01`;
+  }
+  if (STORE.settings && STORE.settings.filterTo) {
+    defaultTo = STORE.settings.filterTo;
+  }
+
+  const s = STORE.settings || {};
+
+  openModal(`
+    <div class="didox-sync-modal">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="width:36px;height:36px;border-radius:8px;background:rgba(47,111,94,0.12);display:flex;align-items:center;justify-content:center;color:var(--accent);">
+          <svg class="ic" viewBox="0 0 24 24" style="width:20px;height:20px;"><use href="#i-cloud-download"/></svg>
+        </div>
+        <div>
+          <h3 style="margin:0;">Didox.uz / E-Faktura bilan sinxronlash</h3>
+          <div class="faint" style="font-size:12px;">Elektron hisobfakturalarni to'g'ridan-to'g'ri bazaga yuklab olish</div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:10px 14px;margin-bottom:12px;background:var(--bg-hover);">
+        <div style="display:flex;justify-content:space-between;font-size:12px;">
+          <span>Firma: <b>${escapeHtml(s.companyName || "Nomsiz")}</b></span>
+          <span>INN: <b>${escapeHtml(s.inn || "Kiritilmagan")}</b></span>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="gap:10px;margin-bottom:10px;">
+        <div class="field">
+          <label>Hujjat yo'nalishi</label>
+          <select id="didoxDirection">
+            <option value="kirim" ${defaultType === "kirim" ? "selected" : ""}>Kiruvchi fakturalar (Kirim)</option>
+            <option value="chiqim" ${defaultType === "chiqim" ? "selected" : ""}>Chiquvchi fakturalar (Chiqim)</option>
+            <option value="all" ${defaultType === "all" ? "selected" : ""}>Barcha fakturalar (Kirim + Chiqim)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Hujjat holati (status)</label>
+          <select id="didoxStatus">
+            <option value="30">Faqat tasdiqlanganlar (Подписан / 30)</option>
+            <option value="">Barchasi (tasdiqlangan, bekor, yangi)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-2" style="gap:10px;margin-bottom:10px;">
+        <div class="field">
+          <label>Boshlanish sanasi</label>
+          <input type="date" id="didoxDateFrom" value="${defaultFrom}">
+        </div>
+        <div class="field">
+          <label>Tugash sanasi</label>
+          <input type="date" id="didoxDateTo" value="${defaultTo}">
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <label style="margin:0;">Didox API Token</label>
+          <button class="btn btn-sm" id="btnDidoxEimzoAuth" style="padding:2px 8px;font-size:11px;" title="CAPIWS orqali E-IMZO bilan avtorizatsiya qilish">
+            E-IMZO orqali olish
+          </button>
+        </div>
+        <input type="password" id="didoxTokenInput" placeholder="Didox kabinetidagi API tokeni (Bearer ...)" value="${escapeHtml(s.didoxToken || "")}">
+        <div class="faint" style="font-size:11px;margin-top:3px;">
+          Didox.uz shaxsiy kabinetingizdagi Sozlamalar -&gt; API bo'limidan olingan token.
+        </div>
+      </div>
+
+      <div class="switch-row" style="margin-bottom:12px;">
+        <span class="switch"><input type="checkbox" id="didoxAutoOmborCheck" ${s.didoxAutoOmbor !== false ? "checked" : ""}><span class="track"></span></span>
+        <label for="didoxAutoOmborCheck" style="font-size:12px;">Kirim fakturalaridagi tovarlarni avtomatik Omborga tushirish</label>
+      </div>
+
+      <!-- JSON fayl tashlash bo'limi -->
+      <div style="margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:600;margin-bottom:4px;color:var(--text-dim);display:flex;justify-content:space-between;">
+          <span>Yoki Didox / E-Faktura JSON faylini tashlang:</span>
+          <span class="faint">.json</span>
+        </div>
+        <div class="dropzone" id="didoxJsonDz" style="padding:14px;font-size:12px;">
+          Didox yoki Soliq.uz'dan eksport qilingan .json faylni shu yerga tashlang yoki bosing
+        </div>
+        <input type="file" id="didoxJsonFileInput" accept=".json" style="display:none">
+      </div>
+
+      <!-- Progress va Status bo'limi -->
+      <div id="didoxProgressArea" style="display:none;">
+        <div class="didox-progress-wrap">
+          <div class="didox-progress-bar" id="didoxProgressBar"></div>
+        </div>
+        <div class="didox-stat-grid" id="didoxStatGrid" style="display:none;">
+          <div class="didox-stat-card"><div class="val" id="dStatTotal">0</div><div class="lbl">Topildi</div></div>
+          <div class="didox-stat-card"><div class="val" id="dStatKirim" style="color:var(--ok);">0</div><div class="lbl">Yangi kirim</div></div>
+          <div class="didox-stat-card"><div class="val" id="dStatChiqim" style="color:#2b6cb0;">0</div><div class="lbl">Yangi chiqim</div></div>
+          <div class="didox-stat-card"><div class="val" id="dStatSkip" style="color:var(--text-dim);">0</div><div class="lbl">Takroriy</div></div>
+          <div class="didox-stat-card"><div class="val" id="dStatOmbor" style="color:var(--accent);">0</div><div class="lbl">Ombor qatori</div></div>
+        </div>
+        <div class="didox-log-box" id="didoxLogBox"></div>
+      </div>
+
+      <div class="modal-actions" style="margin-top:14px;">
+        <button class="btn" id="didoxModalClose">Yopish</button>
+        <button class="btn btn-primary" id="btnStartDidoxSync">
+          <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px;"><use href="#i-refresh"/></svg>Sinxronlashni boshlash
+        </button>
+      </div>
+    </div>
+  `);
+
+  document.getElementById("didoxModalClose").addEventListener("click", closeModal);
+
+  const addLog = (msg) => {
+    const box = document.getElementById("didoxLogBox");
+    if (!box) return;
+    const time = new Date().toLocaleTimeString("uz-UZ", { hour12: false });
+    box.textContent += `[${time}] ${msg}\n`;
+    box.scrollTop = box.scrollHeight;
+  };
+
+  const setProgress = (percent) => {
+    const bar = document.getElementById("didoxProgressBar");
+    if (bar) bar.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+  };
+
+  // E-IMZO orqali avtorizatsiya tugmasi
+  const btnEimzo = document.getElementById("btnDidoxEimzoAuth");
+  if (btnEimzo) {
+    btnEimzo.addEventListener("click", async () => {
+      if (!eimzoAvailable()) {
+        toast("E-IMZO moduli (vendor/capiws.js) kompyuterda topilmadi. Tokenni qo'lda kiriting.", "warn");
+        return;
+      }
+      toast("E-IMZO orqali Didox avtorizatsiyasi boshlanmoqda...");
+      addLog("E-IMZO kutubxonasi tekshirilmoqda...");
+      // E-IMZO orqali token olish
+      try {
+        window.CAPIWS.apikey(EIMZO_DOMAIN_API_KEYS, (event, data) => {
+          if (data && data.success) {
+            window.CAPIWS.callFunction({ plugin: "certkey", name: "list_all_certificates" }, (e, d) => {
+              if (d && d.success && d.certificates && d.certificates.length) {
+                toast("E-IMZO kalitlari topildi. Didox shaxsiy kabinetidagi token orqali to'g'ridan-to'g'ri ulanish tavsiya etiladi.");
+              }
+            }, (e, err) => {
+              addLog("E-IMZO xatosi: " + err);
+            });
+          }
+        }, (e, err) => {
+          addLog("E-IMZO ulanish xatosi: " + err);
+        });
+      } catch (e) {
+        addLog("E-IMZO istisnosi: " + e.message);
+      }
+    });
+  }
+
+  // JSON fayl orqali yuklash (Dropzone)
+  const jsonDz = document.getElementById("didoxJsonDz");
+  const jsonInput = document.getElementById("didoxJsonFileInput");
+  if (jsonDz && jsonInput) {
+    jsonDz.addEventListener("click", () => jsonInput.click());
+    jsonDz.addEventListener("dragover", (e) => { e.preventDefault(); jsonDz.classList.add("drag"); });
+    jsonDz.addEventListener("dragleave", () => jsonDz.classList.remove("drag"));
+    jsonDz.addEventListener("drop", (e) => {
+      e.preventDefault();
+      jsonDz.classList.remove("drag");
+      if (e.dataTransfer.files[0]) handleDidoxJsonFile(e.dataTransfer.files[0]);
+    });
+    jsonInput.addEventListener("change", (e) => {
+      if (e.target.files[0]) handleDidoxJsonFile(e.target.files[0]);
+    });
+  }
+
+  const handleDidoxJsonFile = async (file) => {
+    try {
+      const text = await file.text();
+      const parsedJson = JSON.parse(text);
+      document.getElementById("didoxProgressArea").style.display = "";
+      addLog(`"${file.name}" fayli qabul qilindi.`);
+
+      const dir = document.getElementById("didoxDirection").value;
+      const autoOmbor = document.getElementById("didoxAutoOmborCheck").checked;
+
+      const res = await syncDidoxInvoices({
+        type: dir,
+        autoOmbor,
+        rawJsonData: parsedJson,
+        onProgress: (msg, pct) => {
+          addLog(msg);
+          setProgress(pct);
+        }
+      });
+
+      renderDidoxSyncSummary(res);
+    } catch (err) {
+      addLog("Faylni o'qishda xatolik: " + err.message);
+      toast("JSON faylni o'qishda xatolik: " + err.message, "err");
+    }
+  };
+
+  const renderDidoxSyncSummary = (res) => {
+    document.getElementById("didoxStatGrid").style.display = "grid";
+    document.getElementById("dStatTotal").textContent = res.totalFound;
+    document.getElementById("dStatKirim").textContent = res.addedKirim;
+    document.getElementById("dStatChiqim").textContent = res.addedChiqim;
+    document.getElementById("dStatSkip").textContent = res.skipped;
+    document.getElementById("dStatOmbor").textContent = res.omborAdded;
+
+    const btnStart = document.getElementById("btnStartDidoxSync");
+    if (btnStart) {
+      btnStart.disabled = false;
+      btnStart.innerHTML = "Tugallandi ✓";
+    }
+
+    if (res.addedKirim || res.addedChiqim) {
+      toast(`Didox: ${res.addedKirim + res.addedChiqim} ta faktura bazaga yuklandi!`);
+    } else if (res.totalFound > 0 && res.skipped === res.totalFound) {
+      toast(`Didox: barcha ${res.totalFound} ta faktura allaqachon bazada mavjud (takroriy).`);
+    } else {
+      toast("Didox sinxronlash yakunlandi");
+    }
+  };
+
+  // Sinxronlashni boshlash tugmasi
+  const btnStart = document.getElementById("btnStartDidoxSync");
+  if (btnStart) {
+    btnStart.addEventListener("click", async () => {
+      const token = (document.getElementById("didoxTokenInput")?.value || "").trim();
+      const dir = document.getElementById("didoxDirection").value;
+      const dateFrom = document.getElementById("didoxDateFrom").value;
+      const dateTo = document.getElementById("didoxDateTo").value;
+      const status = document.getElementById("didoxStatus").value;
+      const autoOmbor = document.getElementById("didoxAutoOmborCheck").checked;
+
+      if (!token) {
+        toast("Iltimos, Didox API tokenini kiriting yoki JSON faylni yuklang", "warn");
+        document.getElementById("didoxTokenInput").focus();
+        return;
+      }
+
+      // Agar sozlamalardagi tokendan farq qilsa, saqlab qo'yamiz
+      if (token !== (STORE.settings.didoxToken || "")) {
+        STORE.settings.didoxToken = token;
+        saveSettingsToDb({ didoxToken: token });
+      }
+
+      document.getElementById("didoxProgressArea").style.display = "";
+      document.getElementById("didoxStatGrid").style.display = "none";
+      document.getElementById("didoxLogBox").textContent = "";
+      btnStart.disabled = true;
+      btnStart.innerHTML = `<span class="icon-btn-sync spin" style="display:inline-block;margin-right:6px;">↻</span>Sinxronlanmoqda…`;
+
+      addLog(`Sinxronlash boshlandi: yo'nalish=${dir}, davr=${dateFrom || "boshi"} dan ${dateTo || "bugun"} gacha`);
+
+      const res = await syncDidoxInvoices({
+        type: dir,
+        dateFrom,
+        dateTo,
+        status,
+        token,
+        autoOmbor,
+        onProgress: (msg, pct) => {
+          addLog(msg);
+          setProgress(pct);
+        }
+      });
+
+      renderDidoxSyncSummary(res);
+    });
+  }
+}
+
+/* ------------------------------- 1C:Enterprise / 1UZ & Klient-Bank Integratsiyasi ------------------------------- */
+
+function format1CDate(isoDate) {
+  if (!isoDate) return "";
+  const parts = String(isoDate).trim().split("T")[0].split("-");
+  if (parts.length === 3) {
+    return `${parts[2].padStart(2, "0")}.${parts[1].padStart(2, "0")}.${parts[0]}`;
+  }
+  return String(isoDate);
+}
+
+function parse1CDate(str) {
+  if (!str) return "";
+  const s = String(str).trim().split(" ")[0];
+  if (/^\d{2}\.\d{2}\.\d{4}$/.test(s)) {
+    const [d, m, y] = s.split(".");
+    return `${y}-${m}-${d}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  return normalizeDate(s);
+}
+
+function generate1CClientBankExport(bankRows, opts = {}) {
+  const rows = bankRows || STORE.bank || [];
+  const s = STORE.settings || {};
+  const ourInn = opts.ourInn || s.inn || "000000000";
+  const ourCompany = opts.ourCompany || s.companyName || "FORGET";
+  const ourAccount = opts.ourAccount || s.account || "20208000000000000001";
+  const ourBank = opts.ourBank || "ATB HAMKORBANK";
+  const ourBik = opts.ourBik || "00083";
+
+  let minDate = opts.dateFrom;
+  let maxDate = opts.dateTo;
+  if (!minDate || !maxDate) {
+    const dates = rows.map((r) => r.sana).filter(Boolean).sort();
+    if (!minDate) minDate = dates[0] || todayISO();
+    if (!maxDate) maxDate = dates[dates.length - 1] || todayISO();
+  }
+
+  const opening = toNum(opts.openingBalance != null ? opts.openingBalance : s.bankOpeningBalance);
+  let totalKirim = 0;
+  let totalChiqim = 0;
+
+  const docLines = [];
+  rows.forEach((r, idx) => {
+    const kirim = toNum(r.kirim);
+    const chiqim = toNum(r.chiqim);
+    if (kirim <= 0 && chiqim <= 0) return;
+
+    totalKirim += kirim;
+    totalChiqim += chiqim;
+
+    const isOut = chiqim > 0;
+    const summa = isOut ? chiqim : kirim;
+    const docNo = r.hujjatRaqami || String(idx + 1);
+    const docDate = format1CDate(r.sana || minDate);
+    const partnerInn = r.kontragentInn || "";
+    const partnerName = r.kontragent || "Noma'lum kontragent";
+    const tavsif = r.tavsif || (isOut ? "To'lov" : "Tushum");
+
+    docLines.push("СекцияДокумент=Платежное поручение");
+    docLines.push(`Номер=${docNo}`);
+    docLines.push(`Дата=${docDate}`);
+    docLines.push(`Сумма=${summa.toFixed(2)}`);
+
+    if (isOut) {
+      docLines.push(`Плательщик=${ourCompany}`);
+      docLines.push(`ПлательщикИНН=${ourInn}`);
+      docLines.push(`Плательщик1=${ourCompany}`);
+      docLines.push(`ПлательщикРасчСчет=${ourAccount}`);
+      docLines.push(`ПлательщикБанк1=${ourBank}`);
+      docLines.push(`ПлательщикБИК=${ourBik}`);
+      docLines.push(`ПлательщикКорсчет=10301000000000000000`);
+      docLines.push(`Получатель=${partnerName}`);
+      docLines.push(`ПолучательИНН=${partnerInn}`);
+      docLines.push(`Получатель1=${partnerName}`);
+      docLines.push(`ПолучательРасчСчет=20208000000000000002`);
+      docLines.push(`ПолучательБанк1=BANK`);
+      docLines.push(`ПолучательБИК=00000`);
+      docLines.push(`ПолучательКорсчет=10301000000000000000`);
+    } else {
+      docLines.push(`Плательщик=${partnerName}`);
+      docLines.push(`ПлательщикИНН=${partnerInn}`);
+      docLines.push(`Плательщик1=${partnerName}`);
+      docLines.push(`ПлательщикРасчСчет=20208000000000000002`);
+      docLines.push(`ПлательщикБанк1=BANK`);
+      docLines.push(`ПлательщикБИК=00000`);
+      docLines.push(`ПлательщикКорсчет=10301000000000000000`);
+      docLines.push(`Получатель=${ourCompany}`);
+      docLines.push(`ПолучательИНН=${ourInn}`);
+      docLines.push(`Получатель1=${ourCompany}`);
+      docLines.push(`ПолучательРасчСчет=${ourAccount}`);
+      docLines.push(`ПолучательБанк1=${ourBank}`);
+      docLines.push(`ПолучательБИК=${ourBik}`);
+      docLines.push(`ПолучательКорсчет=10301000000000000000`);
+    }
+
+    docLines.push(`ВидОплаты=01`);
+    docLines.push(`НазначениеПлатежа=${tavsif.replace(/\r?\n/g, " ")}`);
+    docLines.push("КонецДокумента");
+  });
+
+  const closing = opening + totalKirim - totalChiqim;
+  const now = new Date();
+  const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()].map((v) => String(v).padStart(2, "0")).join(":");
+
+  const header = [
+    "1CClientBankExchange",
+    "ВерсияФормата=1.03",
+    "Кодировка=Windows",
+    `Отправитель=${ourCompany}`,
+    "Получатель=1С:Предприятие",
+    `ДатаСоздания=${format1CDate(todayISO())}`,
+    `ВремяСоздания=${timeStr}`,
+    `ДатаНачала=${format1CDate(minDate)}`,
+    `ДатаКонца=${format1CDate(maxDate)}`,
+    `РасчСчет=${ourAccount}`,
+    "СекцияРасчСчет",
+    `ДатаНачала=${format1CDate(minDate)}`,
+    `ДатаКонца=${format1CDate(maxDate)}`,
+    `НачальныйОстаток=${opening.toFixed(2)}`,
+    `ВсегоПоступило=${totalKirim.toFixed(2)}`,
+    `ВсегоСписано=${totalChiqim.toFixed(2)}`,
+    `КонечныйОстаток=${closing.toFixed(2)}`,
+    "КонецРасчСчет"
+  ];
+
+  return [...header, ...docLines, "КонецФайла"].join("\r\n");
+}
+
+function parse1CClientBankExchange(content) {
+  if (!content || typeof content !== "string") return { rows: [], opening: null };
+  const lines = content.split(/\r?\n/);
+  const rows = [];
+  let opening = null;
+  let closing = null;
+  let totalIn = 0;
+  let totalOut = 0;
+  let dateStart = "";
+  let dateEnd = "";
+  let ourAccount = "";
+
+  const ourInn = (STORE.settings?.inn || "").trim();
+  const ourCompany = (STORE.settings?.companyName || "").toLowerCase().trim();
+
+  let inAccountSection = false;
+  let inDocSection = false;
+  let docMap = {};
+
+  for (let i = 0; i < lines.length; i++) {
+    const rawLine = lines[i].trim();
+    if (!rawLine) continue;
+
+    if (rawLine === "СекцияРасчСчет") {
+      inAccountSection = true;
+      continue;
+    }
+    if (rawLine === "КонецРасчСчет") {
+      inAccountSection = false;
+      continue;
+    }
+
+    if (inAccountSection) {
+      const eqIdx = rawLine.indexOf("=");
+      if (eqIdx > 0) {
+        const key = rawLine.slice(0, eqIdx).trim();
+        const val = rawLine.slice(eqIdx + 1).trim();
+        if (key === "НачальныйОстаток") opening = toNum(val);
+        else if (key === "КонечныйОстаток") closing = toNum(val);
+        else if (key === "ВсегоПоступило") totalIn = toNum(val);
+        else if (key === "ВсегоСписано") totalOut = toNum(val);
+        else if (key === "ДатаНачала") dateStart = parse1CDate(val);
+        else if (key === "ДатаКонца") dateEnd = parse1CDate(val);
+        else if (key === "РасчСчет") ourAccount = val;
+      }
+      continue;
+    }
+
+    if (rawLine.startsWith("СекцияДокумент")) {
+      inDocSection = true;
+      docMap = {};
+      continue;
+    }
+
+    if (rawLine === "КонецДокумента") {
+      inDocSection = false;
+      const docNo = docMap["Номер"] || "";
+      const docDate = parse1CDate(docMap["Дата"] || "");
+      const summa = toNum(docMap["Сумма"]);
+      if (!docDate || summa <= 0) continue;
+
+      const payerInn = (docMap["ПлательщикИНН"] || "").trim();
+      const payerName = (docMap["Плательщик"] || docMap["Плательщик1"] || "").trim();
+      const payerAccount = (docMap["ПлательщикРасчСчет"] || "").trim();
+
+      const receiverInn = (docMap["ПолучательИНН"] || "").trim();
+      const receiverName = (docMap["Получатель"] || docMap["Получатель1"] || "").trim();
+      const receiverAccount = (docMap["ПолучательРасчСчет"] || "").trim();
+
+      const tavsif = (docMap["НазначениеПлатежа"] || "").trim();
+
+      let isOut = false;
+      if (ourInn) {
+        if (payerInn === ourInn) isOut = true;
+        else if (receiverInn === ourInn) isOut = false;
+        else if (ourCompany && payerName.toLowerCase().includes(ourCompany)) isOut = true;
+        else if (ourCompany && receiverName.toLowerCase().includes(ourCompany)) isOut = false;
+        else if (ourAccount && payerAccount === ourAccount) isOut = true;
+        else if (ourAccount && receiverAccount === ourAccount) isOut = false;
+        else isOut = true;
+      } else if (ourCompany) {
+        if (payerName.toLowerCase().includes(ourCompany)) isOut = true;
+        else if (receiverName.toLowerCase().includes(ourCompany)) isOut = false;
+        else isOut = true;
+      } else {
+        isOut = true;
+      }
+
+      const kontragent = isOut ? receiverName : payerName;
+      const kontragentInn = isOut ? receiverInn : payerInn;
+      const kirim = isOut ? 0 : summa;
+      const chiqim = isOut ? summa : 0;
+      const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragent);
+
+      rows.push({
+        sana: docDate,
+        hujjatRaqami: docNo,
+        kontragent: kontragent.replace(/^["']+|["']+$/g, "").replace(/""/g, '"').trim(),
+        kontragentInn: kontragentInn.replace(/\D/g, ""),
+        tavsif,
+        kirim,
+        chiqim,
+        xizmat: isService
+      });
+      continue;
+    }
+
+    if (inDocSection) {
+      const eqIdx = rawLine.indexOf("=");
+      if (eqIdx > 0) {
+        const key = rawLine.slice(0, eqIdx).trim();
+        const val = rawLine.slice(eqIdx + 1).trim();
+        docMap[key] = val;
+      }
+    }
+  }
+
+  return {
+    rows,
+    opening,
+    closing,
+    totalIn,
+    totalOut,
+    dateStart,
+    dateEnd,
+    ourAccount
+  };
+}
+
+function escapeXml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function generateCommerceMLExport(opts = {}) {
+  const s = STORE.settings || {};
+  const ourInn = opts.ourInn || s.inn || "000000000";
+  const ourCompany = opts.ourCompany || s.companyName || "FORGET MCHJ";
+  const now = new Date();
+  const dateStr = now.toISOString().split("T")[0];
+  const timeStr = [now.getHours(), now.getMinutes(), now.getSeconds()].map((v) => String(v).padStart(2, "0")).join(":");
+
+  const xml = [];
+  xml.push('<?xml version="1.0" encoding="UTF-8"?>');
+  xml.push(`<КоммерческаяИнформация ВерсияСхемы="2.09" ДатаФормирования="${dateStr}T${timeStr}">`);
+
+  // 1. Katalog / Tovarlar
+  xml.push('  <Каталог СодержитТовары="true">');
+  xml.push('    <Ид>catalog-forget</Ид>');
+  xml.push('    <Наименование>FORGET Tovarlar va Mahsulotlar</Наименование>');
+  xml.push('    <Товары>');
+
+  const catalogItems = [];
+  const seenCatalog = new Set();
+
+  (STORE.ombor || []).forEach((o) => {
+    const nomi = (o.nomi || "").trim();
+    if (!nomi || seenCatalog.has(nomi.toLowerCase())) return;
+    seenCatalog.add(nomi.toLowerCase());
+    catalogItems.push({
+      id: o.id || `tovar-${catalogItems.length + 1}`,
+      nomi,
+      birlik: o.birlik || "dona",
+      artikul: o.artikul || "",
+      narx: toNum(o.narx),
+      qqs: 12
+    });
+  });
+
+  (STORE.ishlabChiqarish || []).forEach((ic) => {
+    const nomi = (ic.mahsulotNomi || "").trim();
+    if (!nomi || seenCatalog.has(nomi.toLowerCase())) return;
+    seenCatalog.add(nomi.toLowerCase());
+    catalogItems.push({
+      id: ic.id || `prod-${catalogItems.length + 1}`,
+      nomi,
+      birlik: ic.birlik || "dona",
+      artikul: ic.artikul || "",
+      narx: toNum(ic.birlikTannarxi),
+      qqs: 12
+    });
+  });
+
+  catalogItems.forEach((item) => {
+    xml.push('      <Товар>');
+    xml.push(`        <Ид>${escapeXml(item.id)}</Ид>`);
+    xml.push(`        <Наименование>${escapeXml(item.nomi)}</Наименование>`);
+    xml.push(`        <БазоваяЕдиница Код="796" НаименованиеПолное="${escapeXml(item.birlik)}">${escapeXml(item.birlik)}</БазоваяЕдиница>`);
+    if (item.artikul) xml.push(`        <Артикул>${escapeXml(item.artikul)}</Артикул>`);
+    xml.push('        <СтавкиНалогов>');
+    xml.push('          <СтавкаНалога>');
+    xml.push('            <Наименование>НДС</Наименование>');
+    xml.push(`            <Ставка>${item.qqs}</Ставка>`);
+    xml.push('          </СтавкаНалога>');
+    xml.push('        </СтавкиНалогов>');
+    xml.push('      </Товар>');
+  });
+  xml.push('    </Товары>');
+  xml.push('  </Каталог>');
+
+  // 2. Kontragentlar
+  xml.push('  <Контрагенты>');
+  const kontragentlar = STORE.kontragentlar || [];
+  kontragentlar.forEach((k) => {
+    xml.push('    <Контрагент>');
+    xml.push(`      <Ид>${escapeXml(k.id || k.inn || k.nomi)}</Ид>`);
+    xml.push(`      <Наименование>${escapeXml(k.nomi)}</Наименование>`);
+    xml.push(`      <ИНН>${escapeXml(k.inn || "")}</ИНН>`);
+    xml.push(`      <ЮридическийАдрес>${escapeXml(k.manzil || "")}</ЮридическийАдрес>`);
+    if (k.telefon) {
+      xml.push('      <Контакты>');
+      xml.push('        <Контакт>');
+      xml.push('          <Тип>Телефон</Тип>');
+      xml.push(`          <Значение>${escapeXml(k.telefon)}</Значение>`);
+      xml.push('        </Контакт>');
+      xml.push('      </Контакты>');
+    }
+    xml.push('    </Контрагент>');
+  });
+  xml.push('  </Контрагенты>');
+
+  // 3. Hujjatlar
+  xml.push('  <Документы>');
+
+  (STORE.kirim || []).forEach((k) => {
+    const total = toNum(k.jamiSumma);
+    if (total <= 0) return;
+    xml.push('    <Документ>');
+    xml.push(`      <Ид>${escapeXml(k.id || `kirim-${k.hujjatRaqami}`)}</Ид>`);
+    xml.push(`      <Номер>${escapeXml(k.hujjatRaqami || "")}</Номер>`);
+    xml.push(`      <Дата>${escapeXml(k.sana || dateStr)}</Дата>`);
+    xml.push('      <ХозОперация>ПоступлениеТоваров</ХозОперация>');
+    xml.push('      <Роль>Покупатель</Роль>');
+    xml.push('      <Валюта>UZS</Валюта>');
+    xml.push(`      <Сумма>${total.toFixed(2)}</Сумма>`);
+    xml.push('      <Контрагенты>');
+    xml.push('        <КонтактноеЛицо>');
+    xml.push(`          <Наименование>${escapeXml(k.kontragentNomi || "")}</Наименование>`);
+    xml.push(`          <ИНН>${escapeXml(k.kontragentInn || "")}</ИНН>`);
+    xml.push('          <Роль>Поставщик</Роль>');
+    xml.push('        </КонтактноеЛицо>');
+    xml.push('      </Контрагенты>');
+
+    const omborItems = (STORE.ombor || []).filter((o) => o.kirim_id === k.id);
+    if (omborItems.length) {
+      xml.push('      <Товары>');
+      omborItems.forEach((item) => {
+        xml.push('        <Товар>');
+        xml.push(`          <Ид>${escapeXml(item.id || item.nomi)}</Ид>`);
+        xml.push(`          <Наименование>${escapeXml(item.nomi)}</Наименование>`);
+        xml.push(`          <БазоваяЕдиница>${escapeXml(item.birlik || "dona")}</БазоваяЕдиница>`);
+        xml.push(`          <Количество>${toNum(item.miqdor)}</Количество>`);
+        xml.push(`          <ЦенаЗаЕдиницу>${toNum(item.narx).toFixed(2)}</ЦенаЗаЕдиницу>`);
+        xml.push(`          <Сумма>${toNum(item.summa).toFixed(2)}</Сумма>`);
+        xml.push('        </Товар>');
+      });
+      xml.push('      </Товары>');
+    }
+    xml.push('    </Документ>');
+  });
+
+  (STORE.chiqim || []).forEach((c) => {
+    const total = toNum(c.jamiSumma);
+    if (total <= 0) return;
+    xml.push('    <Документ>');
+    xml.push(`      <Ид>${escapeXml(c.id || `chiqim-${c.hujjatRaqami}`)}</Ид>`);
+    xml.push(`      <Номер>${escapeXml(c.hujjatRaqami || "")}</Номер>`);
+    xml.push(`      <Дата>${escapeXml(c.sana || dateStr)}</Дата>`);
+    xml.push('      <ХозОперация>РеализацияТоваров</ХозОперация>');
+    xml.push('      <Роль>Продавец</Роль>');
+    xml.push('      <Валюта>UZS</Валюта>');
+    xml.push(`      <Сумма>${total.toFixed(2)}</Сумма>`);
+    xml.push('      <Контрагенты>');
+    xml.push('        <КонтактноеЛицо>');
+    xml.push(`          <Наименование>${escapeXml(c.kontragentNomi || "")}</Наименование>`);
+    xml.push(`          <ИНН>${escapeXml(c.kontragentInn || "")}</ИНН>`);
+    xml.push('          <Роль>Покупатель</Роль>');
+    xml.push('        </КонтактноеЛицо>');
+    xml.push('      </Контрагенты>');
+    xml.push('    </Документ>');
+  });
+
+  (STORE.kassa || []).forEach((ks) => {
+    const summa = toNum(ks.summa);
+    if (summa <= 0) return;
+    const isKirim = ks.turi === "kirim";
+    xml.push('    <Документ>');
+    xml.push(`      <Ид>${escapeXml(ks.id || `kassa-${ks.hujjatRaqami || ""}`)}</Ид>`);
+    xml.push(`      <Номер>${escapeXml(ks.hujjatRaqami || "")}</Номер>`);
+    xml.push(`      <Дата>${escapeXml(ks.sana || dateStr)}</Дата>`);
+    xml.push(`      <ХозОперация>${isKirim ? "ПриходныйКассовыйОрдер" : "РасходныйКассовыйОрдер"}</ХозОперация>`);
+    xml.push(`      <Сумма>${summa.toFixed(2)}</Сумма>`);
+    xml.push(`      <Комментарий>${escapeXml(ks.tavsif || "")}</Комментарий>`);
+    if (ks.kontragent) {
+      xml.push('      <Контрагенты>');
+      xml.push('        <КонтактноеЛицо>');
+      xml.push(`          <Наименование>${escapeXml(ks.kontragent)}</Наименование>`);
+      xml.push(`          <ИНН>${escapeXml(ks.kontragentInn || "")}</ИНН>`);
+      xml.push('        </КонтактноеЛицо>');
+      xml.push('      </Контрагенты>');
+    }
+    xml.push('    </Документ>');
+  });
+
+  xml.push('  </Документы>');
+  xml.push('</КоммерческаяИнформация>');
+
+  return xml.join("\r\n");
+}
+
+function parseCommerceML(xmlString) {
+  if (!xmlString || typeof xmlString !== "string") {
+    return { kontragentlar: [], tovarlar: [], hujjatlar: [] };
+  }
+
+  function getTagVal(xmlChunk, tagName) {
+    const re = new RegExp("<" + tagName + "(?:\\s+[^>]*)?>([\\s\\S]*?)</" + tagName + ">", "i");
+    const m = xmlChunk.match(re);
+    return m ? m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").trim() : "";
+  }
+
+  function getTagBlocks(xmlChunk, tagName) {
+    const re = new RegExp("<" + tagName + "(?:\\s+[^>]*)?>([\\s\\S]*?)</" + tagName + ">", "gi");
+    const matches = [];
+    let m;
+    while ((m = re.exec(xmlChunk)) !== null) {
+      matches.push(m[1]);
+    }
+    return matches;
+  }
+
+  const kontragentlar = [];
+  const tovarlar = [];
+  const hujjatlar = [];
+
+  const seenK = new Set();
+  const kSection = getTagVal(xmlString, "Контрагенты");
+  const kBlocks = getTagBlocks(kSection || xmlString, "Контрагент");
+  kBlocks.forEach((kb) => {
+    const inn = getTagVal(kb, "ИНН").replace(/\D/g, "");
+    const nomi = getTagVal(kb, "Наименование");
+    const manzil = getTagVal(kb, "ЮридическийАдрес");
+    const tel = getTagVal(kb, "Значение") || getTagVal(kb, "Телефон");
+    const key = (inn || nomi).toLowerCase();
+    if ((nomi || inn) && !seenK.has(key)) {
+      seenK.add(key);
+      kontragentlar.push({ inn, nomi, manzil, telefon: tel });
+    }
+  });
+
+  const seenT = new Set();
+  const catalogSection = getTagVal(xmlString, "Каталог");
+  const tBlocks = getTagBlocks(catalogSection || xmlString, "Товар");
+  tBlocks.forEach((tb) => {
+    const id = getTagVal(tb, "Ид");
+    const nomi = getTagVal(tb, "Наименование");
+    const birlik = getTagVal(tb, "БазоваяЕдиница") || "dona";
+    const artikul = getTagVal(tb, "Артикул");
+    const qqs = toNum(getTagVal(tb, "Ставка")) || 12;
+    const key = (nomi || id).toLowerCase();
+    if (nomi && !seenT.has(key)) {
+      seenT.add(key);
+      tovarlar.push({ id, nomi, birlik, artikul, qqs });
+    }
+  });
+
+  const dBlocks = getTagBlocks(xmlString, "Документ");
+  dBlocks.forEach((db) => {
+    const docNo = getTagVal(db, "Номер");
+    const docDate = normalizeDate(getTagVal(db, "Дата"));
+    const op = getTagVal(db, "ХозОперация");
+    const role = getTagVal(db, "Роль");
+    const jamiSumma = toNum(getTagVal(db, "Сумма"));
+
+    let turi = "kirim";
+    if (/реализация|продаж|расходный/i.test(op) || /продавец/i.test(role)) {
+      turi = /кассов/i.test(op) ? "kassa_chiqim" : "chiqim";
+    } else if (/кассов|приходный/i.test(op)) {
+      turi = "kassa_kirim";
+    }
+
+    const kontrName = getTagVal(db, "Наименование");
+    const kontrInn = getTagVal(db, "ИНН").replace(/\D/g, "");
+    const tavsif = getTagVal(db, "Комментарий") || op;
+
+    const itemBlocks = getTagBlocks(db, "Товар");
+    const items = itemBlocks.map((ib) => ({
+      nomi: getTagVal(ib, "Наименование"),
+      miqdor: toNum(getTagVal(ib, "Количество")),
+      narx: toNum(getTagVal(ib, "ЦенаЗаЕдиницу")),
+      summa: toNum(getTagVal(ib, "Сумма")),
+      birlik: getTagVal(ib, "БазоваяЕдиница") || "dona"
+    })).filter((it) => it.nomi);
+
+    hujjatlar.push({
+      turi,
+      hujjatRaqami: docNo,
+      sana: docDate,
+      kontragentNomi: kontrName,
+      kontragentInn: kontrInn,
+      jamiSumma,
+      tavsif,
+      items
+    });
+  });
+
+  return { kontragentlar, tovarlar, hujjatlar };
+}
+
+function generate1CEnterpriseJson(opts = {}) {
+  const s = STORE.settings || {};
+  return {
+    format: "FORGET_1C_EnterpriseData",
+    version: "1.0",
+    exportDate: new Date().toISOString(),
+    company: {
+      inn: opts.ourInn || s.inn || "",
+      name: opts.ourCompany || s.companyName || "",
+      period: s.period || "",
+      openingBalance: toNum(s.bankOpeningBalance)
+    },
+    counterparties: (STORE.kontragentlar || []).map((k) => ({
+      inn: k.inn || "",
+      name: k.nomi || "",
+      category: k.kategoriya || "",
+      phone: k.telefon || "",
+      address: k.manzil || ""
+    })),
+    nomenclature: (STORE.ombor || []).map((o) => ({
+      name: o.nomi || "",
+      unit: o.birlik || "dona",
+      price: toNum(o.narx),
+      quantity: toNum(o.miqdor)
+    })),
+    invoices: [
+      ...(STORE.kirim || []).map((k) => ({
+        type: "incoming",
+        number: k.hujjatRaqami || "",
+        date: k.sana || "",
+        counterpartyInn: k.kontragentInn || "",
+        counterpartyName: k.kontragentNomi || "",
+        amountWithoutVat: toNum(k.summaQQSsiz),
+        vatRate: toNum(k.qqsStavka),
+        vatAmount: toNum(k.qqsSumma),
+        totalAmount: toNum(k.jamiSumma),
+        status: k.status || "Подписан"
+      })),
+      ...(STORE.chiqim || []).map((c) => ({
+        type: "outgoing",
+        number: c.hujjatRaqami || "",
+        date: c.sana || "",
+        counterpartyInn: c.kontragentInn || "",
+        counterpartyName: c.kontragentNomi || "",
+        amountWithoutVat: toNum(c.summaQQSsiz),
+        vatRate: toNum(c.qqsStavka),
+        vatAmount: toNum(c.qqsSumma),
+        totalAmount: toNum(c.jamiSumma),
+        status: c.status || "Подписан"
+      }))
+    ],
+    bankPayments: (STORE.bank || []).map((b) => ({
+      date: b.sana || "",
+      number: b.hujjatRaqami || "",
+      counterparty: b.kontragent || "",
+      counterpartyInn: b.kontragentInn || "",
+      incoming: toNum(b.kirim),
+      outgoing: toNum(b.chiqim),
+      description: b.tavsif || "",
+      isService: !!b.xizmat
+    })),
+    cashOrders: (STORE.kassa || []).map((ks) => ({
+      date: ks.sana || "",
+      number: ks.hujjatRaqami || "",
+      type: ks.turi || "kirim",
+      counterparty: ks.kontragent || "",
+      counterpartyInn: ks.kontragentInn || "",
+      amount: toNum(ks.summa),
+      description: ks.tavsif || ""
+    }))
+  };
+}
+
+function parse1CEnterpriseJson(data) {
+  if (!data || typeof data !== "object") return null;
+  const counterparties = (data.counterparties || []).map((k) => ({
+    inn: String(k.inn || "").trim(),
+    nomi: String(k.name || "").trim(),
+    kategoriya: k.category || "Boshqa",
+    telefon: k.phone || "",
+    manzil: k.address || ""
+  }));
+
+  const invoices = (data.invoices || []).map((inv) => ({
+    turi: inv.type === "outgoing" ? "chiqim" : "kirim",
+    hujjatRaqami: String(inv.number || "").trim(),
+    sana: normalizeDate(inv.date),
+    kontragentInn: String(inv.counterpartyInn || "").trim(),
+    kontragentNomi: String(inv.counterpartyName || "").trim(),
+    summaQQSsiz: toNum(inv.amountWithoutVat),
+    qqsStavka: toNum(inv.vatRate) || 12,
+    qqsSumma: toNum(inv.vatAmount),
+    jamiSumma: toNum(inv.totalAmount),
+    status: inv.status || "Подписан"
+  }));
+
+  const bankPayments = (data.bankPayments || []).map((b) => ({
+    sana: normalizeDate(b.date),
+    hujjatRaqami: String(b.number || "").trim(),
+    kontragent: String(b.counterparty || "").trim(),
+    kontragentInn: String(b.counterpartyInn || "").trim(),
+    kirim: toNum(b.incoming),
+    chiqim: toNum(b.outgoing),
+    tavsif: String(b.description || "").trim(),
+    xizmat: !!b.isService
+  }));
+
+  const cashOrders = (data.cashOrders || []).map((ks) => ({
+    sana: normalizeDate(ks.date),
+    hujjatRaqami: String(ks.number || "").trim(),
+    turi: ks.type === "chiqim" ? "chiqim" : "kirim",
+    kontragent: String(ks.counterparty || "").trim(),
+    kontragentInn: String(ks.counterpartyInn || "").trim(),
+    summa: toNum(ks.amount),
+    tavsif: String(ks.description || "").trim()
+  }));
+
+  return { counterparties, invoices, bankPayments, cashOrders, company: data.company || {} };
+}
+
+/* ------------------------------- Avtomatik Backup (Excel & JSON) ------------------------------- */
+
+function exportFullBackupXlsx() {
+  if (typeof XLSX === "undefined") {
+    toast("Excel kutubxonasi mavjud emas", "err");
+    return;
+  }
+  const s = STORE.settings || {};
+  const wb = XLSX.utils.book_new();
+
+  // 1. Sozlamalar
+  const settingsData = [
+    ["Parametr", "Qiymat"],
+    ["Kompaniya nomi", s.companyName || ""],
+    ["INN", s.inn || ""],
+    ["Manzil", s.address || ""],
+    ["Hisobot davri", s.period || ""],
+    ["Rahbar", s.rahbar || ""],
+    ["Bank boshlang'ich qoldiq", toNum(s.bankOpeningBalance)],
+    ["QQS stavkasi (%)", toNum(s.qqsStavka)],
+    ["Foyda solig'i stavkasi (%)", toNum(s.foydaStavka)],
+    ["Davr xarajatlari", toNum(s.davrXarajati)],
+    ["Moliyaviy xarajatlar", toNum(s.moliyaviyXarajat)],
+    ["Tannarx usuli", s.tannarxUsuli || "fifo"],
+    ["Faoliyat yo'nalishi", s.yonalish || ""],
+    ["Zaxira sanasi", todayISO()]
+  ];
+  const wsSettings = XLSX.utils.aoa_to_sheet(settingsData);
+  XLSX.utils.book_append_sheet(wb, wsSettings, "Sozlamalar");
+
+  // 2. Kirim fakturalar
+  const kirimData = [
+    ["Sana", "Hujjat №", "Kontragent", "INN", "QQSsiz", "QQS stavka", "QQS summa", "Jami summa", "Status", "To'langan", "Qarz", "To'lov holati"]
+  ];
+  (STORE.kirim || []).forEach((r) => {
+    kirimData.push([
+      r.sana || "", r.hujjatRaqami || "", r.kontragentNomi || "", r.kontragentInn || "",
+      toNum(r.summaQQSsiz), toNum(r.qqsStavka), toNum(r.qqsSumma), toNum(r.jamiSumma),
+      r.status || "", toNum(r.tolandi), toNum(r.qarz), r.tolovHolati || ""
+    ]);
+  });
+  const wsKirim = XLSX.utils.aoa_to_sheet(kirimData);
+  XLSX.utils.book_append_sheet(wb, wsKirim, "Kirim");
+
+  // 3. Chiqim fakturalar
+  const chiqimData = [
+    ["Sana", "Hujjat №", "Xaridor", "INN", "QQSsiz", "QQS stavka", "QQS summa", "Jami summa", "Status", "To'langan", "Qarz", "To'lov holati"]
+  ];
+  (STORE.chiqim || []).forEach((r) => {
+    chiqimData.push([
+      r.sana || "", r.hujjatRaqami || "", r.kontragentNomi || "", r.kontragentInn || "",
+      toNum(r.summaQQSsiz), toNum(r.qqsStavka), toNum(r.qqsSumma), toNum(r.jamiSumma),
+      r.status || "", toNum(r.tolandi), toNum(r.qarz), r.tolovHolati || ""
+    ]);
+  });
+  const wsChiqim = XLSX.utils.aoa_to_sheet(chiqimData);
+  XLSX.utils.book_append_sheet(wb, wsChiqim, "Chiqim");
+
+  // 4. Bank
+  const bankData = [
+    ["Sana", "Hujjat №", "Kontragent", "INN", "Tavsif", "Kirim", "Chiqim", "Xizmat"]
+  ];
+  (STORE.bank || []).forEach((r) => {
+    bankData.push([
+      r.sana || "", r.hujjatRaqami || "", r.kontragent || "", r.kontragentInn || "",
+      r.tavsif || "", toNum(r.kirim), toNum(r.chiqim), r.xizmat ? "Ha" : "Yo'q"
+    ]);
+  });
+  const wsBank = XLSX.utils.aoa_to_sheet(bankData);
+  XLSX.utils.book_append_sheet(wb, wsBank, "Bank");
+
+  // 5. Kassa
+  const kassaData = [
+    ["Sana", "Hujjat №", "Turi", "Kontragent", "INN", "Tavsif", "Summa"]
+  ];
+  (STORE.kassa || []).forEach((r) => {
+    kassaData.push([
+      r.sana || "", r.hujjatRaqami || "", r.turi || "", r.kontragent || "",
+      r.kontragentInn || "", r.tavsif || "", toNum(r.summa)
+    ]);
+  });
+  const wsKassa = XLSX.utils.aoa_to_sheet(kassaData);
+  XLSX.utils.book_append_sheet(wb, wsKassa, "Kassa");
+
+  // 6. Ombor
+  const omborData = [
+    ["Sana", "Nomi", "Birlik", "Kirim miqdori", "Xarid narxi", "Qoldiq miqdori", "Summa", "Faktura ID"]
+  ];
+  (STORE.ombor || []).forEach((r) => {
+    omborData.push([
+      r.sana || "", r.nomi || "", r.birlik || "", toNum(r.miqdor),
+      toNum(r.narx), toNum(r.qoldiq != null ? r.qoldiq : r.miqdor),
+      toNum(r.summa), r.kirim_id || ""
+    ]);
+  });
+  const wsOmbor = XLSX.utils.aoa_to_sheet(omborData);
+  XLSX.utils.book_append_sheet(wb, wsOmbor, "Ombor");
+
+  // 7. Kontragentlar
+  const kontrData = [
+    ["INN", "Nomi", "Kategoriya", "Telefon", "Manzil", "Izoh"]
+  ];
+  (STORE.kontragentlar || []).forEach((r) => {
+    kontrData.push([
+      r.inn || "", r.nomi || "", r.kategoriya || "", r.telefon || "",
+      r.manzil || "", r.izoh || ""
+    ]);
+  });
+  const wsKontr = XLSX.utils.aoa_to_sheet(kontrData);
+  XLSX.utils.book_append_sheet(wb, wsKontr, "Kontragentlar");
+
+  // 8. Ishlab chiqarish
+  const icData = [
+    ["Sana", "Hujjat №", "Mahsulot", "Birlik", "Miqdor", "Tannarx (jami)", "Birlik tannarxi"]
+  ];
+  (STORE.ishlabChiqarish || []).forEach((r) => {
+    icData.push([
+      r.sana || "", r.hujjatRaqami || "", r.mahsulotNomi || "", r.birlik || "",
+      toNum(r.miqdor), toNum(r.tannarxJami), toNum(r.birlikTannarxi)
+    ]);
+  });
+  const wsIc = XLSX.utils.aoa_to_sheet(icData);
+  XLSX.utils.book_append_sheet(wb, wsIc, "Ishlab_chiqarish");
+
+  // 9. Qayta ishlash
+  const qiData = [
+    ["Sana", "Hujjat №", "Mijoz", "INN", "Xizmat tavsifi", "Summa"]
+  ];
+  (STORE.qaytaIshlash || []).forEach((r) => {
+    qiData.push([
+      r.sana || "", r.hujjatRaqami || "", r.mijoz || "", r.inn || "",
+      r.tavsif || "", toNum(r.summa)
+    ]);
+  });
+  const wsQi = XLSX.utils.aoa_to_sheet(qiData);
+  XLSX.utils.book_append_sheet(wb, wsQi, "Qayta_ishlash");
+
+  // 10. Ish haqi
+  const ihData = [
+    ["Xodim", "Lavozim", "Oklad", "Mukofot", "Jami hisoblangan", "NDFL", "INPS", "Ijtimoiy soliq", "Qo'lga tegadigan"]
+  ];
+  (STORE.ishHaqi || []).forEach((r) => {
+    ihData.push([
+      r.xodim || "", r.lavozim || "", toNum(r.oklad), toNum(r.mukofot),
+      toNum(r.jamiHisoblangan), toNum(r.ndfl), toNum(r.inps),
+      toNum(r.ijtimoiySoliq), toNum(r.qolgaTegadigan)
+    ]);
+  });
+  const wsIh = XLSX.utils.aoa_to_sheet(ihData);
+  XLSX.utils.book_append_sheet(wb, wsIh, "Ish_haqi");
+
+  // 11. Asosiy vositalar
+  const avData = [
+    ["Nomi", "Inventar №", "Sana", "Boshlang'ich qiymat", "Guruh", "Amortizatsiya stavkasi (%)", "Jamg'arilgan amortizatsiya", "Qoldiq qiymat"]
+  ];
+  (STORE.asosiyVositalar || []).forEach((r) => {
+    avData.push([
+      r.nomi || "", r.inventarRaqam || "", r.sana || "", toNum(r.boshlangichQiymat),
+      r.guruh || "", toNum(r.amortizatsiyaStavkasi), toNum(r.jamgAmortizatsiya), toNum(r.qoldiqQiymat)
+    ]);
+  });
+  const wsAv = XLSX.utils.aoa_to_sheet(avData);
+  XLSX.utils.book_append_sheet(wb, wsAv, "Asosiy_vositalar");
+
+  const fileName = `FORGET_Backup_TOLIQ_${todayISO()}.xlsx`;
+  XLSX.writeFile(wb, fileName);
+
+  try {
+    localStorage.setItem("forget_last_backup_date", new Date().toISOString());
+  } catch (e) {}
+
+  toast("To'liq 11 varaqli Excel zaxira nusxasi yuklab olindi!");
+}
+
+function exportFullBackupJson() {
+  const s = STORE.settings || {};
+  const backupData = {
+    format: "FORGET_Full_Backup",
+    version: "2.0",
+    backupDate: new Date().toISOString(),
+    firmaId: typeof ACTIVE_FIRMA_ID !== "undefined" ? ACTIVE_FIRMA_ID : null,
+    company: {
+      name: s.companyName || "",
+      inn: s.inn || "",
+      period: s.period || ""
+    },
+    store: STORE
+  };
+  const jsonStr = JSON.stringify(backupData, null, 2);
+  const blob = new Blob([jsonStr], { type: "application/json;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `FORGET_Backup_Snapshot_${todayISO()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+
+  try {
+    localStorage.setItem("forget_last_backup_date", new Date().toISOString());
+  } catch (e) {}
+
+  toast("To'liq tizim holati (JSON) yuklab olindi!");
+}
+
+function checkBackupReminder() {
+  let lastDateStr = null;
+  try {
+    lastDateStr = localStorage.getItem("forget_last_backup_date");
+  } catch (e) {}
+
+  if (!lastDateStr) {
+    return { needsBackup: true, daysSince: null, lastDate: null };
+  }
+
+  const lastTime = new Date(lastDateStr).getTime();
+  if (isNaN(lastTime)) {
+    return { needsBackup: true, daysSince: null, lastDate: null };
+  }
+
+  const daysSince = Math.floor((Date.now() - lastTime) / (1000 * 60 * 60 * 24));
+  return {
+    needsBackup: daysSince >= 7,
+    daysSince,
+    lastDate: lastDateStr.split("T")[0]
+  };
+}
+
+/* 1C:Korxona Sinxronlash Modali */
+function open1CExchangeModal(initialTab = "bank") {
+  const s = STORE.settings || {};
+  openModal(`
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h3 style="margin:0;display:flex;align-items:center;gap:8px;">
+        <span class="badge-1c">1C:Korxona / 1UZ</span> Ma'lumotlar almashinuvi
+      </h3>
+      <span class="badge" style="background:var(--bg-hover);color:var(--text-dim);font-size:11px;">1C 8.3 / CommerceML / Klient-Bank</span>
+    </div>
+    <p class="modal-sub" style="margin-bottom:14px;">FORGET va 1C:Бухгалтерия 8.3 / УТ / УНФ o'rtasida to'lovlar, schyot-fakturalar va tovarlar katalogini ikki tomonlama sinxronlash.</p>
+
+    <div class="tabs" id="modal1CTabs" style="margin-bottom:16px;">
+      <button class="tab-btn ${initialTab === "bank" ? "active" : ""}" data-tab="bank">1. Klient-Bank (.txt)</button>
+      <button class="tab-btn ${initialTab === "commerceml" ? "active" : ""}" data-tab="commerceml">2. CommerceML 2.0 (.xml)</button>
+      <button class="tab-btn ${initialTab === "json" ? "active" : ""}" data-tab="json">3. EnterpriseData (.json)</button>
+    </div>
+
+    <!-- TAB 1: Klient-Bank -->
+    <div class="tab-pane ${initialTab === "bank" ? "active" : ""}" id="pane1CBank">
+      <div class="sync-card-grid">
+        <div class="sync-card">
+          <div>
+            <div class="title"><svg class="ic" viewBox="0 0 24 24"><use href="#i-out"/></svg> 1C uchun eksport</div>
+            <div class="desc">Bank operatsiyalarini 1C:Korxonaga yuklash uchun standart <code>kl_to_1c.txt</code> faylini yaratish.</div>
+          </div>
+          <button class="btn btn-primary" id="btn1CExportBank">Eksport (kl_to_1c.txt)</button>
+        </div>
+        <div class="sync-card">
+          <div>
+            <div class="title"><svg class="ic" viewBox="0 0 24 24"><use href="#i-in"/></svg> 1C dan import</div>
+            <div class="desc">1C yoki Klient-Bankdan olingan <code>1c_to_kl.txt</code> yoki <code>kl_to_1c.txt</code> ko'chirmasini yuklash.</div>
+          </div>
+          <button class="btn btn-secondary" id="btn1CTriggerBankImport">Faylni tanlash (.txt)</button>
+          <input type="file" id="file1CBankInput" accept=".txt" style="display:none;">
+        </div>
+      </div>
+      <div class="note">Format: 1CClientBankExchange v1.03. Payer/Payee INN va hisob raqamlari bo'yicha kirim/chiqim avtomatik ajratiladi.</div>
+    </div>
+
+    <!-- TAB 2: CommerceML 2.0 XML -->
+    <div class="tab-pane ${initialTab === "commerceml" ? "active" : ""}" id="pane1CCommerceML">
+      <div class="sync-card-grid">
+        <div class="sync-card">
+          <div>
+            <div class="title"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg> CommerceML Eksport</div>
+            <div class="desc">Kontragentlar, tovarlar katalogi, schyot-fakturalar (Kirim/Chiqim) va kassa orderlarini CommerceML 2.0 XML formatida yuklab olish.</div>
+          </div>
+          <button class="btn btn-primary" id="btn1CExportXml">XML yuklab olish</button>
+        </div>
+        <div class="sync-card">
+          <div>
+            <div class="title"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg> CommerceML Import</div>
+            <div class="desc">1C dan eksport qilingan CommerceML 2.0 XML faylini yuklab, kontragentlar va fakturalarni bazaga kiritish.</div>
+          </div>
+          <button class="btn btn-secondary" id="btn1CTriggerXmlImport">Faylni tanlash (.xml)</button>
+          <input type="file" id="file1CXmlInput" accept=".xml" style="display:none;">
+        </div>
+      </div>
+      <div class="note">1C:Бухгалтерия 8.3, Управление торговлей va 1UZ dasturlarining standart XML formati.</div>
+    </div>
+
+    <!-- TAB 3: EnterpriseData JSON -->
+    <div class="tab-pane ${initialTab === "json" ? "active" : ""}" id="pane1CJson">
+      <div class="sync-card-grid">
+        <div class="sync-card">
+          <div>
+            <div class="title"><svg class="ic" viewBox="0 0 24 24"><use href="#i-database"/></svg> JSON Eksport</div>
+            <div class="desc">Barcha operatsiyalar va ma'lumotnomalarni 1C REST / EnterpriseData JSON formatida yuklab olish.</div>
+          </div>
+          <button class="btn btn-primary" id="btn1CExportJson">JSON yuklab olish</button>
+        </div>
+        <div class="sync-card">
+          <div>
+            <div class="title"><svg class="ic" viewBox="0 0 24 24"><use href="#i-in"/></svg> JSON Import</div>
+            <div class="desc">1C dan olingan EnterpriseData JSON faylini FORGET tizimiga yuklash.</div>
+          </div>
+          <button class="btn btn-secondary" id="btn1CTriggerJsonImport">Faylni tanlash (.json)</button>
+          <input type="file" id="file1CJsonInput" accept=".json" style="display:none;">
+        </div>
+      </div>
+      <div class="note">Zamonaviy JSON protokoli orqali 1C 8.3 bazasi bilan oson va tezkor ma'lumot almashish imkonini beradi.</div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn" id="mCancel">Yopish</button>
+    </div>
+  `);
+
+  document.getElementById("mCancel").addEventListener("click", closeModal);
+
+  const tabs = document.getElementById("modal1CTabs");
+  if (tabs) {
+    tabs.querySelectorAll(".tab-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        tabs.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const targetTab = btn.dataset.tab;
+        const root = document.getElementById("modalRoot");
+        if (root) {
+          root.querySelectorAll(".tab-pane").forEach((p) => p.classList.remove("active"));
+          if (targetTab === "bank") root.querySelector("#pane1CBank")?.classList.add("active");
+          else if (targetTab === "commerceml") root.querySelector("#pane1CCommerceML")?.classList.add("active");
+          else if (targetTab === "json") root.querySelector("#pane1CJson")?.classList.add("active");
+        }
+      });
+    });
+  }
+
+  // Tab 1: Bank
+  const btn1CExportBank = document.getElementById("btn1CExportBank");
+  if (btn1CExportBank) {
+    btn1CExportBank.addEventListener("click", () => {
+      const text = generate1CClientBankExport(STORE.bank);
+      const blob = new Blob([text], { type: "text/plain;charset=windows-1251" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `kl_to_1c_${todayISO()}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast("kl_to_1c.txt fayli yuklab olindi (1C Klient-Bank formati)");
+    });
+  }
+
+  const file1CBankInput = document.getElementById("file1CBankInput");
+  const btn1CTriggerBankImport = document.getElementById("btn1CTriggerBankImport");
+  if (file1CBankInput && btn1CTriggerBankImport) {
+    btn1CTriggerBankImport.addEventListener("click", () => file1CBankInput.click());
+    file1CBankInput.addEventListener("change", async (e) => {
+      const f = e.target.files[0];
+      if (f) {
+        closeModal();
+        await handleBankImport(f);
+      }
+    });
+  }
+
+  // Tab 2: CommerceML XML
+  const btn1CExportXml = document.getElementById("btn1CExportXml");
+  if (btn1CExportXml) {
+    btn1CExportXml.addEventListener("click", () => {
+      const xml = generateCommerceMLExport();
+      const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `forget_1c_commerceml_${todayISO()}.xml`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast("CommerceML 2.0 XML fayli yuklab olindi");
+    });
+  }
+
+  const file1CXmlInput = document.getElementById("file1CXmlInput");
+  const btn1CTriggerXmlImport = document.getElementById("btn1CTriggerXmlImport");
+  if (file1CXmlInput && btn1CTriggerXmlImport) {
+    btn1CTriggerXmlImport.addEventListener("click", () => file1CXmlInput.click());
+    file1CXmlInput.addEventListener("change", async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        const xmlStr = await f.text();
+        const parsed = parseCommerceML(xmlStr);
+        let addedK = 0;
+        if (parsed.kontragentlar.length) {
+          for (const k of parsed.kontragentlar) {
+            if (k.inn || k.nomi) {
+              await ensureKontragentAutoAdded(k.inn, k.nomi, { manzil: k.manzil, telefon: k.telefon });
+              addedK++;
+            }
+          }
+        }
+        toast(`CommerceML import: ${addedK} ta kontragent, ${parsed.hujjatlar.length} ta hujjat qayta ishlandi`);
+        closeModal();
+        renderKontragentlar();
+      } catch (err) {
+        console.error(err);
+        toast("CommerceML XML faylni o'qishda xatolik: " + err.message, "err");
+      }
+    });
+  }
+
+  // Tab 3: EnterpriseData JSON
+  const btn1CExportJson = document.getElementById("btn1CExportJson");
+  if (btn1CExportJson) {
+    btn1CExportJson.addEventListener("click", () => {
+      const data = generate1CEnterpriseJson();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `forget_1c_enterprisedata_${todayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast("1C EnterpriseData JSON fayli yuklab olindi");
+    });
+  }
+
+  const file1CJsonInput = document.getElementById("file1CJsonInput");
+  const btn1CTriggerJsonImport = document.getElementById("btn1CTriggerJsonImport");
+  if (file1CJsonInput && btn1CTriggerJsonImport) {
+    btn1CTriggerJsonImport.addEventListener("click", () => file1CJsonInput.click());
+    file1CJsonInput.addEventListener("change", async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        const parsedRaw = JSON.parse(text);
+        const parsed = parse1CEnterpriseJson(parsedRaw);
+        if (!parsed) {
+          toast("Fayl formati yaroqsiz", "err");
+          return;
+        }
+        let addedK = 0;
+        for (const k of parsed.counterparties) {
+          if (k.inn || k.nomi) {
+            await ensureKontragentAutoAdded(k.inn, k.nomi, { manzil: k.manzil, telefon: k.telefon });
+            addedK++;
+          }
+        }
+        toast(`EnterpriseData import: ${addedK} ta kontragent muvaffaqiyatli saqlandi`);
+        closeModal();
+        renderKontragentlar();
+      } catch (err) {
+        console.error(err);
+        toast("JSON faylni o'qishda xatolik: " + err.message, "err");
+      }
+    });
+  }
+}
+
 /* ------------------------------- Import (Excel) ------------------------------- */
 
 function openImportModal(type) {
@@ -8804,15 +13756,21 @@ function openImportModal(type) {
 
 function normalizeDate(v) {
   if (v === "" || v === null || v === undefined) return "";
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    const y = v.getFullYear();
+    const m = String(v.getMonth() + 1).padStart(2, "0");
+    const d = String(v.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
   if (typeof v === "number") {
     const d = XLSX.SSF.parse_date_code(v);
     if (!d) return "";
     return `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
   }
   const str = String(v).trim();
-  let m = str.match(/^(\d{2})[.\-](\d{2})[.\-](\d{4})/);
+  let m = str.match(/^(\d{2})[./\-](\d{2})[./\-](\d{4})/);
   if (m) return `${m[3]}-${m[2]}-${m[1]}`;
-  m = str.match(/^(\d{4})[.\-](\d{2})[.\-](\d{2})/);
+  m = str.match(/^(\d{4})[./\-](\d{2})[./\-](\d{2})/);
   if (m) return `${m[1]}-${m[2]}-${m[3]}`;
   return str;
 }
@@ -9049,9 +14007,9 @@ async function handleInvoiceImport(file, type) {
 function openBankImportModal() {
   openModal(`
     <h3>Bank harakati — fayldan import</h3>
-    <p class="modal-sub">ABS/Klient-Bank ko'chirmasi (masalan, Bank.xlsx) formati avtomatik tanib olinadi. Boshqa formatdagi fayl uchun ustunlar tartibi: sana, hujjat №, kontragent, tavsif, kirim, chiqim.</p>
-    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls / .csv</span></div>
-    <input type="file" id="impFile" accept=".xlsx,.xls,.csv" style="display:none">
+    <p class="modal-sub">ABS/Klient-Bank ko'chirmasi (.xlsx, .xls, .csv) yoki 1C Klient-Bank (.txt — 1CClientBankExchange) fayli avtomatik tanib olinadi va qayta ishlanadi.</p>
+    <div class="dropzone" id="dz">Faylni shu yerga tashlang yoki bosing<br><span class="faint">.xlsx / .xls / .csv / .txt (1C Klient-Bank)</span></div>
+    <input type="file" id="impFile" accept=".xlsx,.xls,.csv,.txt" style="display:none">
     <div class="modal-actions"><button class="btn" id="mCancel">Yopish</button></div>
   `);
   document.getElementById("mCancel").addEventListener("click", closeModal);
@@ -9064,62 +14022,119 @@ function openBankImportModal() {
   inp.addEventListener("change", (e) => { if (e.target.files[0]) handleBankImport(e.target.files[0]); });
 }
 
-function parseBalanceLine(cell, label) {
-  const re = new RegExp(label + ".*?:\\s*([\\d\\s.,]+)", "i");
+function parseBalanceLine(cell, pattern) {
+  const re = new RegExp(pattern + ".*?:?\\s*([\\d\\s.,]+)", "i");
   const m = String(cell).match(re);
   return m ? toNum(m[1]) : null;
 }
 
-// ABS/Klient-Bank ko'chirmasi: "Дата", "Cчет/ИНН", "№ док", "Оп", "МФО", "Оборот Дебет" (chiqim), "Оборот Кредит" (kirim), "Назначение платежа"
+// ABS/Klient-Bank ko'chirmasi: ham eski birlashgan "Cчет/ИНН/Наименование", ham zamonaviy "Biznes 24/7" (TurnoverOperationsInfoByDate),
+// Markaziy Bank va boshqa O'zbekiston banklari formatlarini (alohida "ИНН", "Наименование корреспондента", "Сумма дебет/кредит")
+// avtomatik va to'liq tanib oladi.
 function tryParseAbsBankStatement(rows) {
   let headerIdx = -1;
   const col = {};
-  for (let i = 0; i < Math.min(rows.length, 12); i++) {
-    const joined = rows[i].map((c) => String(c).toLowerCase());
-    const dateI = joined.findIndex((c) => /дата/.test(c));
-    const debetI = joined.findIndex((c) => /дебет/.test(c));
-    const kreditI = joined.findIndex((c) => /кредит/.test(c));
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const joined = rows[i].map((c) => String(c).trim().toLowerCase());
+    const dateI = joined.findIndex((c) => /дата|sana/i.test(c) && !/tugash|boshlanish|davr/i.test(c));
+    const debetI = joined.findIndex((c) => /дебет|расход|chiqim/i.test(c));
+    const kreditI = joined.findIndex((c) => /кредит|приход|kirim/i.test(c));
     if (dateI >= 0 && debetI >= 0 && kreditI >= 0) {
       headerIdx = i;
       col.date = dateI;
-      col.schet = joined.findIndex((c) => /инн/.test(c));
-      col.doc = joined.findIndex((c) => /док/.test(c));
       col.debet = debetI;
       col.kredit = kreditI;
-      col.naznach = joined.findIndex((c) => /назначен/.test(c));
+      col.doc = joined.findIndex((c) => /№\s*док|номер\s*док|hujjat/i.test(c));
+      col.naznach = joined.findIndex((c) => /назначен|детали|tavsif|izoh|maqsad/i.test(c));
+
+      // Kontragent nomi ustuni (lekin "Счет", "Банк", "МФО" so'zlari aralashmasin)
+      col.kontragentNomi = joined.findIndex((c) =>
+        (/наименование\s*корреспондент|наименование\s*клиент|получател|плательщик/i.test(c) ||
+        ((/корреспондент|контрагент|kontragent/i.test(c)) && !/счет|hisob|банк|мфо/i.test(c))) &&
+        !/банк/i.test(c)
+      );
+
+      // Alohida INN ustuni (bank INN'i emas)
+      col.inn = joined.findIndex((c) => /^инн$|^inn$|stir|инн.*корреспондент|инн.*клиент|инн.*получател|инн.*плательщик|инн\/стир/i.test(c) && !/банк/i.test(c));
+
+      // Birlashtirilgan счет/инн ustuni (eski ABS formati)
+      col.schetCombined = joined.findIndex((c) => /счет\/инн|cчет\/инн/i.test(c));
       break;
     }
   }
   if (headerIdx === -1) return null;
 
+  // Boshlang'ich qoldiqni topish (matn ichida yoki yonma-yon kataklarda)
   let opening = null;
   for (let i = 0; i < headerIdx; i++) {
-    for (const cell of rows[i]) {
-      if (typeof cell !== "string") continue;
-      const o = parseBalanceLine(cell, "Остаток на начало");
-      if (o !== null) opening = o;
+    const row = rows[i];
+    for (let c = 0; c < row.length; c++) {
+      const cellStr = String(row[c] || "").trim();
+      if (!cellStr) continue;
+      if (/остаток\s*на\s*начал|входящ.*остаток|сальдо\s*на\s*начал|входящ.*сальдо|boshlang'ich\s*qoldiq/i.test(cellStr)) {
+        const m = cellStr.match(/:\s*(-?[\d\s.,]+)/) || cellStr.match(/(-?[\d\s.,]+)$/);
+        if (m && m[1] && !isNaN(toNum(m[1]))) {
+          opening = toNum(m[1]);
+          break;
+        }
+        for (let nextC = c + 1; nextC < Math.min(row.length, c + 5); nextC++) {
+          if (typeof row[nextC] === "number" || (typeof row[nextC] === "string" && /^[\d\s.,]+$/.test(row[nextC].trim()))) {
+            opening = toNum(row[nextC]);
+            break;
+          }
+        }
+        if (opening !== null) break;
+      }
     }
+    if (opening !== null) break;
   }
 
   const parsed = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     const dateCell = row[col.date];
-    // Sana katakchasi Excel'da matn ("01.06.2026 11:18") yoki sonli sana
-    // (masalan 46237.60...) ko'rinishida bo'lishi mumkin — ikkalasini ham
-    // qabul qilamiz. Boshqa turdagi (masalan "Итоговый оборот" yozuvi yoki
-    // bo'sh) qatorlar o'tkazib yuboriladi.
     const isValidDateCell = (typeof dateCell === "number" && dateCell > 0) ||
-      (typeof dateCell === "string" && /^\d{2}\.\d{2}\.\d{4}/.test(dateCell));
+      (dateCell instanceof Date && !isNaN(dateCell.getTime())) ||
+      (typeof dateCell === "string" && /^\d{2}[./\-]\d{2}[./\-]\d{4}|^\d{4}[./\-]\d{2}[./\-]\d{2}/.test(dateCell.trim()));
     if (!isValidDateCell) continue;
-    const schetCell = String(row[col.schet] || "");
-    const parts = schetCell.split("/");
-    const kontragentInn = (parts[1] || "").trim();
-    const kontragentNomi = (parts.slice(2).join("/") || "").trim();
-    const hujjatRaqami = String(row[col.doc] || "").trim();
+
+    let kontragentInn = "";
+    let kontragentNomi = "";
+
+    if (col.inn >= 0) {
+      kontragentInn = String(row[col.inn] || "").replace(/\D/g, "").trim();
+    }
+    if (col.kontragentNomi >= 0) {
+      kontragentNomi = String(row[col.kontragentNomi] || "")
+        .replace(/^["']+|["']+$/g, "")
+        .replace(/""/g, '"')
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    if ((!kontragentInn || !kontragentNomi) && col.schetCombined >= 0) {
+      const schetCell = String(row[col.schetCombined] || "");
+      const parts = schetCell.split("/");
+      if (!kontragentInn && parts[1]) kontragentInn = parts[1].replace(/\D/g, "").trim();
+      if (!kontragentNomi && parts[2]) {
+        kontragentNomi = parts.slice(2).join("/")
+          .replace(/^["']+|["']+$/g, "")
+          .replace(/""/g, '"')
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+    }
+
+    const hujjatRaqami = col.doc >= 0 ? String(row[col.doc] || "").trim() : "";
     const chiqim = toNum(row[col.debet]);
     const kirim = toNum(row[col.kredit]);
-    const tavsif = String(row[col.naznach] || "").trim();
+    if (chiqim <= 0 && kirim <= 0) continue; // Nol yoki bo'sh yakuniy qatorlarni o'tkazib yuborish
+
+    const tavsif = col.naznach >= 0 ? String(row[col.naznach] || "").trim() : "";
+
+    // Bank xizmati / komissiyasi avtomatik aniqlanishi (xizmat xarajatlariga avtomat belgilash)
+    const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragentNomi);
+
     parsed.push({
       sana: normalizeDate(typeof dateCell === "string" ? dateCell.split(" ")[0] : dateCell),
       hujjatRaqami,
@@ -9127,7 +14142,8 @@ function tryParseAbsBankStatement(rows) {
       kontragentInn,
       tavsif,
       kirim,
-      chiqim
+      chiqim,
+      xizmat: isService
     });
   }
   return { rows: parsed, opening };
@@ -9137,21 +14153,73 @@ async function handleBankImport(file) {
   try {
     await dataReady;
     const buf = await file.arrayBuffer();
-    const wb = XLSX.read(buf, { type: "array" });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
-    if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+    let is1CText = file.name && file.name.toLowerCase().endsWith(".txt");
+    let text1C = "";
+    if (is1CText || file.size < 10 * 1024 * 1024) {
+      try {
+        const dec1251 = new TextDecoder("windows-1251");
+        text1C = dec1251.decode(buf);
+        if (!text1C.includes("1CClientBankExchange") && !text1C.includes("КлиентСбербанк")) {
+          text1C = new TextDecoder("utf-8").decode(buf);
+        }
+        if (text1C.includes("1CClientBankExchange") || text1C.includes("КлиентСбербанк")) {
+          is1CText = true;
+        }
+      } catch (e) {}
+    }
 
     const wasEmpty = STORE.bank.length === 0;
-    const abs = tryParseAbsBankStatement(rows);
     const candidates = [];
     let skipped = 0;
     let newOpening = null;
 
+    if (is1CText) {
+      const parsed1C = parse1CClientBankExchange(text1C);
+      if (parsed1C.opening !== null && (wasEmpty || !toNum(STORE.settings.bankOpeningBalance))) {
+        newOpening = parsed1C.opening;
+      }
+      for (const r of parsed1C.rows) {
+        const dup = STORE.bank.some((b) => {
+          const sameDate = b.sana === r.sana;
+          const sameKirim = Math.abs(toNum(b.kirim) - toNum(r.kirim)) < 1;
+          const sameChiqim = Math.abs(toNum(b.chiqim) - toNum(r.chiqim)) < 1;
+          if (!sameDate || !sameKirim || !sameChiqim) return false;
+          if (r.hujjatRaqami && r.hujjatRaqami !== "0" && b.hujjatRaqami && b.hujjatRaqami !== "0") {
+            return b.hujjatRaqami === r.hujjatRaqami;
+          }
+          const sameKontragent = normalizeKontragentNomi(b.kontragent) === normalizeKontragentNomi(r.kontragent);
+          const sameTavsif = (b.tavsif || "").trim().toLowerCase() === (r.tavsif || "").trim().toLowerCase();
+          return sameKontragent && (sameTavsif || !r.tavsif || !b.tavsif);
+        });
+        if (dup) { skipped++; continue; }
+        candidates.push(r);
+      }
+    } else {
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+      if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
+
+      const abs = tryParseAbsBankStatement(rows);
+
     if (abs) {
-      if (abs.opening !== null && wasEmpty) newOpening = abs.opening;
+      if (abs.opening !== null && (wasEmpty || !toNum(STORE.settings.bankOpeningBalance))) {
+        newOpening = abs.opening;
+      }
       for (const r of abs.rows) {
-        const dup = STORE.bank.some((b) => b.hujjatRaqami === r.hujjatRaqami && b.sana === r.sana && Math.abs(b.kirim - r.kirim) < 1 && Math.abs(b.chiqim - r.chiqim) < 1);
+        const dup = STORE.bank.some((b) => {
+          const sameDate = b.sana === r.sana;
+          const sameKirim = Math.abs(toNum(b.kirim) - toNum(r.kirim)) < 1;
+          const sameChiqim = Math.abs(toNum(b.chiqim) - toNum(r.chiqim)) < 1;
+          if (!sameDate || !sameKirim || !sameChiqim) return false;
+          if (r.hujjatRaqami && r.hujjatRaqami !== "0" && b.hujjatRaqami && b.hujjatRaqami !== "0") {
+            return b.hujjatRaqami === r.hujjatRaqami;
+          }
+          const sameKontragent = normalizeKontragentNomi(b.kontragent) === normalizeKontragentNomi(r.kontragent);
+          const sameTavsif = (b.tavsif || "").trim().toLowerCase() === (r.tavsif || "").trim().toLowerCase();
+          return sameKontragent && (sameTavsif || !r.tavsif || !b.tavsif);
+        });
         if (dup) { skipped++; continue; }
         candidates.push(r);
       }
@@ -9166,16 +14234,28 @@ async function handleBankImport(file) {
         if (!row.length || row.every((c) => c === "")) continue;
         const sana = normalizeDate(row[0]);
         const hujjatRaqami = String(row[1] || "").trim();
-        const kontragent = String(row[2] || "").trim();
+        const kontragent = String(row[2] || "").replace(/^["']+|["']+$/g, "").replace(/""/g, '"').trim();
         const tavsif = String(row[3] || "").trim();
         const kirim = toNum(row[4]);
         const chiqim = toNum(row[5]);
         if (!sana && !kirim && !chiqim) continue;
-        const dup = STORE.bank.some((b) => b.sana === sana && b.hujjatRaqami === hujjatRaqami && Math.abs(b.kirim - kirim) < 1 && Math.abs(b.chiqim - chiqim) < 1 && b.kontragent === kontragent);
+        if (kirim <= 0 && chiqim <= 0) continue;
+        const dup = STORE.bank.some((b) => {
+          const sameDate = b.sana === sana;
+          const sameKirim = Math.abs(toNum(b.kirim) - toNum(kirim)) < 1;
+          const sameChiqim = Math.abs(toNum(b.chiqim) - toNum(chiqim)) < 1;
+          if (!sameDate || !sameKirim || !sameChiqim) return false;
+          if (hujjatRaqami && hujjatRaqami !== "0" && b.hujjatRaqami && b.hujjatRaqami !== "0") {
+            return b.hujjatRaqami === hujjatRaqami;
+          }
+          return normalizeKontragentNomi(b.kontragent) === normalizeKontragentNomi(kontragent);
+        });
         if (dup) { skipped++; continue; }
-        candidates.push({ sana, hujjatRaqami, kontragent, kontragentInn: "", tavsif, kirim, chiqim });
+        const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragent);
+        candidates.push({ sana, hujjatRaqami, kontragent, kontragentInn: "", tavsif, kirim, chiqim, xizmat: isService });
       }
     }
+  }
 
     if (newOpening !== null) {
       STORE.settings.bankOpeningBalance = newOpening;
@@ -9228,10 +14308,13 @@ async function handleBankImport(file) {
       added = data.length;
     }
 
+    recomputeAllPaymentStatus();
+    updateNavBadges();
     saveStore();
     closeModal();
     renderBank();
-    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}`);
+    const openingNote = (newOpening !== null) ? `, boshlang'ich qoldiq: ${fmtSum(newOpening)}` : "";
+    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}${openingNote}`);
     if (unresolvedNomi.size) openBankInnPromptModal([...unresolvedNomi]);
   } catch (err) {
     console.error(err);
@@ -9288,6 +14371,8 @@ function openBankInnPromptModal(names) {
       }
       await ensureKontragentAutoAdded(inn, nomi);
     }
+    recomputeAllPaymentStatus();
+    updateNavBadges();
     saveStore();
     renderBank();
     toast(`${updated} ta bank yozuviga INN qo'llanildi`);
@@ -9489,6 +14574,7 @@ async function bootAfterAuth() {
   hideAuthGate();
   applyTheme();
   bindGlobalSearch();
+  bindKontragentHistoryDelegation();
   document.getElementById("topbarNotifBtn").addEventListener("click", openAttentionModal);
 
   await loadAvailableFirmalar();
@@ -9935,3 +15021,5 @@ if (sidebarBackdrop) {
 }
 
 applyTheme();
+bindGlobalSearch();
+bindKontragentHistoryDelegation();

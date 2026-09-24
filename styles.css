@@ -717,3 +717,183 @@ tfoot td{
 .topbar{padding-top:calc(10px + env(safe-area-inset-top));}
 .sidebar{padding-top:calc(18px + env(safe-area-inset-top)); padding-left:calc(12px + env(safe-area-inset-left));}
 .auth-gate{padding-top:calc(20px + env(safe-area-inset-top));}
+
+/* ---- Kontragent tarixi havolalari va satr interaktivligi ---- */
+.cursor-pointer {
+  cursor: pointer;
+}
+.kontragent-hist-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.kontragent-hist-link:hover {
+  text-decoration: underline;
+  color: var(--accent-hover);
+}
+tr.cursor-pointer,
+tr.kontragent-row,
+tr[data-hist-inn] {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+tr.cursor-pointer:hover td,
+tr.kontragent-row:hover td,
+tr[data-hist-inn]:hover td {
+  background: var(--accent-soft);
+}
+
+/* ---- Kassa (5010) operatsiyalari stillari ---- */
+.badge-kassa-kirim {
+  background: var(--ok-soft, rgba(46, 125, 50, 0.12));
+  color: var(--ok, #2e7d32);
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.badge-kassa-chiqim {
+  background: var(--danger-soft, rgba(198, 40, 40, 0.12));
+  color: var(--danger, #c62828);
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.schyot-tag {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+/* ---- Didox API integratsiyasi ---- */
+.didox-progress-wrap {
+  width: 100%;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  overflow: hidden;
+  height: 8px;
+  margin: 12px 0;
+}
+.didox-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent, #2f6f5e), #48bb78);
+  width: 0%;
+  transition: width 0.3s ease;
+}
+.didox-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin: 12px 0;
+}
+.didox-stat-card {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  text-align: center;
+}
+.didox-stat-card .val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.didox-stat-card .lbl {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+.didox-log-box {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  max-height: 140px;
+  overflow-y: auto;
+  color: var(--text-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.badge-didox {
+  background: rgba(47, 111, 94, 0.12);
+  color: var(--accent, #2f6f5e);
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 1C:Korxona va Zaxiralash (Backup) stillari */
+.backup-alert-banner {
+  animation: fadeIn 0.3s ease;
+}
+.sync-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.sync-card {
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+.sync-card .title {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sync-card .desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.badge-1c {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.badge-backup {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+
+
