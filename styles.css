@@ -1027,5 +1027,197 @@ tr[data-hist-inn]:hover td {
   }
 }
 
+/* ------------------------------------------------------------- */
+/* Elektron Tabel (T-13 Shakli) va Davomat Moduli                */
+/* ------------------------------------------------------------- */
+.tabel-scroll-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.tabel-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  min-width: 1100px;
+}
+
+.tabel-table th,
+.tabel-table td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.tabel-table th {
+  background: var(--bg-sunken);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+/* Yopishib turuvchi (Sticky) xodim ustunlari */
+.tabel-sticky-col {
+  position: sticky;
+  left: 0;
+  background: var(--bg-card);
+  z-index: 5;
+  text-align: left !important;
+  padding-left: 10px !important;
+  box-shadow: 2px 0 6px rgba(0, 0, 0, 0.05);
+}
+
+.tabel-table th.tabel-sticky-col {
+  z-index: 15;
+  background: var(--bg-sunken);
+}
+
+.tabel-day-th {
+  min-width: 30px;
+  width: 32px;
+  max-width: 36px;
+  padding: 4px 1px !important;
+  line-height: 1.2;
+}
+
+.tabel-day-num {
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.tabel-day-name {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Dam olish va bayram kunlari rangi */
+.tabel-weekend {
+  background: rgba(239, 68, 68, 0.04) !important;
+}
+
+.tabel-weekend-hdr {
+  background: rgba(239, 68, 68, 0.08) !important;
+  color: #ef4444 !important;
+}
+
+.tabel-today-hdr {
+  background: var(--primary-faint) !important;
+  border-bottom: 2px solid var(--primary) !important;
+}
+
+/* Kunlik katakcha kiritish inputi */
+.tabel-cell-inp {
+  width: 100%;
+  height: 26px;
+  border: none;
+  background: transparent;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.tabel-cell-inp:hover {
+  background: var(--bg-sunken);
+}
+
+.tabel-cell-inp:focus {
+  outline: 2px solid var(--primary);
+  background: var(--bg-card);
+}
+
+/* Katak belgilari ranglari */
+.tabel-tag {
+  display: inline-block;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.tabel-tag-work {
+  color: var(--text);
+}
+
+.tabel-tag-weekend {
+  color: var(--text-muted);
+  opacity: 0.65;
+}
+
+.tabel-tag-tatil {
+  background: rgba(245, 158, 11, 0.2);
+  color: #d97706;
+}
+
+.tabel-tag-kasallik {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.tabel-tag-leave {
+  background: rgba(168, 85, 247, 0.2);
+  color: #9333ea;
+}
+
+.tabel-tag-absent {
+  background: rgba(220, 38, 38, 0.25);
+  color: #b91c1c;
+}
+
+.tabel-tag-trip {
+  background: rgba(14, 165, 233, 0.2);
+  color: #0284c7;
+}
+
+/* Tabel amallar paneli */
+.tabel-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.tabel-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Kalkulyator modal kartasi */
+.tabel-calc-box {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 14px 0;
+}
+
+
 
 

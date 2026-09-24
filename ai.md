@@ -252,6 +252,50 @@ Dastur kodini chuqur tahlil qilish va haqiqiy bank ko'chirmasi (`TurnoverOperati
 
 ---
 
+### 16-Kamchilik: Xodimlar davomati va elektron Tabel (T-13 shakli), ta'til (otpusknoy) va kasallik nafaqasi (bolnichniy) avtomatlashtirilmaganligi
+- **Muammo:** 
+  1. O'zbekiston Respublikasi Mehnat Kodeksi va buxgalteriya hisobi qoidalariga binoan, har qanday korxonada ish haqi hisoblash uchun asos bo'lib ish vaqtidan foydalanishni hisobga olish tabeli (T-13 shakli — "Учет рабочего времени и расчет оплаты труда") xizmat qiladi. Dasturda esa faqat bitta "Ish haqi" sahifasi bo'lib, unda xodimlarning haqiqatda necha kun va necha soat ishlaganligi, xizmat safari yoki ta'tilda bo'lganligi qayd qilinmas edi.
+  2. Buxgalter xodim to'liq ishlamagan oylarda (masalan, oyning o'rtasida ishga kirgan yoki o'z hisobidan ta'tilda bo'lgan) haqiqiy ishlangan kunlarga mutanosib ish haqini qo'lda kalkulyatorda hisoblab, "Oylik summa" maydoniga o'zi yozishga majbur edi.
+  3. Mehnat Kodeksining 233-moddasi bo'yicha yillik asosiy va qo'shimcha mehnat ta'tili (otpusknoy) hisobi — 6 kunlik ish haftasi me'yoriy oylik koeffitsiyenti (25.3 bo'luvchi) orqali hisoblanishi zarur edi.
+  4. O'zbekiston Respublikasi Vazirlar Mahkamasining 1136-sonli qarori ("Vaqtinchalik mehnatga layoqatsizlik nafaqalarini tayinlash va to'lash tartibi to'g'risida Nizom") bo'yicha kasallik varaqasi (bolnichniy) hisobi (oyning ish kunlari me'yori bo'yicha kunlik stavka va stajga qarab 60%, 80%, 100% to'lov) mavjud emas edi.
+  5. Davomat jadvalini rasmiy T-13 shaklida qog'ozga chop etish yoki tekshiruvchilar uchun Excel formatida yuklab olish imkoniyati yo'q edi.
+- **Yechim:**
+  1. **Elektron Tabel (T-13 shakli) va Davomat Tizimi:**
+     - Chap menyuda "Birlamchi hujjatlar" blokida "Davomat va Tabel (T-13)" sahifasi (`data-page="tabel"`) va jonli xodimlar soni nishonchasi (`#navTabelCount`) joylashtirildi.
+     - "Ish haqi" sahifasi sarlavhasida ham "📅 Elektron Tabel (T-13)" tezkor o'tish tugmasi kiritildi.
+     - Yil va oy tanlash filtri (2025–2030 yillar, 12 oy), ish haftasi grafigi (5 kunlik 40 soatlik / 6 kunlik 40 soatlik) filtri o'rnatildi.
+     - **Taqvim me'yorlari va O'zbekiston bayramlari dvigateli (`getMonthlyWorkingDays`):** O'zbekiston Respublikasining 7 ta rasmiy davlat bayrami (`UZ_BAYRAMLARI`) hamda bayram arafasidagi ish kunlarini 1 soatga qisqartirish (`8 -> 7` soat yoki `7 -> 6` soat) qoidasi avtomatik hisobga olinadi. Shanba va yakshanba kunlari grafik turiga qarab avtomatik dam olish (`D`) sifatida belgilanadi.
+  2. **Interaktiv Davomat Jadvali va Standart Kodlar:**
+     - Gorizontal skrollanuvchi, xodimning F.I.O., lavozimi va okladi chap tomonda mahkamlangan (sticky) zamonaviy jadval.
+     - Har bir kalendar kuni uchun O'zR T-13 standart belgilari:
+       - `8`, `7`, `6`, `4` — ishlangan soatlar;
+       - `D` — dam olish va bayram kunlari;
+       - `T` — yillik mehnat ta'tili (otpusknoy);
+       - `K` — vaqtinchalik mehnatga layoqatsizlik (kasallik varaqasi);
+       - `X` — ish haqi saqlanmagan ta'til (o'z hisobidan);
+       - `S` — sababsiz kelmagan kunlar (progul);
+       - `Xiz` — xizmat safari (komandirovka, 8 soat).
+     - Har bir katakchaga qiymat kiritilganda yoki o'zgartirilganda qatorning ishlangan kunlari, soatlari, faktik oyligi va jami hisoblangan summasi real vaqtda qayta hisoblanadi.
+  3. **1-Klikda Reja Bo'yicha Avto-To'ldirish (`autoFillAllTabelRows`):**
+     - "⚡ Reja bo'yicha to'ldirish" tugmasi orqali joriy oyning barcha xodimlari uchun kalendar kunlari (ish kunlari 8/7 soat, dam olish kunlari D) bir zumda to'ldiriladi.
+  4. **Mehnat Ta'tili (Otpusknoy) Kalkulyatori — MK 233-modda (`calculateTatilPuli`):**
+     - Oklad va ta'til kunlari kiritilganda 25.3 bo'luvchi bo'yicha kunlik o'rtacha ish haqi va jami ta'til to'lovi avtomat hisoblanadi: $\text{Ta'til puli} = \text{round}\left(\frac{\text{Oklad}}{25.3} \times D_{\text{ta'til}}\right)$.
+     - Maxsus modal oyna orqali xodimning ta'tili hisoblanib, to'g'ridan-to'g'ri tabel qatoriga kiritiladi.
+  5. **Kasallik Varaqasi (Bolnichniy) Kalkulyatori — VM 1136-Nizom (`calculateKasallikPuli`):**
+     - Oklad, oyning ish kunlari me'yori ($N_{\text{standard}}$), kasallik ish kunlari va xodimning mehnat staji foizi (8 yilgacha — 60%, 8 yildan yuqori — 80%, imtiyozli/ishdagi jarohat — 100%) tanlanadi: $\text{Nafaqa} = \text{round}\left(\frac{\text{Oklad}}{N_{\text{standard}}} \times D_{\text{kasallik}} \times \frac{\text{staj}\%}{100}\right)$.
+  6. **Faktik Ish Haqi va "Ish haqi" Bo'limi Bilan Sinxronizatsiya (`syncTabelToIshHaqi`):**
+     - Faktik oylik ish haqi: $\text{round}\left(\frac{\text{Effektiv Oklad}}{N_{\text{standard}}} \times D_{\text{ishlangan}}\right)$.
+     - Jami hisoblandi: $\text{Faktik oylik} + \text{Ta'til puli} + \text{Kasallik nafaqasi} + \text{Mukofot}$.
+     - "🔄 Oylik hisobiga o'tkazish" tugmasi orqali tabeldagi jami hisoblangan mablag' "Ish haqi" sahifasidagi xodimning qatoriga o'tkaziladi va soliqlar (12% NDFL, 0.1% INPS, 12% Ijtimoiy soliq) hamda qo'lga tegadigan sof ish haqi bir zumda yangilanadi.
+  7. **Rasmiy A4 Albom (Landscape) T-13 Bosma Shakli va Excel Eksport:**
+     - "🖨️ T-13 chop etish" tugmasi: O'zbekiston korxonalari uchun tasdiqlangan T-13 shaklidagi rasmiy davomat tabeli (korxona nomi, STIR, bo'lim, oy va yil, barcha kalendar kunlari, jami soat va kunlar, hisoblangan to'lovlar, Korxona rahbari, Bosh buxgalter va Kadrlar bo'limi boshlig'i imzo bloklari) tayyorlanadi.
+     - "📥 Excel T-13" tugmasi: SheetJS orqali T-13 elektron tabeli to'liq sarlavha va formulalari bilan `.xlsx` formatida yuklanadi.
+  8. **Supabase Realtime va Ko'p Firmalik Bazasiga Moslash:**
+     - `supabase/migration_tabel_t13.sql`: `tabel` jadvali (`id`, `firma_id`, `yil`, `oy`, `xodim_id`, `fio`, `lavozimi`, `pinfl`, `oklad`, `stavka`, `grafik`, `kunlar` JSONB, `ishlangan_kun`, `ishlangan_soat`, `tatil_kun`, `tatil_summa`, `kasallik_kun`, `kasallik_summa`, `mukofot`, `faktik_oylik`, `jami_hisoblandi`, `izoh`).
+     - Realtime sinxronizatsiya: boshqa kompyuter yoki brauzerda tabelga o'zgartirish kiritilganda real vaqtda aks etadi.
+
+---
+
 ## 4. Foydalanuvchi Uchun Yaratilgan Yangi Qulayliklar (UX/UI)
 
 1. **Tezkor Klaviatura Yorliqlari (Hotkeys):**
@@ -333,7 +377,22 @@ Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash
   ✓ 16. SETTINGS_DB_MAP valyuta_opening_balance maydonini o'z ichiga olishi kerak
   ✓ 17. Valyuta kiritilmaganda ijobiy va salbiy kurs farqlari 0 bo'lib qolishi kerak
 
->>> BARCHA 10 TA TEST SUITE 100% MUVAFFAQ QILINDI! <<<
+=== ELEKTRON TABEL VA DAVOMAT (T-13 SHAKLI) TEST SUITE ===
+  ✓ 1. O'zbekiston davlat bayramlari to'liq kiritilganligi (UZ_BAYRAMLARI)
+  ✓ 2. 2026-yil sentyabr oyi (30 kun, 1-sentyabr bayram, 30-sentyabr bayram arafasi -1 soat) 5 kunlik grafik hisobi
+  ✓ 3. 6 kunlik grafik: Shanba 5 soat, boshqa kunlar 7 soat, yakshanba dam olish
+  ✓ 4. Mehnat ta'tili puli hisobi: 5,060,000 so'm oklad, 15 kun ta'til (MK 233-modda, 25.3 bo'luvchi)
+  ✓ 5. Mehnat ta'tili puli nol yoki manfiy parametrlar bilan xavfsiz ishlashi
+  ✓ 6. Kasallik varaqasi hisobi: 4,400,000 so'm oklad, 22 ish kuni, 5 kun kasallik (VM 1136-Nizom, 60%, 80%, 100%)
+  ✓ 7. Tabel to'liq oy ishlaganda oklad 100% hisoblanishi
+  ✓ 8. Qisman ishlangan oy (10 kun ishlagan, oklad 6,300,000, 21 ish kuni)
+  ✓ 9. 0.5 stavka (yarim stavka) bilan hisob-kitob
+  ✓ 10. Maxsus belgilar: Ta'til (T), Kasallik (K), Sababsiz (S), Xizmat safari (Xiz)
+  ✓ 11. Barcha xodimlarni avtomatik reja bo'yicha to'ldirish (autoFillAllTabelRows)
+  ✓ 12. Tabeldan hisoblangan jami ish haqi bo'yicha NDFL, INPS va Ijtimoiy soliq hisobi
+  ✓ 13. Tabel ma'lumotlarini Supabase bazasiga moslashtirish (round-trip)
+
+>>> BARCHA 11 TA TEST SUITE 100% MUVAFFAQ QILINDI! <<<
 ```
 
 ---
@@ -345,7 +404,7 @@ Tizimning barcha hisob-kitob, kontragent tarixi, ishlab chiqarish, qayta ishlash
 3. [x] **1C:Korxona bilan ikki tomonlama sinxronizatsiya:** ✅ Bajarildi (1CClientBankExchange v1.03 matnli bank ayirboshlash, CommerceML 2.0 XML katalog va hujjatlar, EnterpriseData JSON, 3-tabli interaktiv modal, 10 ta avtotest).
 4. [x] **Avtomatik Backup tizimi:** ✅ Bajarildi (11 ta varaqli to'liq Excel kitobi, JSON snapshot, 7 kunlik tekshiruv, Dashboard ogohlantirish banneri va Sozlamalar integratsiyasi, 7 ta avtotest).
 5. [x] **Ko'p valyutali hisob va Markaziy Bank (CBU) kursi integratsiyasi:** ✅ Bajarildi (5210 xorijiy valyuta hisobvarag'i, O'zbekiston Markaziy Banki ochiq API integratsiyasi, api/cbu.js serverless keshli proksi, Topbar valyuta vidjeti va kalkulyator modali, BHMS 22 bo'yicha 9540 Daromad / 9640 Zarar kurs farqlari dvigateli, A4 rasmiy qayta baholash dalolatnomasi, F1 va F2 hisobotlariga to'liq integratsiya, 17 ta avtotest).
-6. [ ] **Xodimlar davomati va elektron Tabel (T-13 shakli):** Ish kunlari va soatlarini qayd qilish, kasallik varaqasi va ta'til pullari kalkulyatsiyasi.
+6. [x] **Xodimlar davomati va elektron Tabel (T-13 shakli):** ✅ Bajarildi (O'zbekiston T-13 shaklidagi elektron davomat tabeli, 5/6 kunlik ish grafiki va UZ_BAYRAMLARI taqvim me'yori, bayram arafasi -1 soat hisobi, MK 233-modda bo'yicha 25.3 bo'luvchili ta'til (otpusknoy) kalkulyatori, VM 1136-sonli nizom bo'yicha kasallik nafaqasi kalkulyatori, 1-klikda reja bo'yicha to'ldirish, faktik oylik hisobi va Ish haqiga sinxronizatsiya, NDFL/INPS/Ijtimoiy soliq integratsiyasi, rasmiy A4 albom T-13 chop etish va Excel eksport, 13 ta avtotest).
 
 
 

@@ -76,6 +76,14 @@ const ISHHAQI_DB_MAP = {
   sana: "sana", fio: "fio", lavozimi: "lavozimi", pinfl: "pinfl",
   turi: "turi", holati: "holati", oyliqSumma: "oyliq_summa", imtiyozSumma: "imtiyoz_summa", faylId: "fayl_id"
 };
+const TABEL_DB_MAP = {
+  yil: "yil", oy: "oy", xodimId: "xodim_id", fio: "fio", lavozimi: "lavozimi", pinfl: "pinfl",
+  oklad: "oklad", stavka: "stavka", grafik: "grafik", kunlar: "kunlar",
+  ishlanganKun: "ishlangan_kun", ishlanganSoat: "ishlangan_soat",
+  tatilKun: "tatil_kun", tatilSumma: "tatil_summa",
+  kasallikKun: "kasallik_kun", kasallikSumma: "kasallik_summa",
+  mukofot: "mukofot", faktikOylik: "faktik_oylik", jamiHisoblandi: "jami_hisoblandi", izoh: "izoh"
+};
 const OMBOR_DB_MAP = {
   sana: "sana", hujjatRaqami: "hujjat_raqami",
   kontragentInn: "kontragent_inn", kontragentNomi: "kontragent_nomi",
@@ -128,12 +136,12 @@ const ASOSIY_VOSITA_DB_MAP = {
 // yuklamalari" sahifasi va faylni o'chirishda kaskadli tozalash hech qanday
 // qo'shimcha kod yozmasdan avtomat ishlab ketadi.
 const TABLE_MAPS = {
-  kirim: INVOICE_DB_MAP, chiqim: INVOICE_DB_MAP, bank: BANK_DB_MAP, kassa: KASSA_DB_MAP, ishHaqi: ISHHAQI_DB_MAP, ombor: OMBOR_DB_MAP,
+  kirim: INVOICE_DB_MAP, chiqim: INVOICE_DB_MAP, bank: BANK_DB_MAP, kassa: KASSA_DB_MAP, ishHaqi: ISHHAQI_DB_MAP, tabel: TABEL_DB_MAP, ombor: OMBOR_DB_MAP,
   mahsulotlar: MAHSULOT_DB_MAP, ishlabChiqarish: ISHLAB_CHIQARISH_DB_MAP, fayllar: FAYL_DB_MAP,
   kontragentlar: KONTRAGENT_DB_MAP, asosiyVositalar: ASOSIY_VOSITA_DB_MAP, chiqimTafsil: CHIQIM_TAFSIL_DB_MAP
 };
 const TABLE_NAMES = {
-  kirim: "kirim", chiqim: "chiqim", bank: "bank", kassa: "kassa", ishHaqi: "ish_haqi", ombor: "ombor",
+  kirim: "kirim", chiqim: "chiqim", bank: "bank", kassa: "kassa", ishHaqi: "ish_haqi", tabel: "tabel", ombor: "ombor",
   mahsulotlar: "mahsulotlar", ishlabChiqarish: "ishlab_chiqarish", fayllar: "fayllar",
   kontragentlar: "kontragentlar", asosiyVositalar: "asosiy_vositalar", chiqimTafsil: "chiqim_tafsil"
 };
@@ -375,8 +383,9 @@ const CELL_VALIDATION_KIND = {
   // faktura kirim/chiqim
   summaQQSsiz: "amount", qqsSumma: "amount", qqsStavka: "percent", jamiSumma: "amount",
   kontragentInn: "inn", sana: "sana",
-  // ish haqi
+  // ish haqi va tabel
   oyliqSumma: "amount", imtiyozSumma: "amount", pinfl: "pinfl",
+  oklad: "amount", tatilSumma: "amount", kasallikSumma: "amount", mukofot: "amount",
   // bank
   kirim: "amount", chiqim: "amount", valyutaSumma: "amount", kurs: "amount"
 };
@@ -593,6 +602,7 @@ function defaultStore() {
     bank: [],
     kassa: [],
     ishHaqi: [],
+    tabel: [],
     ombor: [],
     mahsulotlar: [],
     ishlabChiqarish: [],
@@ -755,6 +765,13 @@ async function loadAllData() {
   } catch (err) {
     console.error(err);
     STORE.kassa = [];
+  }
+  try {
+    const tabel = await fetchAllRows("tabel");
+    STORE.tabel = tabel.map((r) => fromDbRow(TABEL_DB_MAP, r));
+  } catch (err) {
+    console.error(err);
+    STORE.tabel = [];
   }
   recomputeAllPaymentStatus();
   DATA_LOADED = true;
@@ -1318,6 +1335,7 @@ const PAGES = {
   ishlabchiqarish: { render: renderIshlabChiqarish },
   fayllar: { render: renderFayllar },
   ishhaqi: { render: renderIshHaqi },
+  tabel: { render: renderTabel },
   f2: { render: renderF2 },
   qqs: { render: renderQQS },
   foyda: { render: renderFoyda },
@@ -1425,6 +1443,8 @@ function updateNavBadges() {
   const elKassa = document.getElementById("navKassaCount");
   if (elKassa) elKassa.textContent = (STORE.kassa || []).length;
   document.getElementById("navIshHaqiCount").textContent = STORE.ishHaqi.length;
+  const elTabel = document.getElementById("navTabelCount");
+  if (elTabel) elTabel.textContent = (STORE.tabel || []).length;
   document.getElementById("navOmborCount").textContent = STORE.ombor.length;
   document.getElementById("navIshlabChiqarishCount").textContent = STORE.ishlabChiqarish.length;
   document.getElementById("navFayllarCount").textContent = STORE.fayllar.length;
@@ -9103,6 +9123,7 @@ function renderIshHaqi() {
         <p class="page-desc">Xodimlarga hisoblangan ish haqi — "Ish haqi hisoboti"ga (NDFL/ijtimoiy soliq) doim avtomatik integratsiya bo'ladi. F2 (moliyaviy natija)ga qo'shish ixtiyoriy — "Sozlamalar"da yoqing.</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnOpenTabel"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calendar"/></svg>Davomat va Tabel (T-13)</button>
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImportIshHaqi">Excel'dan import</button>
         <button class="btn" id="btnExportIshHaqi">Excel'ga eksport</button>
@@ -9154,6 +9175,8 @@ function renderIshHaqi() {
   `;
 
   document.getElementById("btnAddRow").addEventListener("click", addIshHaqiRow);
+  const btnTabel = document.getElementById("btnOpenTabel");
+  if (btnTabel) btnTabel.addEventListener("click", () => navigate("tabel"));
   document.getElementById("searchBox").addEventListener("input", (e) => filterIshHaqiRows(e.target.value));
   document.getElementById("btnExportIshHaqi").addEventListener("click", exportIshHaqiXlsx);
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
@@ -9345,6 +9368,1211 @@ async function addIshHaqiRow() {
   saveStore();
   renderIshHaqi();
   toast("Yangi xodim yozuvi qo'shildi");
+}
+
+/* ------------------------------- Davomat va Elektron Tabel (T-13 Shakli) ------------------------------- */
+// O'zbekiston Respublikasi Mehnat Kodeksi va Davlat statistika qo'mitasi
+// tomonidan tasdiqlangan T-13 shaklidagi "Ish vaqtidan foydalanishni hisobga olish tabeli".
+// Ish kunlari, dam olish kunlari (D), mehnat ta'tili (T / Otpusknoy),
+// kasallik varaqasi (K / Bolnichniy) va haqiqiy ishlangan soatlar hisobi.
+
+let CURRENT_TABEL_YEAR = new Date().getFullYear();
+let CURRENT_TABEL_MONTH = new Date().getMonth() + 1; // 1..12
+let TABEL_GRAFIK_FILTER = "5_kunlik";
+
+const UZ_BAYRAMLARI = {
+  "01-01": "Yangi yil",
+  "01-02": "Yangi yil qo'shimcha dam olish kuni",
+  "03-08": "Xalqaro xotin-qizlar kuni",
+  "03-21": "Navro'z bayrami",
+  "03-22": "Navro'z qo'shimcha dam olish kuni",
+  "05-09": "Xotira va qadrlash kuni",
+  "09-01": "Mustaqillik kuni",
+  "10-01": "O'qituvchi va murabbiylar kuni",
+  "12-08": "Konstitutsiya kuni"
+};
+
+const OYLAR_UZ = [
+  "", "Yanvar", "Fevral", "Mart", "Aprel", "May", "Iyun",
+  "Iyul", "Avgust", "Sentyabr", "Oktyabr", "Noyabr", "Dekabr"
+];
+
+const HAFTA_KUNLARI_QISQA = ["Yak", "Du", "Se", "Cho", "Pay", "Ju", "Sha"];
+
+function getUzbekistanHolidays(year) {
+  return UZ_BAYRAMLARI;
+}
+
+function getMonthlyWorkingDays(year, month, grafik = "5_kunlik") {
+  const y = toNum(year) || new Date().getFullYear();
+  const m = toNum(month) || (new Date().getMonth() + 1);
+  const totalDays = new Date(y, m, 0).getDate();
+  const holidays = getUzbekistanHolidays(y);
+
+  let standardWorkDays = 0;
+  let standardWorkHours = 0;
+  const daysList = [];
+
+  for (let d = 1; d <= totalDays; d++) {
+    const dt = new Date(y, m - 1, d);
+    const dayOfWeek = dt.getDay(); // 0: Yak, 1: Du, ... 6: Sha
+    const mm = String(m).padStart(2, "0");
+    const dd = String(d).padStart(2, "0");
+    const mmdd = `${mm}-${dd}`;
+    const isHoliday = !!holidays[mmdd];
+    const holidayName = holidays[mmdd] || "";
+
+    const isWeekend = grafik === "6_kunlik" ? (dayOfWeek === 0) : (dayOfWeek === 0 || dayOfWeek === 6);
+    const isRest = isWeekend || isHoliday;
+
+    let defaultCode = "8";
+    let defaultHours = 8;
+
+    if (isRest) {
+      defaultCode = "D";
+      defaultHours = 0;
+    } else {
+      // Bayram arafasida 1 soat qisqartiriladi
+      const nextDt = new Date(y, m - 1, d + 1);
+      const nextMmDd = `${String(nextDt.getMonth() + 1).padStart(2, "0")}-${String(nextDt.getDate()).padStart(2, "0")}`;
+      if (holidays[nextMmDd]) {
+        defaultCode = "7";
+        defaultHours = 7;
+      } else if (grafik === "6_kunlik") {
+        defaultCode = dayOfWeek === 6 ? "5" : "7";
+        defaultHours = dayOfWeek === 6 ? 5 : 7;
+      }
+      standardWorkDays++;
+      standardWorkHours += defaultHours;
+    }
+
+    daysList.push({
+      day: d,
+      dateStr: `${y}-${mm}-${dd}`,
+      weekday: dayOfWeek,
+      weekdayShort: HAFTA_KUNLARI_QISQA[dayOfWeek],
+      isWeekend,
+      isHoliday,
+      holidayName,
+      defaultCode,
+      defaultHours
+    });
+  }
+
+  return {
+    year: y,
+    month: m,
+    totalDays,
+    standardWorkDays,
+    standardWorkHours,
+    daysList
+  };
+}
+
+function calculateTabelRowTotals(row, year, month, grafik = "5_kunlik") {
+  const std = getMonthlyWorkingDays(year, month, grafik);
+  const kunlar = row.kunlar || {};
+  let ishlanganKun = 0;
+  let ishlanganSoat = 0;
+  let tatilKun = 0;
+  let kasallikKun = 0;
+  let ozHisobidanKun = 0;
+  let sababsizKun = 0;
+  let xizmatSafariKun = 0;
+
+  for (let d = 1; d <= std.totalDays; d++) {
+    const val = String(kunlar[d] !== undefined ? kunlar[d] : kunlar[String(d)] || "").trim();
+    if (!val) continue;
+
+    if (val === "T" || val === "t") {
+      tatilKun++;
+    } else if (val === "K" || val === "k") {
+      kasallikKun++;
+    } else if (val === "X" || val === "x") {
+      ozHisobidanKun++;
+    } else if (val === "S" || val === "s") {
+      sababsizKun++;
+    } else if (val.toLowerCase() === "xiz") {
+      xizmatSafariKun++;
+      ishlanganKun++;
+      ishlanganSoat += 8;
+    } else if (val === "D" || val === "d") {
+      // dam olish
+    } else {
+      const h = toNum(val);
+      if (h > 0) {
+        ishlanganKun++;
+        ishlanganSoat += h;
+      }
+    }
+  }
+
+  const oklad = toNum(row.oklad);
+  const stavka = toNum(row.stavka) || 1.0;
+  const effektivOklad = oklad * stavka;
+
+  // Faktik ishlangan oylik: (Effektiv Oklad / Me'yoriy ish kunlari) * Haqiqiy ishlangan kunlar
+  let faktikOylik = 0;
+  if (std.standardWorkDays > 0) {
+    if (ishlanganKun >= std.standardWorkDays) {
+      faktikOylik = Math.round(effektivOklad);
+    } else {
+      faktikOylik = Math.round((effektivOklad / std.standardWorkDays) * ishlanganKun);
+    }
+  } else {
+    faktikOylik = Math.round(effektivOklad);
+  }
+
+  const tatilSumma = toNum(row.tatilSumma);
+  const kasallikSumma = toNum(row.kasallikSumma);
+  const mukofot = toNum(row.mukofot);
+  const jamiHisoblandi = faktikOylik + tatilSumma + kasallikSumma + mukofot;
+
+  return {
+    ...row,
+    ishlanganKun,
+    ishlanganSoat,
+    tatilKun,
+    kasallikKun,
+    ozHisobidanKun,
+    sababsizKun,
+    xizmatSafariKun,
+    faktikOylik,
+    tatilSumma,
+    kasallikSumma,
+    mukofot,
+    jamiHisoblandi
+  };
+}
+
+// Mehnat ta'tili (Otpusknoy) kalkulyatori — O'zbekiston Mehnat Kodeksi 233-moddasi
+// 6 kunlik ish haftasi bo'yicha kunlik o'rtacha ish haqi: Oklad / 25.3
+function calculateTatilPuli(oklad, tatilKunlari) {
+  const okl = toNum(oklad);
+  const kunlar = toNum(tatilKunlari);
+  if (okl <= 0 || kunlar <= 0) return { oklad: okl, tatilKunlari: kunlar, kunlikOrtacha: 0, summa: 0 };
+  const kunlikOrtacha = okl / 25.3;
+  const summa = Math.round(kunlikOrtacha * kunlar);
+  return {
+    oklad: okl,
+    tatilKunlari: kunlar,
+    kunlikOrtacha: Math.round(kunlikOrtacha),
+    summa
+  };
+}
+
+// Kasallik varaqasi (Bolnichniy) kalkulyatori — O'zR VM Nizomi № 1136
+// Kunlik o'rtacha = Oklad / Oyning ish kunlari me'yori
+// Staj foizlari: 60% (8 yildan kam), 80% (8 yildan ko'p), 100% (imtiyozli/jarohat)
+function calculateKasallikPuli(oklad, standardWorkDays, kasallikIshKunlari, stajFoiz = 80) {
+  const okl = toNum(oklad);
+  const stdDays = toNum(standardWorkDays) || 22;
+  const kunlar = toNum(kasallikIshKunlari);
+  const foiz = toNum(stajFoiz) || 80;
+  if (okl <= 0 || kunlar <= 0) return { oklad: okl, standardWorkDays: stdDays, kasallikIshKunlari: kunlar, stajFoiz: foiz, kunlikOrtacha: 0, summa: 0 };
+  const kunlikOrtacha = okl / stdDays;
+  const summa = Math.round(kunlikOrtacha * kunlar * (foiz / 100));
+  return {
+    oklad: okl,
+    standardWorkDays: stdDays,
+    kasallikIshKunlari: kunlar,
+    stajFoiz: foiz,
+    kunlikOrtacha: Math.round(kunlikOrtacha),
+    summa
+  };
+}
+
+// Ish haqidagi xodimlarni tabelga sinxronlash
+function syncTabelFromIshHaqi(year, month) {
+  const y = toNum(year) || CURRENT_TABEL_YEAR;
+  const m = toNum(month) || CURRENT_TABEL_MONTH;
+  const ymPrefix = `${y}-${String(m).padStart(2, "0")}`;
+
+  if (!STORE.tabel) STORE.tabel = [];
+  const std = getMonthlyWorkingDays(y, m, TABEL_GRAFIK_FILTER);
+
+  // Tanlangan oyga tegishli yoki barcha unikal xodimlar
+  const monthEmployees = (STORE.ishHaqi || []).filter((r) => !r.sana || r.sana.startsWith(ymPrefix));
+  const pool = monthEmployees.length ? monthEmployees : (STORE.ishHaqi || []);
+
+  const seenPinfl = new Set();
+  let added = 0;
+
+  pool.forEach((emp) => {
+    const key = (emp.pinfl && emp.pinfl.trim()) || (emp.fio && emp.fio.trim());
+    if (!key || seenPinfl.has(key)) return;
+    seenPinfl.add(key);
+
+    const exists = STORE.tabel.find((t) =>
+      toNum(t.yil) === y && toNum(t.oy) === m &&
+      ((emp.pinfl && t.pinfl === emp.pinfl) || (t.fio && t.fio.toLowerCase() === (emp.fio || "").toLowerCase()))
+    );
+
+    if (!exists) {
+      // Default kunlar
+      const kunlar = {};
+      std.daysList.forEach((d) => { kunlar[d.day] = d.defaultCode; });
+
+      const newRow = calculateTabelRowTotals({
+        id: "tab_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        yil: y,
+        oy: m,
+        xodimId: emp.id || null,
+        fio: emp.fio || "",
+        lavozimi: emp.lavozimi || "",
+        pinfl: emp.pinfl || "",
+        oklad: toNum(emp.oyliqSumma) || 0,
+        stavka: 1.0,
+        grafik: TABEL_GRAFIK_FILTER,
+        kunlar,
+        tatilSumma: 0,
+        kasallikSumma: 0,
+        mukofot: 0,
+        izoh: ""
+      }, y, m, TABEL_GRAFIK_FILTER);
+
+      STORE.tabel.push(newRow);
+      added++;
+    }
+  });
+
+  saveStore();
+  return added;
+}
+
+// Barcha xodimlarni standart me'yor (8/D) bo'yicha to'ldirish
+function autoFillAllTabelRows(year, month) {
+  const y = toNum(year) || CURRENT_TABEL_YEAR;
+  const m = toNum(month) || CURRENT_TABEL_MONTH;
+  const std = getMonthlyWorkingDays(y, m, TABEL_GRAFIK_FILTER);
+
+  const rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === y && toNum(r.oy) === m);
+  rows.forEach((r) => {
+    const kunlar = {};
+    std.daysList.forEach((d) => { kunlar[d.day] = d.defaultCode; });
+    r.kunlar = kunlar;
+    r.tatilSumma = 0;
+    r.kasallikSumma = 0;
+    const updated = calculateTabelRowTotals(r, y, m, TABEL_GRAFIK_FILTER);
+    Object.assign(r, updated);
+    pushFieldsUpdate("tabel", r.id, {
+      kunlar: r.kunlar,
+      ishlanganKun: r.ishlanganKun,
+      ishlanganSoat: r.ishlanganSoat,
+      tatilKun: r.tatilKun,
+      tatilSumma: r.tatilSumma,
+      kasallikKun: r.kasallikKun,
+      kasallikSumma: r.kasallikSumma,
+      faktikOylik: r.faktikOylik,
+      jamiHisoblandi: r.jamiHisoblandi
+    });
+  });
+
+  saveStore();
+  return rows.length;
+}
+
+// Tabel bo'yicha hisoblangan jami ish haqini "Ish haqi" (oylik) bo'limiga o'tkazish
+async function syncTabelToIshHaqi(year, month) {
+  const y = toNum(year) || CURRENT_TABEL_YEAR;
+  const m = toNum(month) || CURRENT_TABEL_MONTH;
+  const ymPrefix = `${y}-${String(m).padStart(2, "0")}`;
+  const ymDate = `${ymPrefix}-01`;
+
+  const rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === y && toNum(r.oy) === m);
+  if (!rows.length) {
+    toast("Ushbu oy uchun tabel yozuvlari mavjud emas", "err");
+    return;
+  }
+
+  let updatedCount = 0;
+  let createdCount = 0;
+
+  for (const tRow of rows) {
+    // 1) Mos keluvchi ish_haqi satrini qidiramiz
+    let ihRow = (STORE.ishHaqi || []).find((ih) =>
+      (!ih.sana || ih.sana.startsWith(ymPrefix)) &&
+      ((tRow.pinfl && ih.pinfl && tRow.pinfl === ih.pinfl) || (tRow.fio && ih.fio && tRow.fio.toLowerCase() === ih.fio.toLowerCase()))
+    );
+
+    const newSalary = toNum(tRow.jamiHisoblandi);
+
+    if (ihRow) {
+      ihRow.oyliqSumma = newSalary;
+      if (!ihRow.sana) ihRow.sana = ymDate;
+      pushFieldsUpdate("ish_haqi", ihRow.id, { oyliqSumma: newSalary, sana: ihRow.sana });
+      updatedCount++;
+    } else {
+      const newIh = {
+        sana: ymDate,
+        fio: tRow.fio || "",
+        lavozimi: tRow.lavozimi || "",
+        pinfl: tRow.pinfl || "",
+        turi: "Rezident",
+        holati: "Ishlayapti",
+        oyliqSumma: newSalary,
+        imtiyozSumma: 0
+      };
+      const { data, error } = await sbClient.from("ish_haqi").insert(toDbRow(ISHHAQI_DB_MAP, newIh)).select().single();
+      if (!error && data) {
+        const added = fromDbRow(ISHHAQI_DB_MAP, data);
+        STORE.ishHaqi.push(added);
+        createdCount++;
+      }
+    }
+  }
+
+  saveStore();
+  updateNavBadges();
+  toast(`Tabel sinxronlandi: ${updatedCount} ta xodim oyligi yangilandi${createdCount ? `, ${createdCount} ta yangi qo'shildi` : ""}`);
+}
+
+// Tabel Asosiy Sahifasi
+function renderTabel() {
+  const year = CURRENT_TABEL_YEAR;
+  const month = CURRENT_TABEL_MONTH;
+  const std = getMonthlyWorkingDays(year, month, TABEL_GRAFIK_FILTER);
+
+  // Agar bu oy uchun tabel bo'sh bo'lsa, xodimlardan avtomatik to'ldiramiz
+  let rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === year && toNum(r.oy) === month);
+  if (!rows.length && (STORE.ishHaqi || []).length) {
+    syncTabelFromIshHaqi(year, month);
+    rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === year && toNum(r.oy) === month);
+  }
+
+  const main = document.getElementById("main");
+
+  // Jamlovchi ko'rsatkichlar
+  const totalEmployees = rows.length;
+  const totalIshlanganKun = rows.reduce((s, r) => s + toNum(r.ishlanganKun), 0);
+  const totalIshlanganSoat = rows.reduce((s, r) => s + toNum(r.ishlanganSoat), 0);
+  const totalTatilKun = rows.reduce((s, r) => s + toNum(r.tatilKun), 0);
+  const totalTatilSumma = rows.reduce((s, r) => s + toNum(r.tatilSumma), 0);
+  const totalKasallikKun = rows.reduce((s, r) => s + toNum(r.kasallikKun), 0);
+  const totalKasallikSumma = rows.reduce((s, r) => s + toNum(r.kasallikSumma), 0);
+  const totalJamiHisoblandi = rows.reduce((s, r) => s + toNum(r.jamiHisoblandi), 0);
+
+  main.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Davomat va Elektron Tabel (T-13 Shakli)</h1>
+        <p class="page-desc">O'zbekiston Respublikasi Mehnat Kodeksi talablariga muvofiq ish vaqtini hisobga olish, ta'til (otpusknoy) va kasallik (bolnichniy) hisob-kitoblari.</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn" id="btnAutoFillAll" title="Barcha xodimlarga standart me'yor (8/D) qo'yish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-zap"/></svg>⚡ Standart to'ldirish (8/D)</button>
+        <button class="btn" id="btnSyncFromIshHaqi" title="Ish haqi ro'yxatidan xodimlarni tabelga qo'shish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>Xodimlarni sinxronlash</button>
+        <button class="btn" id="btnOpenTatilModal"><svg class="ic" viewBox="0 0 24 24"><use href="#i-sun"/></svg>🏖️ Ta'til (Otpusknoy)</button>
+        <button class="btn" id="btnOpenKasallikModal"><svg class="ic" viewBox="0 0 24 24"><use href="#i-activity"/></svg>🩺 Kasallik (Bolnichniy)</button>
+        <button class="btn btn-primary" id="btnSyncToIshHaqi" title="Tabel hisob-kitobini Ish haqi (oylik) bo'limiga o'tkazish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-check"/></svg>Ish haqiga o'tkazish</button>
+        <button class="btn" id="btnPrintTabelT13"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>A4 Tabel (T-13)</button>
+        <button class="btn" id="btnExportTabel"><svg class="ic" viewBox="0 0 24 24"><use href="#i-download"/></svg>Excel</button>
+        <button class="btn btn-primary" id="btnAddTabelRow">+ Xodim qo'shish</button>
+      </div>
+    </div>
+
+    <!-- Oy va Yil boshqaruvi Toolbar -->
+    <div class="filter-bar" style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button class="btn btn-sm" id="btnPrevMonth">◀ Oldingi oy</button>
+        <div style="display:flex;align-items:center;gap:6px;background:var(--bg-sunken);border:1px solid var(--border);border-radius:6px;padding:4px 10px;">
+          <svg class="ic" viewBox="0 0 24 24" style="color:var(--primary);"><use href="#i-calendar"/></svg>
+          <span style="font-weight:700;font-size:13.5px;">${year}-yil ${OYLAR_UZ[month]}</span>
+        </div>
+        <button class="btn btn-sm" id="btnNextMonth">Keyingi oy ▶</button>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:12px;">
+        <label style="font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;">
+          Ish haftasi:
+          <select id="tabelGrafikSel" style="padding:3px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg-elevated);color:var(--text);">
+            <option value="5_kunlik" ${TABEL_GRAFIK_FILTER === "5_kunlik" ? "selected" : ""}>5 kunlik (40 soat)</option>
+            <option value="6_kunlik" ${TABEL_GRAFIK_FILTER === "6_kunlik" ? "selected" : ""}>6 kunlik (40 soat)</option>
+          </select>
+        </label>
+        <button class="btn btn-sm" id="btnBackToIshHaqi">← Ish haqi bo'limiga qaytish</button>
+      </div>
+    </div>
+
+    <div class="grid grid-5 section">
+      <div class="card stat-card"><div class="stat-label">Xodimlar soni</div><div class="stat-value">${totalEmployees} ta</div></div>
+      <div class="card stat-card"><div class="stat-label">Oy me'yori (Ish kun/soat)</div><div class="stat-value">${std.standardWorkDays} k. <small style="font-size:12px;color:var(--text-muted);">(${std.standardWorkHours} s.)</small></div></div>
+      <div class="card stat-card"><div class="stat-label">Haqiqiy ishlangan</div><div class="stat-value">${totalIshlanganKun} k. <small style="font-size:12px;color:var(--text-muted);">(${totalIshlanganSoat} s.)</small></div></div>
+      <div class="card stat-card"><div class="stat-label">Ta'til / Kasallik</div><div class="stat-value">${totalTatilKun} ta'til <small style="font-size:11px;color:var(--text-muted);">/ ${totalKasallikKun} kasal</small></div></div>
+      <div class="card stat-card"><div class="stat-label">Jami hisoblangan ish haqi</div><div class="stat-value" style="color:var(--primary);">${fmtSum(totalJamiHisoblandi)}</div></div>
+    </div>
+
+    <!-- Interaktiv Tabel Jadvali -->
+    <div class="tabel-scroll-wrap">
+      <table class="tabel-table">
+        <thead>
+          <tr>
+            <th class="tabel-sticky-col" style="width:36px;text-align:center !important;">№</th>
+            <th class="tabel-sticky-col" style="min-width:200px;left:36px;">Xodim (F.I.O., Lavozim)</th>
+            <th class="tabel-sticky-col" style="width:110px;left:236px;">Oklad (so'm)</th>
+            ${std.daysList.map((d) => `
+              <th class="tabel-day-th ${d.isWeekend || d.isHoliday ? "tabel-weekend-hdr" : ""}" title="${d.day}-${OYLAR_UZ[month]} (${d.weekdayShort})${d.holidayName ? `: ${d.holidayName}` : ""}">
+                <div class="tabel-day-num">${d.day}</div>
+                <div class="tabel-day-name">${d.weekdayShort}</div>
+              </th>
+            `).join("")}
+            <th style="min-width:60px;">Ishlangan kun</th>
+            <th style="min-width:60px;">Ishlangan soat</th>
+            <th style="min-width:80px;">Ta'til (so'm)</th>
+            <th style="min-width:80px;">Kasallik (so'm)</th>
+            <th style="min-width:110px;font-weight:700;">Jami hisoblandi</th>
+            <th style="min-width:90px;text-align:center;">Amallar</th>
+          </tr>
+        </thead>
+        <tbody id="tabelBody">
+          ${rows.length ? rows.map((r, i) => tabelRowHtml(r, i + 1, std)).join("") : `
+            <tr><td colspan="${std.totalDays + 9}" style="padding:24px;text-align:center;color:var(--text-muted);">
+              Ushbu oy uchun xodimlar tabeli topilmadi. Yuqoridagi "Xodimlarni sinxronlash" tugmasi orqali avtomatik to'ldirishingiz mumkin.
+            </td></tr>
+          `}
+        </tbody>
+        ${rows.length ? `
+          <tfoot>
+            <tr style="font-weight:700;background:var(--bg-sunken);">
+              <td class="tabel-sticky-col" colspan="2" style="text-align:right !important;padding-right:12px;">Jami:</td>
+              <td class="tabel-sticky-col" style="left:236px;">${fmtSum(rows.reduce((s, r) => s + toNum(r.oklad), 0))}</td>
+              <td colspan="${std.totalDays}"></td>
+              <td>${totalIshlanganKun}</td>
+              <td>${totalIshlanganSoat}</td>
+              <td>${fmtSum(totalTatilSumma)}</td>
+              <td>${fmtSum(totalKasallikSumma)}</td>
+              <td style="color:var(--primary);">${fmtSum(totalJamiHisoblandi)}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        ` : ""}
+      </table>
+    </div>
+
+    <!-- Tabel belgilari tavsifi (Legend) -->
+    <div class="tabel-legend">
+      <span style="font-weight:700;margin-right:6px;">Tabel belgilari:</span>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-work">8</span> Standart ish kuni (8 soat)</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-work">7 / 6 / 4</span> Qisqartirilgan ish soati</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-weekend">D</span> Dam olish / Bayram kuni</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-tatil">T</span> Mehnat ta'tili (Otpusknoy)</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-kasallik">K</span> Kasallik varaqasi (Bolnichniy)</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-leave">X</span> O'z hisobidan (Haq to'lanmaydigan)</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-absent">S</span> Sababsiz kelmagan (Прогул)</div>
+      <div class="tabel-legend-item"><span class="tabel-tag tabel-tag-trip">Xiz</span> Xizmat safari</div>
+    </div>
+  `;
+
+  bindTabelEvents(std);
+}
+
+function tabelRowHtml(r, index, std) {
+  const kunlar = r.kunlar || {};
+
+  return `
+    <tr data-row-id="${escapeHtml(r.id)}">
+      <td class="tabel-sticky-col" style="text-align:center !important;">${index}</td>
+      <td class="tabel-sticky-col" style="left:36px;">
+        <input class="cell-input tabel-fio-inp" style="font-weight:600;font-size:12.5px;width:100%;" value="${escapeHtml(r.fio || "")}" placeholder="Xodim F.I.O.">
+        <div style="font-size:11px;color:var(--text-muted);display:flex;gap:6px;margin-top:2px;">
+          <span>${escapeHtml(r.lavozimi || "Lavozimsiz")}</span>
+          ${r.pinfl ? `<span>• PINFL: ${escapeHtml(r.pinfl)}</span>` : ""}
+        </div>
+      </td>
+      <td class="tabel-sticky-col" style="left:236px;">
+        <input class="cell-input num tabel-oklad-inp" style="font-weight:700;width:100%;" value="${fmt(r.oklad || 0)}">
+      </td>
+      ${std.daysList.map((d) => {
+        const val = String(kunlar[d.day] !== undefined ? kunlar[d.day] : kunlar[String(d.day)] || d.defaultCode).trim();
+        let cls = "tabel-tag-work";
+        if (val === "D" || val === "d") cls = "tabel-tag-weekend";
+        else if (val === "T" || val === "t") cls = "tabel-tag-tatil";
+        else if (val === "K" || val === "k") cls = "tabel-tag-kasallik";
+        else if (val === "X" || val === "x") cls = "tabel-tag-leave";
+        else if (val === "S" || val === "s") cls = "tabel-tag-absent";
+        else if (val.toLowerCase() === "xiz") cls = "tabel-tag-trip";
+
+        return `
+          <td class="${d.isWeekend || d.isHoliday ? "tabel-weekend" : ""}">
+            <input class="tabel-cell-inp ${cls}" data-row-id="${escapeHtml(r.id)}" data-day="${d.day}" value="${escapeHtml(val)}" maxlength="3" title="${d.day}-kun (${d.weekdayShort}): ${escapeHtml(val)}">
+          </td>
+        `;
+      }).join("")}
+      <td class="num row-ishlangan-kun" style="font-weight:600;">${r.ishlanganKun || 0}</td>
+      <td class="num row-ishlangan-soat">${r.ishlanganSoat || 0}</td>
+      <td class="num row-tatil-summa" style="font-size:11.5px;">
+        ${r.tatilKun ? `<div>${r.tatilKun} k.</div><div style="color:#d97706;font-weight:600;">${fmtSum(r.tatilSumma)}</div>` : `<span class="faint">—</span>`}
+      </td>
+      <td class="num row-kasallik-summa" style="font-size:11.5px;">
+        ${r.kasallikKun ? `<div>${r.kasallikKun} k.</div><div style="color:#ef4444;font-weight:600;">${fmtSum(r.kasallikSumma)}</div>` : `<span class="faint">—</span>`}
+      </td>
+      <td class="num row-jami-hisoblandi" style="font-weight:700;color:var(--primary);font-size:12.5px;">
+        ${fmtSum(r.jamiHisoblandi || 0)}
+      </td>
+      <td style="text-align:center;white-space:nowrap;">
+        <button class="btn btn-sm" data-tatil-id="${escapeHtml(r.id)}" title="Ta'til hisoblash" style="padding:2px 5px;color:#d97706;">🏖️</button>
+        <button class="btn btn-sm" data-kasallik-id="${escapeHtml(r.id)}" title="Kasallik varaqasi hisoblash" style="padding:2px 5px;color:#ef4444;">🩺</button>
+        <button class="btn btn-sm btn-icon" data-del-tabel-id="${escapeHtml(r.id)}" title="O'chirish" style="padding:2px 5px;color:var(--danger);"><svg class="ic" viewBox="0 0 24 24"><use href="#i-trash"/></svg></button>
+      </td>
+    </tr>
+  `;
+}
+
+function bindTabelEvents(std) {
+  const year = CURRENT_TABEL_YEAR;
+  const month = CURRENT_TABEL_MONTH;
+
+  // Navigatsiya
+  document.getElementById("btnPrevMonth").addEventListener("click", () => {
+    CURRENT_TABEL_MONTH--;
+    if (CURRENT_TABEL_MONTH < 1) { CURRENT_TABEL_MONTH = 12; CURRENT_TABEL_YEAR--; }
+    renderTabel();
+  });
+  document.getElementById("btnNextMonth").addEventListener("click", () => {
+    CURRENT_TABEL_MONTH++;
+    if (CURRENT_TABEL_MONTH > 12) { CURRENT_TABEL_MONTH = 1; CURRENT_TABEL_YEAR++; }
+    renderTabel();
+  });
+
+  const selGrafik = document.getElementById("tabelGrafikSel");
+  if (selGrafik) {
+    selGrafik.addEventListener("change", (e) => {
+      TABEL_GRAFIK_FILTER = e.target.value;
+      renderTabel();
+    });
+  }
+
+  const btnBack = document.getElementById("btnBackToIshHaqi");
+  if (btnBack) btnBack.addEventListener("click", () => navigate("ishhaqi"));
+
+  document.getElementById("btnSyncFromIshHaqi").addEventListener("click", () => {
+    const added = syncTabelFromIshHaqi(year, month);
+    renderTabel();
+    toast(added ? `${added} ta yangi xodim tabelga qo'shildi` : "Barcha xodimlar allaqachon tabelda mavjud");
+  });
+
+  document.getElementById("btnAutoFillAll").addEventListener("click", () => {
+    autoFillAllTabelRows(year, month);
+    renderTabel();
+    toast("Barcha xodimlarga standart ish kunlari (8/D) qo'yildi");
+  });
+
+  document.getElementById("btnSyncToIshHaqi").addEventListener("click", () => {
+    syncTabelToIshHaqi(year, month);
+  });
+
+  document.getElementById("btnOpenTatilModal").addEventListener("click", () => openTatilModal());
+  document.getElementById("btnOpenKasallikModal").addEventListener("click", () => openKasallikModal());
+  document.getElementById("btnPrintTabelT13").addEventListener("click", () => printTabelT13(year, month));
+  document.getElementById("btnExportTabel").addEventListener("click", () => exportTabelXlsx(year, month));
+  document.getElementById("btnAddTabelRow").addEventListener("click", () => addTabelRow(year, month));
+
+  // Jadval kataklaridagi tahrirlashlar
+  const body = document.getElementById("tabelBody");
+  if (!body) return;
+
+  // Kunlik katak o'zgarishi
+  body.addEventListener("change", (e) => {
+    const inp = e.target;
+    if (inp.classList.contains("tabel-cell-inp")) {
+      const rowId = inp.dataset.rowId;
+      const day = inp.dataset.day;
+      const rawVal = inp.value.trim();
+
+      let val = rawVal.toUpperCase();
+      if (!val) val = "0";
+
+      inp.value = val;
+
+      const row = (STORE.tabel || []).find((r) => r.id === rowId);
+      if (!row) return;
+
+      if (!row.kunlar) row.kunlar = {};
+      row.kunlar[day] = val;
+
+      const updated = calculateTabelRowTotals(row, year, month, TABEL_GRAFIK_FILTER);
+      Object.assign(row, updated);
+
+      // DOM qatorini yangilaymiz
+      const tr = inp.closest("tr");
+      if (tr) {
+        tr.querySelector(".row-ishlangan-kun").textContent = updated.ishlanganKun;
+        tr.querySelector(".row-ishlangan-soat").textContent = updated.ishlanganSoat;
+        tr.querySelector(".row-tatil-summa").innerHTML = updated.tatilKun ? `<div>${updated.tatilKun} k.</div><div style="color:#d97706;font-weight:600;">${fmtSum(updated.tatilSumma)}</div>` : `<span class="faint">—</span>`;
+        tr.querySelector(".row-kasallik-summa").innerHTML = updated.kasallikKun ? `<div>${updated.kasallikKun} k.</div><div style="color:#ef4444;font-weight:600;">${fmtSum(updated.kasallikSumma)}</div>` : `<span class="faint">—</span>`;
+        tr.querySelector(".row-jami-hisoblandi").textContent = fmtSum(updated.jamiHisoblandi);
+
+        // Sinflar
+        inp.className = "tabel-cell-inp " + (
+          val === "D" ? "tabel-tag-weekend" :
+          val === "T" ? "tabel-tag-tatil" :
+          val === "K" ? "tabel-tag-kasallik" :
+          val === "X" ? "tabel-tag-leave" :
+          val === "S" ? "tabel-tag-absent" :
+          val.toLowerCase() === "xiz" ? "tabel-tag-trip" : "tabel-tag-work"
+        );
+      }
+
+      saveStore();
+      pushFieldsUpdate("tabel", row.id, {
+        kunlar: row.kunlar,
+        ishlanganKun: updated.ishlanganKun,
+        ishlanganSoat: updated.ishlanganSoat,
+        tatilKun: updated.tatilKun,
+        tatilSumma: updated.tatilSumma,
+        kasallikKun: updated.kasallikKun,
+        kasallikSumma: updated.kasallikSumma,
+        faktikOylik: updated.faktikOylik,
+        jamiHisoblandi: updated.jamiHisoblandi
+      });
+    } else if (inp.classList.contains("tabel-oklad-inp")) {
+      const tr = inp.closest("tr");
+      const rowId = tr.dataset.rowId;
+      const row = (STORE.tabel || []).find((r) => r.id === rowId);
+      if (!row) return;
+
+      row.oklad = toNum(inp.value);
+      inp.value = fmt(row.oklad);
+
+      const updated = calculateTabelRowTotals(row, year, month, TABEL_GRAFIK_FILTER);
+      Object.assign(row, updated);
+
+      tr.querySelector(".row-jami-hisoblandi").textContent = fmtSum(updated.jamiHisoblandi);
+      saveStore();
+      pushFieldsUpdate("tabel", row.id, { oklad: row.oklad, faktikOylik: updated.faktikOylik, jamiHisoblandi: updated.jamiHisoblandi });
+    } else if (inp.classList.contains("tabel-fio-inp")) {
+      const tr = inp.closest("tr");
+      const rowId = tr.dataset.rowId;
+      const row = (STORE.tabel || []).find((r) => r.id === rowId);
+      if (!row) return;
+      row.fio = inp.value.trim();
+      saveStore();
+      pushFieldsUpdate("tabel", row.id, { fio: row.fio });
+    }
+  });
+
+  // Tugmalar
+  body.addEventListener("click", (e) => {
+    const btnTatil = e.target.closest("[data-tatil-id]");
+    if (btnTatil) {
+      openTatilModal(btnTatil.dataset.tatilId);
+      return;
+    }
+    const btnKas = e.target.closest("[data-kasallik-id]");
+    if (btnKas) {
+      openKasallikModal(btnKas.dataset.kasallikId);
+      return;
+    }
+    const btnDel = e.target.closest("[data-del-tabel-id]");
+    if (btnDel) {
+      deleteRowSafe("tabel", "tabel", btnDel.dataset.delTabelId, renderTabel);
+      return;
+    }
+  });
+}
+
+// Yangi xodim qo'shish
+async function addTabelRow(year, month) {
+  const y = toNum(year) || CURRENT_TABEL_YEAR;
+  const m = toNum(month) || CURRENT_TABEL_MONTH;
+  const std = getMonthlyWorkingDays(y, m, TABEL_GRAFIK_FILTER);
+
+  const kunlar = {};
+  std.daysList.forEach((d) => { kunlar[d.day] = d.defaultCode; });
+
+  const rawRow = {
+    yil: y,
+    oy: m,
+    xodimId: null,
+    fio: "",
+    lavozimi: "",
+    pinfl: "",
+    oklad: 0,
+    stavka: 1.0,
+    grafik: TABEL_GRAFIK_FILTER,
+    kunlar,
+    ishlanganKun: std.standardWorkDays,
+    ishlanganSoat: std.standardWorkHours,
+    tatilKun: 0,
+    tatilSumma: 0,
+    kasallikKun: 0,
+    kasallikSumma: 0,
+    mukofot: 0,
+    faktikOylik: 0,
+    jamiHisoblandi: 0,
+    izoh: ""
+  };
+
+  const { data, error } = await sbClient.from("tabel").insert(toDbRow(TABEL_DB_MAP, rawRow)).select().single();
+  let row;
+  if (!error && data) {
+    row = fromDbRow(TABEL_DB_MAP, data);
+  } else {
+    row = { id: "tab_" + Date.now(), ...rawRow };
+  }
+
+  if (!STORE.tabel) STORE.tabel = [];
+  STORE.tabel.push(row);
+  saveStore();
+  renderTabel();
+  toast("Yangi xodim tabelga qo'shildi");
+}
+
+// Mehnat ta'tili (Otpusknoy) Modali
+function openTatilModal(targetRowId) {
+  const year = CURRENT_TABEL_YEAR;
+  const month = CURRENT_TABEL_MONTH;
+  const rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === year && toNum(r.oy) === month);
+
+  if (!rows.length) {
+    toast("Avval tabelga xodim qo'shing", "err");
+    return;
+  }
+
+  const selectedRow = targetRowId ? rows.find((r) => r.id === targetRowId) || rows[0] : rows[0];
+  const std = getMonthlyWorkingDays(year, month, TABEL_GRAFIK_FILTER);
+
+  openModal(`
+    <div style="max-width:540px;width:100%;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="width:36px;height:36px;border-radius:8px;background:rgba(245,158,11,0.2);display:flex;align-items:center;justify-content:center;color:#d97706;font-size:18px;">🏖️</div>
+        <div>
+          <h3 style="margin:0;">Mehnat ta'tili (Otpusknoy) hisoblash</h3>
+          <p class="modal-sub" style="margin:2px 0 0;">O'zbekiston Mehnat Kodeksi 233-moddasi (25.3 kunlik o'rtacha koeffitsient)</p>
+        </div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;">Xodimni tanlang:</label>
+        <select id="tatilRowSelect" class="cell-input" style="width:100%;margin-top:4px;padding:6px 8px;">
+          ${rows.map((r) => `<option value="${escapeHtml(r.id)}" ${r.id === selectedRow.id ? "selected" : ""}>${escapeHtml(r.fio || "Nomsiz xodim")} (${fmt(r.oklad)} so'm)</option>`).join("")}
+        </select>
+      </div>
+
+      <div class="grid grid-2" style="gap:10px;margin-bottom:12px;">
+        <div>
+          <label style="font-size:12px;font-weight:600;">Boshlanish kuni:</label>
+          <input type="number" id="tatilStartDay" class="cell-input" min="1" max="${std.totalDays}" value="1" style="width:100%;margin-top:4px;">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;">Tugash kuni (shu kun ham):</label>
+          <input type="number" id="tatilEndDay" class="cell-input" min="1" max="${std.totalDays}" value="${Math.min(15, std.totalDays)}" style="width:100%;margin-top:4px;">
+        </div>
+      </div>
+
+      <div class="tabel-calc-box">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12.5px;">
+          <span style="color:var(--text-muted);">Xodim okladi:</span>
+          <b id="tatilOkladLabel">${fmt(selectedRow.oklad)} so'm</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12.5px;">
+          <span style="color:var(--text-muted);">Bir kunlik o'rtacha ish haqi (Oklad / 25.3):</span>
+          <b id="tatilDailyRateLabel">${fmt(Math.round(toNum(selectedRow.oklad) / 25.3))} so'm</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12.5px;">
+          <span style="color:var(--text-muted);">Ta'til kunlari soni:</span>
+          <b id="tatilDaysCountLabel">15 kun</b>
+        </div>
+        <div style="border-top:1px dashed var(--border);padding-top:8px;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:700;">Hisoblangan ta'til puli:</span>
+          <span id="tatilTotalLabel" style="font-size:18px;font-weight:800;color:#d97706;">${fmt(calculateTatilPuli(selectedRow.oklad, 15).summa)} so'm</span>
+        </div>
+      </div>
+
+      <div class="note" style="margin-bottom:16px;">
+        "Tabelga kiritish" tugmasi bosilganda tanlangan kunlar tabelda avtomatik <b>T</b> belgisi bilan belgilanadi va ta'til puli xodim ish haqiga qo'shiladi.
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" id="mCancel">Bekor qilish</button>
+        <button class="btn btn-primary" id="btnApplyTatil">Tabelga kiritish va hisoblash</button>
+      </div>
+    </div>
+  `);
+
+  function updateCalc() {
+    const selId = document.getElementById("tatilRowSelect").value;
+    const r = rows.find((x) => x.id === selId) || selectedRow;
+    const startDay = Math.max(1, Math.min(std.totalDays, toNum(document.getElementById("tatilStartDay").value) || 1));
+    const endDay = Math.max(startDay, Math.min(std.totalDays, toNum(document.getElementById("tatilEndDay").value) || startDay));
+    const daysCount = endDay - startDay + 1;
+
+    const calc = calculateTatilPuli(r.oklad, daysCount);
+    document.getElementById("tatilOkladLabel").textContent = fmt(calc.oklad) + " so'm";
+    document.getElementById("tatilDailyRateLabel").textContent = fmt(calc.kunlikOrtacha) + " so'm";
+    document.getElementById("tatilDaysCountLabel").textContent = daysCount + " kun";
+    document.getElementById("tatilTotalLabel").textContent = fmt(calc.summa) + " so'm";
+  }
+
+  document.getElementById("tatilRowSelect").addEventListener("change", updateCalc);
+  document.getElementById("tatilStartDay").addEventListener("input", updateCalc);
+  document.getElementById("tatilEndDay").addEventListener("input", updateCalc);
+
+  document.getElementById("btnApplyTatil").addEventListener("click", () => {
+    const selId = document.getElementById("tatilRowSelect").value;
+    const r = rows.find((x) => x.id === selId);
+    if (!r) return;
+
+    const startDay = Math.max(1, Math.min(std.totalDays, toNum(document.getElementById("tatilStartDay").value) || 1));
+    const endDay = Math.max(startDay, Math.min(std.totalDays, toNum(document.getElementById("tatilEndDay").value) || startDay));
+    const daysCount = endDay - startDay + 1;
+    const calc = calculateTatilPuli(r.oklad, daysCount);
+
+    if (!r.kunlar) r.kunlar = {};
+    for (let d = startDay; d <= endDay; d++) {
+      r.kunlar[d] = "T";
+    }
+    r.tatilSumma = calc.summa;
+
+    const updated = calculateTabelRowTotals(r, year, month, TABEL_GRAFIK_FILTER);
+    Object.assign(r, updated);
+
+    saveStore();
+    pushFieldsUpdate("tabel", r.id, {
+      kunlar: r.kunlar,
+      ishlanganKun: r.ishlanganKun,
+      ishlanganSoat: r.ishlanganSoat,
+      tatilKun: r.tatilKun,
+      tatilSumma: r.tatilSumma,
+      faktikOylik: r.faktikOylik,
+      jamiHisoblandi: r.jamiHisoblandi
+    });
+
+    closeModal();
+    renderTabel();
+    toast(`Ta'til puli muvaffaqiyatli hisoblandi: ${fmt(calc.summa)} so'm (${daysCount} kun)`);
+  });
+}
+
+// Kasallik varaqasi (Bolnichniy) Modali
+function openKasallikModal(targetRowId) {
+  const year = CURRENT_TABEL_YEAR;
+  const month = CURRENT_TABEL_MONTH;
+  const rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === year && toNum(r.oy) === month);
+
+  if (!rows.length) {
+    toast("Avval tabelga xodim qo'shing", "err");
+    return;
+  }
+
+  const selectedRow = targetRowId ? rows.find((r) => r.id === targetRowId) || rows[0] : rows[0];
+  const std = getMonthlyWorkingDays(year, month, TABEL_GRAFIK_FILTER);
+
+  openModal(`
+    <div style="max-width:540px;width:100%;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+        <div style="width:36px;height:36px;border-radius:8px;background:rgba(239,68,68,0.2);display:flex;align-items:center;justify-content:center;color:#ef4444;font-size:18px;">🩺</div>
+        <div>
+          <h3 style="margin:0;">Kasallik varaqasi (Bolnichniy) hisoblash</h3>
+          <p class="modal-sub" style="margin:2px 0 0;">O'zR VM Nizomi № 1136 bo'yicha staj va ish kunlari asosida nafaqa</p>
+        </div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;">Xodimni tanlang:</label>
+        <select id="kasRowSelect" class="cell-input" style="width:100%;margin-top:4px;padding:6px 8px;">
+          ${rows.map((r) => `<option value="${escapeHtml(r.id)}" ${r.id === selectedRow.id ? "selected" : ""}>${escapeHtml(r.fio || "Nomsiz xodim")} (${fmt(r.oklad)} so'm)</option>`).join("")}
+        </select>
+      </div>
+
+      <div class="grid grid-2" style="gap:10px;margin-bottom:12px;">
+        <div>
+          <label style="font-size:12px;font-weight:600;">Boshlanish kuni:</label>
+          <input type="number" id="kasStartDay" class="cell-input" min="1" max="${std.totalDays}" value="1" style="width:100%;margin-top:4px;">
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;">Tugash kuni (shu kun ham):</label>
+          <input type="number" id="kasEndDay" class="cell-input" min="1" max="${std.totalDays}" value="${Math.min(7, std.totalDays)}" style="width:100%;margin-top:4px;">
+        </div>
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;font-weight:600;">Mehnat staji bo'yicha to'lov foizi:</label>
+        <select id="kasStajSelect" class="cell-input" style="width:100%;margin-top:4px;padding:6px 8px;">
+          <option value="60">60% — 8 yildan kam umumiy staj</option>
+          <option value="80" selected>80% — 8 yildan ortiq umumiy staj (Standart)</option>
+          <option value="100">100% — Ishlab chiqarishdagi jarohat / Imtiyozli</option>
+        </select>
+      </div>
+
+      <div class="tabel-calc-box">
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12.5px;">
+          <span style="color:var(--text-muted);">Xodim okladi:</span>
+          <b id="kasOkladLabel">${fmt(selectedRow.oklad)} so'm</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12.5px;">
+          <span style="color:var(--text-muted);">Bir ish kuni o'rtacha haqi (Oklad / ${std.standardWorkDays}):</span>
+          <b id="kasDailyRateLabel">${fmt(Math.round(toNum(selectedRow.oklad) / (std.standardWorkDays || 22)))} so'm</b>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-size:12.5px;">
+          <span style="color:var(--text-muted);">Kasallik ish kunlari soni:</span>
+          <b id="kasDaysCountLabel">5 kun</b>
+        </div>
+        <div style="border-top:1px dashed var(--border);padding-top:8px;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:700;">Hisoblangan kasallik nafaqasi:</span>
+          <span id="kasTotalLabel" style="font-size:18px;font-weight:800;color:#ef4444;">${fmt(calculateKasallikPuli(selectedRow.oklad, std.standardWorkDays, 5, 80).summa)} so'm</span>
+        </div>
+      </div>
+
+      <div class="note" style="margin-bottom:16px;">
+        "Tabelga kiritish" tugmasi bosilganda oraliqdagi ish kunlariga <b>K</b> belgisi qo'yiladi (dam olish kunlariga tegilmaydi) va nafaqa summasi xodim ish haqiga qo'shiladi.
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn" id="mCancel">Bekor qilish</button>
+        <button class="btn btn-primary" id="btnApplyKasallik">Tabelga kiritish va hisoblash</button>
+      </div>
+    </div>
+  `);
+
+  function countWorkDaysInRange(start, end) {
+    let count = 0;
+    for (let d = start; d <= end; d++) {
+      const item = std.daysList.find((x) => x.day === d);
+      if (item && !item.isWeekend && !item.isHoliday) count++;
+    }
+    return count;
+  }
+
+  function updateCalc() {
+    const selId = document.getElementById("kasRowSelect").value;
+    const r = rows.find((x) => x.id === selId) || selectedRow;
+    const startDay = Math.max(1, Math.min(std.totalDays, toNum(document.getElementById("kasStartDay").value) || 1));
+    const endDay = Math.max(startDay, Math.min(std.totalDays, toNum(document.getElementById("kasEndDay").value) || startDay));
+    const stajFoiz = toNum(document.getElementById("kasStajSelect").value) || 80;
+    const workDays = countWorkDaysInRange(startDay, endDay);
+
+    const calc = calculateKasallikPuli(r.oklad, std.standardWorkDays, workDays, stajFoiz);
+    document.getElementById("kasOkladLabel").textContent = fmt(calc.oklad) + " so'm";
+    document.getElementById("kasDailyRateLabel").textContent = fmt(calc.kunlikOrtacha) + " so'm";
+    document.getElementById("kasDaysCountLabel").textContent = workDays + " ish kuni";
+    document.getElementById("kasTotalLabel").textContent = fmt(calc.summa) + " so'm";
+  }
+
+  document.getElementById("kasRowSelect").addEventListener("change", updateCalc);
+  document.getElementById("kasStartDay").addEventListener("input", updateCalc);
+  document.getElementById("kasEndDay").addEventListener("input", updateCalc);
+  document.getElementById("kasStajSelect").addEventListener("change", updateCalc);
+
+  document.getElementById("btnApplyKasallik").addEventListener("click", () => {
+    const selId = document.getElementById("kasRowSelect").value;
+    const r = rows.find((x) => x.id === selId);
+    if (!r) return;
+
+    const startDay = Math.max(1, Math.min(std.totalDays, toNum(document.getElementById("kasStartDay").value) || 1));
+    const endDay = Math.max(startDay, Math.min(std.totalDays, toNum(document.getElementById("kasEndDay").value) || startDay));
+    const stajFoiz = toNum(document.getElementById("kasStajSelect").value) || 80;
+    const workDays = countWorkDaysInRange(startDay, endDay);
+    const calc = calculateKasallikPuli(r.oklad, std.standardWorkDays, workDays, stajFoiz);
+
+    if (!r.kunlar) r.kunlar = {};
+    for (let d = startDay; d <= endDay; d++) {
+      const item = std.daysList.find((x) => x.day === d);
+      if (item && !item.isWeekend && !item.isHoliday) {
+        r.kunlar[d] = "K";
+      }
+    }
+    r.kasallikSumma = calc.summa;
+
+    const updated = calculateTabelRowTotals(r, year, month, TABEL_GRAFIK_FILTER);
+    Object.assign(r, updated);
+
+    saveStore();
+    pushFieldsUpdate("tabel", r.id, {
+      kunlar: r.kunlar,
+      ishlanganKun: r.ishlanganKun,
+      ishlanganSoat: r.ishlanganSoat,
+      kasallikKun: r.kasallikKun,
+      kasallikSumma: r.kasallikSumma,
+      faktikOylik: r.faktikOylik,
+      jamiHisoblandi: r.jamiHisoblandi
+    });
+
+    closeModal();
+    renderTabel();
+    toast(`Kasallik nafaqasi muvaffaqiyatli hisoblandi: ${fmt(calc.summa)} so'm (${workDays} ish kuni)`);
+  });
+}
+
+// Rasmiy A4 Tabel (T-13 Shakli) Chop Etish
+function printTabelT13(year, month) {
+  const s = STORE.settings;
+  const kompaniya = s.companyName || "«FORGET KORXONASI»";
+  const inn = s.inn || "—";
+  const rahbar = s.rahbar || "Korxona rahbari";
+  const std = getMonthlyWorkingDays(year, month, TABEL_GRAFIK_FILTER);
+  const rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === year && toNum(r.oy) === month);
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="uz">
+    <head>
+      <meta charset="utf-8">
+      <title>Tabel T-13 — ${year}-yil ${OYLAR_UZ[month]}</title>
+      <style>
+        @page { size: A4 landscape; margin: 10mm 8mm 10mm 8mm; }
+        body { font-family: "Times New Roman", Times, serif; font-size: 8.5pt; color: #000; line-height: 1.2; margin: 0; padding: 5px; }
+        .stamp-block { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 9pt; }
+        .title { text-align: center; font-weight: bold; font-size: 11.5pt; text-transform: uppercase; margin: 5px 0 2px; }
+        .sub { text-align: center; font-size: 9.5pt; font-style: italic; margin-bottom: 8px; }
+        table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 8pt; }
+        th, td { border: 1px solid #000; padding: 2px 1px; text-align: center; }
+        th { background: #f2f2f2; font-weight: bold; }
+        td.left { text-align: left; padding-left: 4px; }
+        td.num { text-align: right; padding-right: 4px; }
+        .signatures { display: flex; justify-content: space-between; margin-top: 25px; font-size: 9.5pt; }
+        .sign-col { width: 30%; }
+        .sign-line { border-bottom: 1px solid #000; height: 22px; margin-top: 3px; }
+        @media print {
+          body { padding: 0; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="stamp-block">
+        <div>
+          <b>${escapeHtml(kompaniya)}</b><br>
+          STIR / INN: ${escapeHtml(inn)}<br>
+          Tarkibiy bo'linma: <b>Barcha bo'limlar</b>
+        </div>
+        <div style="text-align:right;">
+          Davlat statistika qo'mitasi va Moliya vazirligi<br>
+          tomonidan tasdiqlangan <b>T-13 shakli</b>
+        </div>
+      </div>
+
+      <div class="title">ISH VAQTIDAN FOYDALANISHNI HISOBGA OLISH VA ISH HAQI HISOB-KITOBI TABELI</div>
+      <div class="sub">${year}-yil ${escapeHtml(OYLAR_UZ[month])} oyi uchun</div>
+
+      <table>
+        <thead>
+          <tr>
+            <th rowspan="2" style="width:20px;">№</th>
+            <th rowspan="2" style="width:130px;">Familiyasi, ismi, sharifi</th>
+            <th rowspan="2" style="width:75px;">Lavozimi</th>
+            <th rowspan="2" style="width:65px;">PINFL</th>
+            <th colspan="${std.totalDays}">Oy kunlari bo'yicha belgilar (davomat)</th>
+            <th colspan="2">Ishlangan</th>
+            <th colspan="2">Ishlanmagan kunlar</th>
+            <th rowspan="2" style="width:65px;">Oklad</th>
+            <th rowspan="2" style="width:75px;">Jami hisoblandi</th>
+          </tr>
+          <tr>
+            ${std.daysList.map((d) => `<th style="width:16px;font-size:7pt;">${d.day}</th>`).join("")}
+            <th style="width:30px;">kun</th>
+            <th style="width:32px;">soat</th>
+            <th style="width:30px;">ta'til</th>
+            <th style="width:30px;">kasal</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map((r, i) => `
+            <tr>
+              <td>${i + 1}</td>
+              <td class="left"><b>${escapeHtml(r.fio || "")}</b></td>
+              <td class="left">${escapeHtml(r.lavozimi || "")}</td>
+              <td>${escapeHtml(r.pinfl || "—")}</td>
+              ${std.daysList.map((d) => {
+                const val = (r.kunlar && (r.kunlar[d.day] || r.kunlar[String(d.day)])) || d.defaultCode;
+                return `<td style="font-size:7.5pt;font-weight:${val === "8" || val === "D" ? "normal" : "bold"};">${escapeHtml(val)}</td>`;
+              }).join("")}
+              <td>${r.ishlanganKun || 0}</td>
+              <td>${r.ishlanganSoat || 0}</td>
+              <td>${r.tatilKun || "—"}</td>
+              <td>${r.kasallikKun || "—"}</td>
+              <td class="num">${fmt(r.oklad || 0)}</td>
+              <td class="num"><b>${fmt(r.jamiHisoblandi || 0)}</b></td>
+            </tr>
+          `).join("")}
+        </tbody>
+        <tfoot>
+          <tr style="font-weight:bold;background:#f9f9f9;">
+            <td colspan="4" class="num">Jami:</td>
+            <td colspan="${std.totalDays}"></td>
+            <td>${rows.reduce((s, r) => s + toNum(r.ishlanganKun), 0)}</td>
+            <td>${rows.reduce((s, r) => s + toNum(r.ishlanganSoat), 0)}</td>
+            <td>${rows.reduce((s, r) => s + toNum(r.tatilKun), 0)}</td>
+            <td>${rows.reduce((s, r) => s + toNum(r.kasallikKun), 0)}</td>
+            <td class="num">${fmt(rows.reduce((s, r) => s + toNum(r.oklad), 0))}</td>
+            <td class="num">${fmt(rows.reduce((s, r) => s + toNum(r.jamiHisoblandi), 0))}</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <div class="signatures">
+        <div class="sign-col">
+          Tashkilot rahbari:<br>
+          <div class="sign-line"></div>
+          <b>${escapeHtml(rahbar)}</b>
+        </div>
+        <div class="sign-col">
+          Bosh buxgalter:<br>
+          <div class="sign-line"></div>
+          (imzo, F.I.Sh.)
+        </div>
+        <div class="sign-col">
+          Kadrlar bo'limi xodimi / Mas'ul shaxs:<br>
+          <div class="sign-line"></div>
+          (imzo, F.I.Sh.)
+        </div>
+      </div>
+
+      <script>
+        window.onload = function() { window.print(); };
+      </script>
+    </body>
+    </html>
+  `;
+
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+  } else {
+    toast("Chop etish darchasini brauzer blokladi — pop-up ruxsatini bering", "err");
+  }
+}
+
+// Excelga T-13 shaklida eksport
+function exportTabelXlsx(year, month) {
+  const s = STORE.settings;
+  const std = getMonthlyWorkingDays(year, month, TABEL_GRAFIK_FILTER);
+  const rows = (STORE.tabel || []).filter((r) => toNum(r.yil) === year && toNum(r.oy) === month);
+
+  const headerDayCols = std.daysList.map((d) => String(d.day));
+  const aoa = [
+    [s.companyName || "«FORGET KORXONASI»"],
+    [`INN: ${s.inn || "—"}   Davr: ${year}-yil ${OYLAR_UZ[month]}`],
+    ["ISH VAQTIDAN FOYDALANISHNI HISOBGA OLISH VA ISH HAQI HISOB-KITOBI TABELI (T-13 SHAKLI)"],
+    [],
+    ["№", "F.I.O.", "Lavozimi", "PINFL", "Oklad", ...headerDayCols, "Ishlangan kun", "Ishlangan soat", "Ta'til kun", "Ta'til summa", "Kasallik kun", "Kasallik summa", "Jami hisoblandi"]
+  ];
+
+  rows.forEach((r, i) => {
+    const dayVals = std.daysList.map((d) => {
+      return (r.kunlar && (r.kunlar[d.day] || r.kunlar[String(d.day)])) || d.defaultCode;
+    });
+    aoa.push([
+      i + 1,
+      r.fio || "",
+      r.lavozimi || "",
+      r.pinfl || "",
+      toNum(r.oklad),
+      ...dayVals,
+      toNum(r.ishlanganKun),
+      toNum(r.ishlanganSoat),
+      toNum(r.tatilKun),
+      toNum(r.tatilSumma),
+      toNum(r.kasallikKun),
+      toNum(r.kasallikSumma),
+      toNum(r.jamiHisoblandi)
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, `Tabel_${year}_${month}`);
+  XLSX.writeFile(wb, `FORGET_tabel_${year}_${String(month).padStart(2, "0")}.xlsx`);
+  toast("T-13 Tabel Excel fayli yuklab olindi");
 }
 
 function renderIshHaqiHisoboti() {
@@ -15339,6 +16567,7 @@ function setupRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "chiqim", ...firmaFilter }, (p) => applyRemoteRowChange("chiqim", p))
     .on("postgres_changes", { event: "*", schema: "public", table: "bank", ...firmaFilter }, (p) => applyRemoteRowChange("bank", p))
     .on("postgres_changes", { event: "*", schema: "public", table: "ish_haqi", ...firmaFilter }, (p) => applyRemoteRowChange("ishHaqi", p))
+    .on("postgres_changes", { event: "*", schema: "public", table: "tabel", ...firmaFilter }, (p) => applyRemoteRowChange("tabel", p))
     .on("postgres_changes", { event: "*", schema: "public", table: "ombor", ...firmaFilter }, (p) => applyRemoteRowChange("ombor", p))
     .on("postgres_changes", { event: "*", schema: "public", table: "mahsulotlar", ...firmaFilter }, (p) => applyRemoteRowChange("mahsulotlar", p))
     .on("postgres_changes", { event: "*", schema: "public", table: "ishlab_chiqarish", ...firmaFilter }, (p) => applyRemoteRowChange("ishlabChiqarish", p))
