@@ -609,7 +609,9 @@ function defaultStore() {
     fayllar: [],
     kontragentlar: [],
     asosiyVositalar: [],
-    chiqimTafsil: []
+    chiqimTafsil: [],
+    operatsiyalar: [],
+    boshlangichQoldiqlar: {}
   };
 }
 
@@ -1347,6 +1349,10 @@ const PAGES = {
   sverkaDetail: { render: renderSverkaDetail },
   settings: { render: renderSettings },
   audit: { render: renderAudit },
+  operatsiyalar: { render: () => (window.renderOperatsiyalar ? window.renderOperatsiyalar() : null) },
+  aylanma: { render: () => (window.renderAylanma ? window.renderAylanma() : null) },
+  shaxmatka: { render: () => (window.renderShaxmatka ? window.renderShaxmatka() : null) },
+  boshlangich: { render: () => (window.renderBoshlangichQoldiqlar ? window.renderBoshlangichQoldiqlar() : null) },
   // "Firmalar" endi Sozlamalar ichidagi bo'lim — eski havolalar sinmasligi
   // uchun alias sifatida qoldiriladi (navigate() uni "settings"ga yo'naltiradi).
   firmalar: { render: renderSettings }
@@ -1448,6 +1454,10 @@ function updateNavBadges() {
   document.getElementById("navOmborCount").textContent = STORE.ombor.length;
   document.getElementById("navIshlabChiqarishCount").textContent = STORE.ishlabChiqarish.length;
   document.getElementById("navFayllarCount").textContent = STORE.fayllar.length;
+  const elOper = document.getElementById("navOperatsiyalarCount");
+  if (elOper && typeof window.getBuxgalteriyaOperatsiyalarCount === "function") {
+    elOper.textContent = window.getBuxgalteriyaOperatsiyalarCount();
+  }
   document.getElementById("brandCompany").textContent = STORE.settings.companyName.replace(/[“”"]/g, "");
   updateTopbarNotifBadge();
 }
@@ -1983,6 +1993,8 @@ function renderDashboard() {
         <p class="page-desc">${escapeHtml(STORE.settings.companyName)} · INN ${escapeHtml(STORE.settings.inn)} · ${escapeHtml(STORE.settings.period)}</p>
       </div>
       <div class="page-actions">
+        <button class="btn" id="btnExportDashboard"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintDashboard"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn" data-nav="kirim">+ Kirim faktura</button>
         <button class="btn" data-nav="chiqim">+ Chiqim faktura</button>
         <button class="btn btn-primary" data-nav="bank">+ Bank harakati</button>
@@ -2186,6 +2198,10 @@ function renderDashboard() {
   if (tileFoydaSoligi) tileFoydaSoligi.addEventListener("click", () => openFoydaSoligiTalabModal(uncostedCount));
   const btnDashQuickBackup = document.getElementById("btnDashQuickBackup");
   if (btnDashQuickBackup) btnDashQuickBackup.addEventListener("click", exportFullBackupXlsx);
+  const btnExpDash = document.getElementById("btnExportDashboard");
+  if (btnExpDash) btnExpDash.addEventListener("click", exportDashboardXlsx);
+  const btnPrnDash = document.getElementById("btnPrintDashboard");
+  if (btnPrnDash) btnPrnDash.addEventListener("click", printDashboardPdf);
 }
 
 // Bosh sahifadagi "Foyda solig'i" yorlig'i kalkulyatsiya bo'yicha foydadan
@@ -2404,6 +2420,8 @@ function renderInvoiceTable(type) {
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnDidoxSync" title="Didox.uz orqali elektron hisobfakturalarni to'g'ridan-to'g'ri yuklab olish"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px;"><use href="#i-cloud-download"/></svg>Didox API</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
+        <button class="btn" id="btnExportInvoice"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintInvoice"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn btn-primary" id="btnAddRow">+ Qo'lda qo'shish</button>
       </div>
     </div>
@@ -2462,6 +2480,10 @@ function renderInvoiceTable(type) {
 
   document.getElementById("btnAddRow").addEventListener("click", () => addInvoiceRow(type));
   document.getElementById("btnImport").addEventListener("click", () => openImportModal(type));
+  const btnExpInv = document.getElementById("btnExportInvoice");
+  if (btnExpInv) btnExpInv.addEventListener("click", () => exportInvoiceTableXlsx(type, rows));
+  const btnPrnInv = document.getElementById("btnPrintInvoice");
+  if (btnPrnInv) btnPrnInv.addEventListener("click", () => printInvoiceTablePdf(type, rows));
   const btnDidox = document.getElementById("btnDidoxSync");
   if (btnDidox) btnDidox.addEventListener("click", () => openDidoxSyncModal(type));
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
@@ -3165,6 +3187,8 @@ function renderOmborKirim() {
       <div class="page-actions">
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImport">Excel'dan import</button>
+        <button class="btn" id="btnExportOmborKirim"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintOmborKirim"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn btn-secondary" id="btnImportKg1Ombor">KG 1 Kalkulyatsiyasini yuklash (353 ta)</button>
         <button class="btn" id="btnUnifyNomi">Nomlarni birlashtirish</button>
         <button class="btn" id="btnQaytaIshlashKirim">🔄 Qayta ishlash</button>
@@ -3220,6 +3244,11 @@ function renderOmborKirim() {
     fields: [{ key: "hujjatRaqami", label: "Hujjat №" }, { key: "nomi", label: "Nomi" }],
     onDone: renderOmbor
   }));
+  const btnExpKirim = document.getElementById("btnExportOmborKirim");
+  if (btnExpKirim) btnExpKirim.addEventListener("click", () => exportOmborKirimXlsx(rows));
+  const btnPrnKirim = document.getElementById("btnPrintOmborKirim");
+  if (btnPrnKirim) btnPrnKirim.addEventListener("click", () => printOmborKirimPdf(rows));
+
   document.getElementById("searchBox").addEventListener("input", (e) => filterOmborRows(e.target.value));
 
   bindOmborRowEvents();
@@ -3266,6 +3295,8 @@ function renderOmborChiqim() {
       <div class="page-actions">
         <button class="btn" id="btnFindReplaceChiqim">Izlash va almashtirish</button>
         <button class="btn" id="btnImportChiqim">Excel'dan import</button>
+        <button class="btn" id="btnExportOmborChiqim"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintOmborChiqim"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn" id="btnUnifyNomiChiqim">Nomlarni birlashtirish</button>
         <button class="btn" id="btnQaytaIshlashChiqim">🔄 Qayta ishlash</button>
         <button class="btn btn-primary" id="btnAddChiqim">+ Chiqim qo'shish</button>
@@ -3301,6 +3332,10 @@ function renderOmborChiqim() {
   document.getElementById("btnImportChiqim").addEventListener("click", () => openOmborChiqimImportModal());
   document.getElementById("btnUnifyNomiChiqim").addEventListener("click", () => openOmborMergeNomiModal("chiqim"));
   document.getElementById("btnQaytaIshlashChiqim").addEventListener("click", () => openOmborQaytaIshlashModal());
+  const btnExpChiqim = document.getElementById("btnExportOmborChiqim");
+  if (btnExpChiqim) btnExpChiqim.addEventListener("click", () => exportOmborChiqimXlsx(rows));
+  const btnPrnChiqim = document.getElementById("btnPrintOmborChiqim");
+  if (btnPrnChiqim) btnPrnChiqim.addEventListener("click", () => printOmborChiqimPdf(rows));
   document.getElementById("btnFindReplaceChiqim").addEventListener("click", () => openFindReplaceModal({
     rows: chiqimRows, storeType: "ombor",
     fields: [{ key: "nomi", label: "Nomi" }, { key: "kontragentNomi", label: "Manba / izoh" }],
@@ -3866,6 +3901,8 @@ function renderIshlabChiqarish() {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnImportKg1" title="KG 1 (Polietilen trubalar PE 80 / PE 100) kalkulyatsiyasini yuklash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-down"/></svg>KG 1 Kalkulyatsiyasini yuklash (353 ta)</button>
+        <button class="btn" id="btnExportIshlabChiqarish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintIshlabChiqarish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn btn-primary" id="btnAddMahsulot">+ Mahsulot va kalkulyatsiya</button>
       </div>
     </div>
@@ -3938,6 +3975,10 @@ function renderIshlabChiqarish() {
   document.getElementById("btnIcQaytaIshlash").addEventListener("click", () => openOmborQaytaIshlashModal());
   document.getElementById("btnAddIC").addEventListener("click", () => openIshlabChiqarishModal());
   document.getElementById("btnExportIC").addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
+  const btnExpIC2 = document.getElementById("btnExportIshlabChiqarish");
+  if (btnExpIC2) btnExpIC2.addEventListener("click", () => exportIshlabChiqarishXlsx(icRows));
+  const btnPrnIC2 = document.getElementById("btnPrintIshlabChiqarish");
+  if (btnPrnIC2) btnPrnIC2.addEventListener("click", printIshlabChiqarishPdf);
   document.getElementById("btnFindReplaceIC").addEventListener("click", () => openFindReplaceModal({
     rows: STORE.ishlabChiqarish, storeType: "ishlabChiqarish",
     fields: [{ key: "mahsulotNomi", label: "Mahsulot nomi" }, { key: "izoh", label: "Izoh" }],
@@ -4619,7 +4660,8 @@ function renderKontragentlar() {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
-        <button class="btn" id="btnExportKontragent">Excel'ga eksport</button>
+        <button class="btn" id="btnExportKontragent"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintKontragent"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn" id="btnMergeKontragent">Nomlarni birlashtirish</button>
         <button class="btn btn-primary" id="btnAddKontragent">+ Yangi kontragent</button>
       </div>
@@ -4655,6 +4697,8 @@ function renderKontragentlar() {
 
   document.getElementById("btnAddKontragent").addEventListener("click", () => openKontragentModal());
   document.getElementById("btnExportKontragent").addEventListener("click", () => exportKontragentlarXlsx(rows));
+  const btnPrnKont = document.getElementById("btnPrintKontragent");
+  if (btnPrnKont) btnPrnKont.addEventListener("click", () => printKontragentlarPdf(rows));
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: STORE.kontragentlar, storeType: "kontragentlar",
     fields: [
@@ -5001,7 +5045,8 @@ function renderAsosiyVositalar() {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
-        <button class="btn" id="btnExportAV">Excel'ga eksport</button>
+        <button class="btn" id="btnExportAV"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintAV"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn btn-primary" id="btnAddAV">+ Yangi vosita</button>
       </div>
     </div>
@@ -5031,6 +5076,8 @@ function renderAsosiyVositalar() {
 
   document.getElementById("btnAddAV").addEventListener("click", () => openAsosiyVositaModal());
   document.getElementById("btnExportAV").addEventListener("click", () => exportAsosiyVositalarXlsx(rows, asOf, { jamiBoshlangich, jamiAmortizatsiya, jamiQoldiq }));
+  const btnPrnAv = document.getElementById("btnPrintAV");
+  if (btnPrnAv) btnPrnAv.addEventListener("click", () => printAsosiyVositalarPdf(rows, asOf, { jamiBoshlangich, jamiAmortizatsiya, jamiQoldiq }));
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: STORE.asosiyVositalar, storeType: "asosiyVositalar",
     fields: [{ key: "nomi", label: "Nomi" }, { key: "inventarRaqami", label: "Inventar №" }, { key: "izoh", label: "Izoh" }],
@@ -8193,7 +8240,8 @@ function renderBank() {
         <button class="btn" id="btnCbuRates"><svg class="ic" viewBox="0 0 24 24"><use href="#i-currency"/></svg>MB Kurslari</button>
         <button class="btn" id="btnKursFarqi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-scale"/></svg>Kurs farqi (9540/9640)</button>
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
-        <button class="btn" id="btnExportBank">Excel'ga eksport</button>
+        <button class="btn" id="btnExportBank"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintBank"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn" id="btn1CBank"><svg class="ic" viewBox="0 0 24 24"><use href="#i-refresh"/></svg>1C / Klient-Bank</button>
         <button class="btn" id="btnImport">Fayldan import</button>
         <button class="btn" id="btnAddValyutaRow">+ Valyuta (5210)</button>
@@ -8261,6 +8309,8 @@ function renderBank() {
   if (btnValRow) btnValRow.addEventListener("click", () => addBankRow("5210", "USD"));
 
   document.getElementById("btnExportBank").addEventListener("click", () => exportBankXlsx(rows));
+  const btnPrnBank = document.getElementById("btnPrintBank");
+  if (btnPrnBank) btnPrnBank.addEventListener("click", () => printBankPdf(rows));
   document.getElementById("btn1CBank").addEventListener("click", () => open1CExchangeModal("bank"));
   document.getElementById("btnCbuRates").addEventListener("click", () => openCbuRatesModal());
   document.getElementById("btnKursFarqi").addEventListener("click", () => openKursFarqiModal());
@@ -8570,7 +8620,8 @@ function renderKassa() {
       </div>
       <div class="page-actions">
         <button class="btn" id="btnKassaKitobi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg> Kassa kitobi (KO-4)</button>
-        <button class="btn" id="btnExportKassa">Excel'ga eksport</button>
+        <button class="btn" id="btnExportKassa"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintKassa"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn" id="btnImportKassa">Fayldan import</button>
         <button class="btn btn-secondary" id="btnAddKO2">+ Chiqim orderi (KO-2)</button>
         <button class="btn btn-primary" id="btnAddKO1">+ Kirim orderi (KO-1)</button>
@@ -8629,6 +8680,8 @@ function renderKassa() {
   document.getElementById("btnAddKO2").addEventListener("click", () => openKassaModal("chiqim"));
   document.getElementById("btnKassaKitobi").addEventListener("click", openKassaKitobiModal);
   document.getElementById("btnExportKassa").addEventListener("click", () => exportKassaXlsx(rows));
+  const btnPrnKassa = document.getElementById("btnPrintKassa");
+  if (btnPrnKassa) btnPrnKassa.addEventListener("click", () => printKassaPdf(rows));
   document.getElementById("btnImportKassa").addEventListener("click", openKassaImportModal);
 
   document.getElementById("inKassaOpening").addEventListener("change", (e) => {
@@ -9592,7 +9645,8 @@ function renderIshHaqi() {
         <button class="btn" id="btnOpenTabel"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calendar"/></svg>Davomat va Tabel (T-13)</button>
         <button class="btn" id="btnFindReplace">Izlash va almashtirish</button>
         <button class="btn" id="btnImportIshHaqi">Excel'dan import</button>
-        <button class="btn" id="btnExportIshHaqi">Excel'ga eksport</button>
+        <button class="btn" id="btnExportIshHaqi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintIshHaqi"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
         <button class="btn btn-primary" id="btnAddRow">+ Xodim yozuvi qo'shish</button>
       </div>
     </div>
@@ -9644,6 +9698,8 @@ function renderIshHaqi() {
   const btnTabel = document.getElementById("btnOpenTabel");
   if (btnTabel) btnTabel.addEventListener("click", () => navigate("tabel"));
   document.getElementById("searchBox").addEventListener("input", (e) => filterIshHaqiRows(e.target.value));
+  const btnPrnIh = document.getElementById("btnPrintIshHaqi");
+  if (btnPrnIh) btnPrnIh.addEventListener("click", () => printIshHaqiPdf(rows));
   document.getElementById("btnExportIshHaqi").addEventListener("click", exportIshHaqiXlsx);
   document.getElementById("btnFindReplace").addEventListener("click", () => openFindReplaceModal({
     rows: STORE.ishHaqi, storeType: "ishHaqi",
@@ -12346,7 +12402,8 @@ function renderFayllar() {
         <p class="page-desc">Faktura kirim, Faktura chiqim, Bank harakati, Ombor va Ish haqi bo'limlariga "Excel'dan import" orqali yuklangan fayllar tarixi — faylning o'zi emas, faqat ma'lumoti saqlanadi. Faylni o'chirsangiz, unga bog'liq barcha yozuvlar ham o'chib ketadi.</p>
       </div>
       <div class="page-actions">
-        <button class="btn" id="btnExportFayllar">Excel'ga eksport</button>
+        <button class="btn" id="btnExportFayllar"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintFayllar"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
       </div>
     </div>
 
@@ -12390,6 +12447,8 @@ function renderFayllar() {
     if (syncId) syncFaylLinks(syncId, e.target);
   });
   document.getElementById("btnExportFayllar").addEventListener("click", () => exportFayllarXlsx(rows));
+  const btnPrnFayl = document.getElementById("btnPrintFayllar");
+  if (btnPrnFayl) btnPrnFayl.addEventListener("click", () => printFayllarPdf(rows));
 }
 
 function exportFayllarXlsx(rows) {
@@ -12554,6 +12613,10 @@ async function renderAudit() {
         <h1 class="page-title">O'zgarishlar tarixi</h1>
         <p class="page-desc">Har bir xodimning kirim/chiqim/bank/ombor va boshqa bo'limlardagi qo'shish, o'zgartirish, o'chirish amallari — kim, qachon, nima qilgani (so'nggi 1000 yozuv).</p>
       </div>
+      <div class="page-actions">
+        <button class="btn" id="btnExportAudit"><svg class="ic" viewBox="0 0 24 24"><use href="#i-cloud-download"/></svg>Excel'ga eksport</button>
+        <button class="btn" id="btnPrintAudit"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>PDF (chop etish)</button>
+      </div>
     </div>
     <div class="toolbar">
       <input class="search-input" id="searchBox" placeholder="Qidirish: email, jadval...">
@@ -12581,6 +12644,10 @@ async function renderAudit() {
   document.getElementById("searchBox").addEventListener("input", applyAuditFilters);
   document.getElementById("auditJadval").addEventListener("change", applyAuditFilters);
   document.getElementById("auditAmal").addEventListener("change", applyAuditFilters);
+  const btnExpAud = document.getElementById("btnExportAudit");
+  if (btnExpAud) btnExpAud.addEventListener("click", () => exportAuditXlsx(AUDIT_ROWS));
+  const btnPrnAud = document.getElementById("btnPrintAudit");
+  if (btnPrnAud) btnPrnAud.addEventListener("click", () => printAuditPdf(AUDIT_ROWS));
 
   const { data, error } = await sbClient.from("audit_log").select("*").eq("firma_id", ACTIVE_FIRMA_ID).order("created_at", { ascending: false }).range(0, AUDIT_PAGE_SIZE - 1);
   if (error) { reportError(error, "Tarixni yuklashda xatolik"); return; }
@@ -13594,6 +13661,721 @@ function buildAndDownloadReportXlsx(filenameBase, title, lines, detail) {
   }
   XLSX.writeFile(wb, `${filenameBase}_${todayISO()}.xlsx`);
   toast("Excel fayl yuklab olindi");
+}
+
+/* ------------------------------- Umumiy bo'limlar: Excel va PDF eksport dvijogi ------------------------------- */
+
+function exportInvoiceTableXlsx(type, rows) {
+  const s = STORE.settings;
+  const isKirim = type === "kirim";
+  const title = isKirim ? "Faktura kirim reestri" : "Faktura chiqim reestri";
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Davr: ${s.filterFrom || "—"} — ${s.filterTo || "—"}`],
+    [title],
+    [],
+    ["№", "Sana", "Hujjat №", isKirim ? "Yetkazib beruvchi" : "Xaridor", "INN", "Status", "To'landi", "Summa (QQSsiz)", "QQS %", "QQS summasi", "Jami summa"]
+  ];
+
+  let totalQqsSiz = 0;
+  let totalQqs = 0;
+  let totalJami = 0;
+
+  rows.forEach((r, idx) => {
+    const qqsSiz = toNum(r.summaQQSsiz);
+    const qqs = toNum(r.qqsSumma);
+    const jami = toNum(r.jamiSumma);
+    totalQqsSiz += qqsSiz;
+    totalQqs += qqs;
+    totalJami += jami;
+    aoa.push([
+      idx + 1,
+      r.sana || "",
+      r.hujjatRaqami || "",
+      r.kontragentNomi || "",
+      r.kontragentInn || "",
+      r.status || "",
+      r.tolandi ? "Ha" : "Yo'q",
+      qqsSiz,
+      toNum(r.qqsStavka),
+      qqs,
+      jami
+    ]);
+  });
+
+  aoa.push(["JAMI", "", "", "", "", "", "", totalQqsSiz, "", totalQqs, totalJami]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 6 }, { wch: 12 }, { wch: 16 }, { wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 18 }, { wch: 8 }, { wch: 18 }, { wch: 20 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, isKirim ? "Faktura_kirim" : "Faktura_chiqim");
+  XLSX.writeFile(wb, `FORGET_${type}_${todayISO()}.xlsx`);
+  toast("Fakturalar Excel fayli yuklab olindi");
+}
+
+function printInvoiceTablePdf(type, rows) {
+  const isKirim = type === "kirim";
+  const title = isKirim ? "Faktura kirim reestri" : "Faktura chiqim reestri";
+  const period = `${STORE.settings.filterFrom || "Boshidan"} — ${STORE.settings.filterTo || "Bugungacha"}`;
+  
+  let totalQqsSiz = 0;
+  let totalQqs = 0;
+  let totalJami = 0;
+
+  const bodyHtml = rows.map((r, i) => {
+    const qqsSiz = toNum(r.summaQQSsiz);
+    const qqs = toNum(r.qqsSumma);
+    const jami = toNum(r.jamiSumma);
+    totalQqsSiz += qqsSiz;
+    totalQqs += qqs;
+    totalJami += jami;
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td>${escapeHtml(r.sana || "")}</td>
+        <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+        <td>${escapeHtml(r.kontragentNomi || "")}</td>
+        <td>${escapeHtml(r.kontragentInn || "")}</td>
+        <td>${escapeHtml(r.status || "")}</td>
+        <td class="num">${fmtSum(qqsSiz)}</td>
+        <td class="num">${fmtSum(qqs)}</td>
+        <td class="num font-bold">${fmtSum(jami)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:75px;">Sana</th>
+      <th style="width:95px;">Hujjat №</th>
+      <th>${isKirim ? "Yetkazib beruvchi" : "Xaridor"}</th>
+      <th style="width:85px;">INN</th>
+      <th style="width:85px;">Status</th>
+      <th class="num" style="width:110px;">Summa (QQSsiz)</th>
+      <th class="num" style="width:95px;">QQS summasi</th>
+      <th class="num" style="width:115px;">Jami summa</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="6"><b>JAMI</b></td>
+      <td class="num"><b>${fmtSum(totalQqsSiz)}</b></td>
+      <td class="num"><b>${fmtSum(totalQqs)}</b></td>
+      <td class="num"><b>${fmtSum(totalJami)}</b></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title, periodText: period, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function printBankPdf(rows) {
+  const s = STORE.settings;
+  const t = computeTotals();
+  const periodKirim = rows.reduce((a, r) => a + toNum(r.kirim), 0);
+  const periodChiqim = rows.reduce((a, r) => a + toNum(r.chiqim), 0);
+  const period = `${s.filterFrom || "Boshidan"} — ${s.filterTo || "Bugungacha"}`;
+
+  const bodyHtml = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(r.sana || "")}</td>
+      <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+      <td>${escapeHtml(r.schyot || "5110")} ${r.valyuta && r.valyuta !== "UZS" ? `(${r.valyuta})` : ""}</td>
+      <td>${escapeHtml(r.kontragent || "")}</td>
+      <td>${escapeHtml(r.kontragentInn || "")}</td>
+      <td style="max-width:200px;">${escapeHtml(r.tavsif || "")}</td>
+      <td class="num" style="color:#2f6f5e;">${r.kirim > 0 ? fmtSum(r.kirim) : "—"}</td>
+      <td class="num" style="color:#c25e2e;">${r.chiqim > 0 ? fmtSum(r.chiqim) : "—"}</td>
+    </tr>
+  `).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:75px;">Sana</th>
+      <th style="width:90px;">Hujjat №</th>
+      <th style="width:65px;">Schyot</th>
+      <th>Kontragent</th>
+      <th style="width:85px;">INN</th>
+      <th>Tavsif / Mazmuni</th>
+      <th class="num" style="width:110px;">Kirim (so'm)</th>
+      <th class="num" style="width:110px;">Chiqim (so'm)</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="7"><b>Davr aylanmasi (Kirim / Chiqim)</b></td>
+      <td class="num" style="color:#2f6f5e;"><b>${fmtSum(periodKirim)}</b></td>
+      <td class="num" style="color:#c25e2e;"><b>${fmtSum(periodChiqim)}</b></td>
+    </tr>
+    <tr>
+      <td colspan="7"><b>Joriy qoldiq (Boshlang'ich: ${fmtSum(s.bankOpeningBalance)})</b></td>
+      <td colspan="2" class="num font-bold"><b>${fmtSum(t.bankQoldiq)} so'm</b></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Bank harakati vedomosti", periodText: period, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function printKassaPdf(rows) {
+  const s = STORE.settings;
+  const t = computeTotals();
+  const periodKirim = rows.filter((r) => r.turi === "kirim").reduce((a, r) => a + toNum(r.summa), 0);
+  const periodChiqim = rows.filter((r) => r.turi === "chiqim").reduce((a, r) => a + toNum(r.summa), 0);
+  const period = `${s.filterFrom || "Boshidan"} — ${s.filterTo || "Bugungacha"}`;
+
+  const bodyHtml = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(r.sana || "")}</td>
+      <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+      <td>${r.turi === "kirim" ? "KO-1 Kirim" : "KO-2 Chiqim"}</td>
+      <td>${escapeHtml(r.kimdanKimga || r.kontragent || "—")}</td>
+      <td>${escapeHtml(r.tavsif || r.hujjatAsosi || "—")}</td>
+      <td class="num" style="color:#2f6f5e;">${r.turi === "kirim" ? fmtSum(r.summa) : "—"}</td>
+      <td class="num" style="color:#c25e2e;">${r.turi === "chiqim" ? fmtSum(r.summa) : "—"}</td>
+    </tr>
+  `).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:75px;">Sana</th>
+      <th style="width:90px;">Hujjat №</th>
+      <th style="width:85px;">Turi</th>
+      <th>Kimdan / Kimga</th>
+      <th>Tavsif / Asos</th>
+      <th class="num" style="width:110px;">Kirim (so'm)</th>
+      <th class="num" style="width:110px;">Chiqim (so'm)</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="6"><b>Davr kirim va chiqimi</b></td>
+      <td class="num" style="color:#2f6f5e;"><b>${fmtSum(periodKirim)}</b></td>
+      <td class="num" style="color:#c25e2e;"><b>${fmtSum(periodChiqim)}</b></td>
+    </tr>
+    <tr>
+      <td colspan="6"><b>Joriy kassa qoldig'i (Boshlang'ich: ${fmtSum(s.kassaOpeningBalance)})</b></td>
+      <td colspan="2" class="num font-bold"><b>${fmtSum(t.kassaQoldiq)} so'm</b></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Kassa harakati kitobi (5010)", periodText: period, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function printIshHaqiPdf(rows) {
+  const s = STORE.settings;
+  const t = computeIshHaqiTotals();
+  const period = `${s.filterFrom || "Boshidan"} — ${s.filterTo || "Bugungacha"}`;
+
+  const bodyHtml = rows.map((r, i) => {
+    const oylik = toNum(r.oyliqSumma);
+    const imtiyoz = toNum(r.imtiyozSumma);
+    const soliqqaTortiladigan = Math.max(0, oylik - imtiyoz);
+    const ndfl = Math.round(soliqqaTortiladigan * 0.12);
+    const inps = Math.round(soliqqaTortiladigan * 0.001);
+    const sof = oylik - ndfl - inps;
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td>${escapeHtml(r.sana || "")}</td>
+        <td><b>${escapeHtml(r.fio || "")}</b></td>
+        <td>${escapeHtml(r.lavozimi || "")}</td>
+        <td>${escapeHtml(r.pinfl || "")}</td>
+        <td class="num">${fmtSum(oylik)}</td>
+        <td class="num">${fmtSum(ndfl)}</td>
+        <td class="num">${fmtSum(inps)}</td>
+        <td class="num font-bold">${fmtSum(sof)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:75px;">Sana</th>
+      <th>F.I.O.</th>
+      <th>Lavozimi</th>
+      <th style="width:110px;">PINFL</th>
+      <th class="num" style="width:110px;">Hisoblangan</th>
+      <th class="num" style="width:90px;">NDFL 12%</th>
+      <th class="num" style="width:75px;">INPS</th>
+      <th class="num" style="width:115px;">To'lanadigan sof</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="5"><b>JAMI</b></td>
+      <td class="num"><b>${fmtSum(t.oylikJami)}</b></td>
+      <td class="num"><b>${fmtSum(t.ndflJami)}</b></td>
+      <td class="num"><b>${fmtSum(t.inpsJami)}</b></td>
+      <td class="num"><b>${fmtSum(t.sofIshHaqiJami)}</b></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Ish haqi hisob-kitob va to'lov vedomosti", periodText: period, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function exportOmborKirimXlsx(rows) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Sana: ${todayISO()}`],
+    ["Ombor kirim jurnali"],
+    [],
+    ["№", "Sana", "Hujjat №", "Yetkazib beruvchi", "INN", "Mahsulot nomi", "Birlik", "Miqdor", "Narx", "Yetkazib berish narxi", "QQS", "Jami (QQS bilan)"]
+  ];
+
+  let totalBaza = 0;
+  let totalQqs = 0;
+  let totalJami = 0;
+
+  rows.forEach((r, i) => {
+    const baza = toNum(r.yetkazibBerishNarxi);
+    const qqs = toNum(r.qqsSumma);
+    const jami = toNum(r.yetkazibBerishNarxiQQSBilan);
+    totalBaza += baza;
+    totalQqs += qqs;
+    totalJami += jami;
+    aoa.push([
+      i + 1,
+      r.sana || "",
+      r.hujjatRaqami || "",
+      r.kontragentNomi || "",
+      r.kontragentInn || "",
+      r.nomi || "",
+      r.birlik || "",
+      toNum(r.miqdor),
+      toNum(r.narx),
+      baza,
+      qqs,
+      jami
+    ]);
+  });
+
+  aoa.push(["JAMI", "", "", "", "", "", "", "", "", totalBaza, totalQqs, totalJami]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 6 }, { wch: 12 }, { wch: 14 }, { wch: 26 }, { wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, { wch: 18 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ombor_kirim");
+  XLSX.writeFile(wb, `FORGET_ombor_kirim_${todayISO()}.xlsx`);
+  toast("Ombor kirim jurnali Excel formatida yuklab olindi");
+}
+
+function printOmborKirimPdf(rows) {
+  const s = STORE.settings;
+  const period = `${s.filterFrom || "Boshidan"} — ${s.filterTo || "Bugungacha"}`;
+  let totalJami = 0;
+
+  const bodyHtml = rows.map((r, i) => {
+    const jami = toNum(r.yetkazibBerishNarxiQQSBilan);
+    totalJami += jami;
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td>${escapeHtml(r.sana || "")}</td>
+        <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+        <td>${escapeHtml(r.nomi || "")}</td>
+        <td>${escapeHtml(r.birlik || "")}</td>
+        <td class="num">${fmt(r.miqdor, 3)}</td>
+        <td class="num">${fmtSum(r.narx)}</td>
+        <td class="num font-bold">${fmtSum(jami)}</td>
+        <td>${escapeHtml(r.kontragentNomi || "")}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:75px;">Sana</th>
+      <th style="width:90px;">Hujjat №</th>
+      <th>Mahsulot nomi</th>
+      <th style="width:55px;">Birlik</th>
+      <th class="num" style="width:70px;">Miqdor</th>
+      <th class="num" style="width:95px;">Narx</th>
+      <th class="num" style="width:110px;">Jami qiymat</th>
+      <th>Yetkazib beruvchi</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="7"><b>JAMI</b></td>
+      <td class="num"><b>${fmtSum(totalJami)}</b></td>
+      <td></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Ombor kirim jurnali", periodText: period, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function exportOmborChiqimXlsx(rows) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Sana: ${todayISO()}`],
+    ["Ombor chiqim (sarf va sotuv) jurnali"],
+    [],
+    ["№", "Sana", "Hujjat №", "Mahsulot nomi", "Birlik", "Miqdor", "Narxi", "Yetkazib berish narxi", "QQS summasi", "Jami qiymat", "Manba / izoh"]
+  ];
+
+  let totalBaza = 0;
+  let totalJami = 0;
+
+  rows.forEach((r, i) => {
+    const baza = toNum(r.yetkazibBerishNarxi);
+    const jami = toNum(r.yetkazibBerishNarxiQQSBilan);
+    totalBaza += baza;
+    totalJami += jami;
+    aoa.push([
+      i + 1,
+      r.sana || "",
+      r.hujjatRaqami || "",
+      r.nomi || "",
+      r.birlik || "",
+      toNum(r.miqdor),
+      toNum(r.narx),
+      baza,
+      toNum(r.qqsSumma),
+      jami,
+      r.kontragentNomi || ""
+    ]);
+  });
+
+  aoa.push(["JAMI", "", "", "", "", "", "", totalBaza, "", totalJami, ""]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 6 }, { wch: 12 }, { wch: 14 }, { wch: 28 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 18 }, { wch: 24 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ombor_chiqim");
+  XLSX.writeFile(wb, `FORGET_ombor_chiqim_${todayISO()}.xlsx`);
+  toast("Ombor chiqim jurnali Excel formatida yuklab olindi");
+}
+
+function printOmborChiqimPdf(rows) {
+  const s = STORE.settings;
+  const period = `${s.filterFrom || "Boshidan"} — ${s.filterTo || "Bugungacha"}`;
+  let totalJami = 0;
+
+  const bodyHtml = rows.map((r, i) => {
+    const jami = toNum(r.yetkazibBerishNarxiQQSBilan);
+    totalJami += jami;
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td>${escapeHtml(r.sana || "")}</td>
+        <td>${escapeHtml(r.hujjatRaqami || "")}</td>
+        <td>${escapeHtml(r.nomi || "")}</td>
+        <td>${escapeHtml(r.birlik || "")}</td>
+        <td class="num">${fmt(r.miqdor, 3)}</td>
+        <td class="num">${fmtSum(r.narx)}</td>
+        <td class="num font-bold">${fmtSum(jami)}</td>
+        <td>${escapeHtml(r.kontragentNomi || "—")}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:75px;">Sana</th>
+      <th style="width:90px;">Hujjat №</th>
+      <th>Mahsulot nomi</th>
+      <th style="width:55px;">Birlik</th>
+      <th class="num" style="width:70px;">Miqdor</th>
+      <th class="num" style="width:95px;">Narx</th>
+      <th class="num" style="width:110px;">Jami qiymat</th>
+      <th>Manba / izoh</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="7"><b>JAMI</b></td>
+      <td class="num"><b>${fmtSum(totalJami)}</b></td>
+      <td></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Ombor chiqim jurnali", periodText: period, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function printIshlabChiqarishPdf() {
+  const s = STORE.settings;
+  const mList = STORE.mahsulotlar || [];
+  const bodyHtml = mList.map((m, i) => {
+    const kList = m.kalkulyatsiya || [];
+    const kDetails = kList.map((k) => `${escapeHtml(k.xomashyoNomi)} (${fmt(k.miqdor, 3)} ${escapeHtml(k.birlik || "")})`).join(", ");
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td><b>${escapeHtml(m.nomi || "")}</b></td>
+        <td>${escapeHtml(m.birlik || "")}</td>
+        <td class="num">${fmtSum(m.tannarx || 0)}</td>
+        <td style="font-size:10.5px;">${kDetails || `<span class="faint">—</span>`}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th>Tayyor mahsulot nomi</th>
+      <th style="width:65px;">Birlik</th>
+      <th class="num" style="width:120px;">1 birlik tannarxi</th>
+      <th>Kalkulyatsiya tarkibi (xomashyo me'yorlari)</th>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Mahsulotlar va kalkulyatsiya me'yorlari", periodText: `Sana: ${todayISO()}`, theadHtml, bodyHtml }));
+}
+
+function printKontragentlarPdf(rows) {
+  const s = STORE.settings;
+  const bodyHtml = rows.map((k, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td><b>${escapeHtml(k.nomi || "")}</b></td>
+      <td>${escapeHtml(k.inn || "—")}</td>
+      <td>${escapeHtml(k.turi || "Mijoz")}</td>
+      <td>${escapeHtml(k.telefon || "—")}</td>
+      <td>${escapeHtml(k.manzil || "—")}</td>
+      <td>${escapeHtml(k.bankHisobRaqami || "—")}</td>
+      <td>${escapeHtml(k.mfo || "—")}</td>
+    </tr>
+  `).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th>Kontragent nomi</th>
+      <th style="width:90px;">INN</th>
+      <th style="width:85px;">Turi</th>
+      <th style="width:105px;">Telefon</th>
+      <th>Manzil</th>
+      <th style="width:130px;">Hisob raqami</th>
+      <th style="width:65px;">MFO</th>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Kontragentlar spravochnigi", periodText: `Jami: ${rows.length} ta hamkor`, theadHtml, bodyHtml }));
+}
+
+function printAsosiyVositalarPdf(rows, asOf, totals) {
+  const s = STORE.settings;
+  const bodyHtml = rows.map((a, i) => {
+    const boshl = toNum(a.boshlangichQiymati);
+    const qold = asosiyVositaQoldiqQiymati(a, asOf);
+    const amort = boshl - qold;
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td><b>${escapeHtml(a.nomi || "")}</b></td>
+        <td>${escapeHtml(a.inventarRaqami || "—")}</td>
+        <td>${escapeHtml(a.ishgaTushirishSanasi || "—")}</td>
+        <td class="num">${fmtSum(boshl)}</td>
+        <td class="num">${fmt(a.amortizatsiyaStavkasi)}%</td>
+        <td class="num">${fmtSum(amort)}</td>
+        <td class="num font-bold">${fmtSum(qold)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th>Asosiy vosita nomi</th>
+      <th style="width:95px;">Inventar №</th>
+      <th style="width:85px;">Sana</th>
+      <th class="num" style="width:120px;">Boshlang'ich qiymat</th>
+      <th class="num" style="width:75px;">Stavka</th>
+      <th class="num" style="width:115px;">Amortizatsiya</th>
+      <th class="num" style="width:120px;">Qoldiq qiymat</th>
+    </tr>
+  `;
+
+  const tfootHtml = `
+    <tr>
+      <td colspan="4"><b>JAMI</b></td>
+      <td class="num"><b>${fmtSum(totals.jamiBoshlangich)}</b></td>
+      <td></td>
+      <td class="num"><b>${fmtSum(totals.jamiAmortizatsiya)}</b></td>
+      <td class="num"><b>${fmtSum(totals.jamiQoldiq)}</b></td>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Asosiy vositalar va amortizatsiya hisobi", periodText: `${asOf} holatiga`, theadHtml, bodyHtml, tfootHtml }));
+}
+
+function printFayllarPdf(rows) {
+  const s = STORE.settings;
+  const bodyHtml = rows.map((f, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(f.sana ? new Date(f.sana).toLocaleString("ru-RU") : "—")}</td>
+      <td>${escapeHtml(FAYL_BOLIM_LABEL[f.bolim] || f.bolim || "—")}</td>
+      <td><b>${escapeHtml(f.faylNomi || "—")}</b></td>
+      <td class="num">${fmtBytes(f.hajmi)}</td>
+      <td class="num font-bold">${fayllarLinkedCount(f)} ta</td>
+    </tr>
+  `).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:120px;">Yuklangan sana</th>
+      <th style="width:120px;">Bo'lim</th>
+      <th>Fayl nomi</th>
+      <th class="num" style="width:90px;">Hajmi</th>
+      <th class="num" style="width:105px;">Bog'langan qatorlar</th>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "Fayl yuklamalari tarixi", periodText: `Jami: ${rows.length} ta fayl`, theadHtml, bodyHtml }));
+}
+
+function exportAuditXlsx(rows) {
+  const s = STORE.settings;
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Sana: ${todayISO()}`],
+    ["O'zgarishlar tarixi (Audit log)"],
+    [],
+    ["№", "Vaqt", "Foydalanuvchi", "Bo'lim / Jadval", "Amal", "O'zgarish tafsiloti"]
+  ];
+
+  rows.forEach((r, i) => {
+    const jadval = AUDIT_TABLE_LABELS[r.jadval] || r.jadval || "";
+    const amal = AUDIT_AMAL_LABELS[r.amal] || r.amal || "";
+    const diff = r.amal === "UPDATE" ? diffAuditRow(r) : `${jadval} yozuvi`;
+    aoa.push([
+      i + 1,
+      (r.created_at || "").replace("T", " ").slice(0, 19),
+      r.actor_email || "",
+      jadval,
+      amal,
+      diff
+    ]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 6 }, { wch: 20 }, { wch: 26 }, { wch: 18 }, { wch: 14 }, { wch: 45 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Audit");
+  XLSX.writeFile(wb, `FORGET_audit_${todayISO()}.xlsx`);
+  toast("Audit tarixi Excel fayli yuklab olindi");
+}
+
+function printAuditPdf(rows) {
+  const s = STORE.settings;
+  const bodyHtml = rows.map((r, i) => {
+    const jadval = AUDIT_TABLE_LABELS[r.jadval] || r.jadval || "";
+    const amal = AUDIT_AMAL_LABELS[r.amal] || r.amal || "";
+    const diff = r.amal === "UPDATE" ? diffAuditRow(r) : `${jadval} yozuvi`;
+    return `
+      <tr>
+        <td class="num">${i + 1}</td>
+        <td class="mono">${escapeHtml((r.created_at || "").replace("T", " ").slice(0, 19))}</td>
+        <td>${escapeHtml(r.actor_email || "—")}</td>
+        <td>${escapeHtml(jadval)}</td>
+        <td>${escapeHtml(amal)}</td>
+        <td>${escapeHtml(diff)}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const theadHtml = `
+    <tr>
+      <th class="num" style="width:30px;">№</th>
+      <th style="width:115px;">Vaqt</th>
+      <th style="width:150px;">Foydalanuvchi</th>
+      <th style="width:110px;">Bo'lim</th>
+      <th style="width:80px;">Amal</th>
+      <th>O'zgarish tafsiloti</th>
+    </tr>
+  `;
+
+  openPrintWindow(buildSimpleReportPrintHtml({ title: "O'zgarishlar tarixi (Audit log)", periodText: `Jami: ${rows.length} ta yozuv`, theadHtml, bodyHtml }));
+}
+
+function exportDashboardXlsx() {
+  const s = STORE.settings;
+  const t = computeTotals();
+  const ihq = computeIshHaqiTotals();
+  const debAging = typeof computeDebitorlikAging === "function" ? computeDebitorlikAging() : { total: 0 };
+  const kredAging = typeof computeKreditorlikAging === "function" ? computeKreditorlikAging() : { total: 0 };
+
+  const aoa = [
+    [s.companyName],
+    [`INN: ${s.inn}   Hisobot: Korxona umumiy moliyaviy holati   Davr: ${s.period || todayISO()}`],
+    [],
+    ["Ko'rsatkich guruhi", "Ko'rsatkich nomi", "Summa (so'm)"],
+    ["Daromad va Foyda", "Sof tushum (savdo / chiqim)", toNum(t.revenue)],
+    ["Daromad va Foyda", "Kalkulyatsiya tannarxi", toNum(t.cost)],
+    ["Daromad va Foyda", "Yalpi foyda (savdodan)", toNum(t.grossProfit)],
+    ["Daromad va Foyda", "Davr xarajatlari", toNum(s.davrXarajati)],
+    ["Daromad va Foyda", "Moliyaviy faoliyat xarajatlari", toNum(s.moliyaviyXarajat)],
+    ["Daromad va Foyda", "Boshqa operatsion daromadlar", toNum(s.boshqaDaromad)],
+    ["Daromad va Foyda", "Foyda solig'i hisoblangan", toNum(t.foydaSoligiSumma)],
+    ["Daromad va Foyda", "Sof foyda", toNum(t.netProfit)],
+    [],
+    ["Pul Mablag'lari", "5110 Bank hisobvarag'i (UZS)", toNum(t.bank5110Qoldiq || t.bankQoldiq)],
+    ["Pul Mablag'lari", "5210 Valyuta hisobvarag'i (so'mda)", toNum(t.valyuta5210SomQoldiq || 0)],
+    ["Pul Mablag'lari", "5010 Kassa (naqd pul)", toNum(t.kassaQoldiq)],
+    ["Pul Mablag'lari", "Jami pul mablag'lari", toNum(t.pulMablaglari)],
+    [],
+    ["Qarzdorliklar", "Debitorlik qarzdorligi (Xaridorlar)", toNum(debAging.total)],
+    ["Qarzdorliklar", "Kreditorlik qarzdorligi (Yetkazib beruvchilar)", toNum(kredAging.total)],
+    ["Qarzdorliklar", "QQS to'lovga / (ortiqcha to'lov)", toNum(t.qqsPayable)],
+    [],
+    ["Ish haqi va Zaxiralar", "Hisoblangan ish haqi (oylik fondi)", toNum(ihq.oylikJami)],
+    ["Ish haqi va Zaxiralar", "Ijtimoiy soliq (12%)", toNum(ihq.ijtimoiySoliqJami)],
+    ["Ish haqi va Zaxiralar", "Ombor tovar-moddiy zaxiralari", toNum(t.tovarZaxira)],
+    ["Ish haqi va Zaxiralar", "Asosiy vositalar qoldiq qiymati", toNum(t.asosiyVositalar)]
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 24 }, { wch: 42 }, { wch: 22 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Dashboard");
+  XLSX.writeFile(wb, `FORGET_dashboard_${todayISO()}.xlsx`);
+  toast("Bosh sahifa moliyaviy hisoboti Excel formatida yuklab olindi");
+}
+
+function printDashboardPdf() {
+  const s = STORE.settings;
+  const t = computeTotals();
+  const ihq = computeIshHaqiTotals();
+  const debAging = typeof computeDebitorlikAging === "function" ? computeDebitorlikAging() : { total: 0 };
+  const kredAging = typeof computeKreditorlikAging === "function" ? computeKreditorlikAging() : { total: 0 };
+
+  const lines = [
+    { code: "01", label: "Sof tushum (savdo)", value: t.revenue },
+    { code: "02", label: "Sotilgan mahsulot/xizmat tannarxi", value: t.cost },
+    { code: "03", label: "Yalpi foyda (01 - 02)", value: t.grossProfit },
+    { code: "04", label: "Davr xarajatlari", value: s.davrXarajati },
+    { code: "05", label: "Foyda solig'i", value: t.foydaSoligiSumma },
+    { code: "06", label: "Sof foyda", value: t.netProfit },
+    { code: "07", label: "5110 Bank so'm qoldig'i", value: t.bank5110Qoldiq || t.bankQoldiq },
+    { code: "08", label: "5010 Kassa naqd pul qoldig'i", value: t.kassaQoldiq },
+    { code: "09", label: "Jami pul mablag'lari (07 + 08)", value: t.pulMablaglari },
+    { code: "10", label: "Debitorlik qarzdorligi (xaridorlar)", value: debAging.total },
+    { code: "11", label: "Kreditorlik qarzdorligi (ta'minotchilar)", value: kredAging.total },
+    { code: "12", label: "QQS to'lovga (yoki ortiqcha to'lov)", value: t.qqsPayable },
+    { code: "13", label: "Hisoblangan ish haqi fondi", value: ihq.oylikJami },
+    { code: "14", label: "Ombor tovar-moddiy zaxirasi", value: t.tovarZaxira },
+    { code: "15", label: "Asosiy vositalar qoldiq qiymati", value: t.asosiyVositalar }
+  ];
+
+  printReportLines("Bosh sahifa — Korxona Moliyaviy Holati", `Davr: ${s.period || todayISO()}`, lines);
 }
 
 function openGenericImportModal(titleHtml, hintHtml, acceptAttr, onFile) {

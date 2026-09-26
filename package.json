@@ -25,6 +25,8 @@
       "icon.png",
       "kg1_data.js",
       "kg1_mahsulotlar.json",
+      "buxgalteriya_kitobi.js",
+      "buxgalteriya_20_data.js",
       "vendor/**/*"
     ],
     "icon": "icon.ico",
