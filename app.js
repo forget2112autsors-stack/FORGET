@@ -1927,6 +1927,42 @@ function bindDashboardDebtChart(trend) {
   return bindTrendChart(trend, DASHBOARD_DEBT_SERIES, { idPrefix: "dashDebt" });
 }
 
+function computeSoliqTaqvimi() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const day = now.getDate();
+
+  let ndflDate = new Date(year, month, 15);
+  if (day > 15) ndflDate = new Date(year, month + 1, 15);
+  const ndflDays = Math.ceil((ndflDate - now) / 86400000);
+
+  let qqsDate = new Date(year, month, 20);
+  if (day > 20) qqsDate = new Date(year, month + 1, 20);
+  const qqsDays = Math.ceil((qqsDate - now) / 86400000);
+
+  const quarterDates = [
+    new Date(year, 3, 20),
+    new Date(year, 6, 20),
+    new Date(year, 9, 20),
+    new Date(year + 1, 1, 1)
+  ];
+  let foydaDate = quarterDates.find((d) => d >= now) || quarterDates[0];
+  const foydaDays = Math.ceil((foydaDate - now) / 86400000);
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmtD = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+  return {
+    ndflDeadline: fmtD(ndflDate),
+    ndflDays,
+    qqsDeadline: fmtD(qqsDate),
+    qqsDays,
+    foydaDeadline: fmtD(foydaDate),
+    foydaDays
+  };
+}
+
 function renderDashboard() {
   const t = computeTotals();
   const trend = computeMonthlyTrend(6);
@@ -1934,6 +1970,11 @@ function renderDashboard() {
   const debtTrend = computeMonthlyDebtTrend(6);
   const uncostedCount = STORE.chiqimTafsil.filter((tf) => !tf.mahsulotId).length;
   const ihq = computeIshHaqiTotals();
+  const soliqTaqvim = computeSoliqTaqvimi();
+  const debAging = typeof computeDebitorlikAging === "function" ? computeDebitorlikAging() : { buckets: {} };
+  const kredAging = typeof computeKreditorlikAging === "function" ? computeKreditorlikAging() : { buckets: {} };
+  const overdueDebitor = (debAging.buckets["31-60"] || 0) + (debAging.buckets["61-90"] || 0) + (debAging.buckets["90+"] || 0);
+  const overdueKreditor = (kredAging.buckets["31-60"] || 0) + (kredAging.buckets["61-90"] || 0) + (kredAging.buckets["90+"] || 0);
   const main = document.getElementById("main");
   main.innerHTML = `
     <div class="page-header">
@@ -2032,6 +2073,66 @@ function renderDashboard() {
         <div class="stat-label">Ombor qoldig'i</div>
         <div class="stat-value">${fmtOgirlik(omborOgirlikQoldigiKg())}</div>
         <div class="stat-sub">${fmtSum(t.tovarZaxira)}</div>
+      </div>
+    </div>
+
+    <!-- Operativ Soliq Taqvimi va Nazorat -->
+    <div class="section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <h2 class="section-title" style="margin:0;">📅 Operativ Soliq Taqvimi va Nazorat (O'zbekiston Qonunchiligi)</h2>
+        <span class="pill pill-ok" style="font-size:12px;">Soliq Kodeksi & BHMS 21 me'yorlari</span>
+      </div>
+      <div class="grid grid-3">
+        <div class="card stat-card" data-nav="ishhaqihisobot" style="cursor:pointer;" title="Ish haqi hisoboti va soliqlarga o'tish">
+          <div class="stat-top">
+            <div class="stat-label">JShODS va Ijtimoiy soliq (12% + 12%)</div>
+            <span class="pill ${soliqTaqvim.ndflDays <= 3 ? 'pill-danger' : soliqTaqvim.ndflDays <= 7 ? 'pill-warn' : 'pill-ok'}">${soliqTaqvim.ndflDays <= 0 ? "Bugun so'nggi kun" : soliqTaqvim.ndflDays + " kun qoldi"}</span>
+          </div>
+          <div class="stat-value">${fmtSum(ihq.ndflJami + ihq.ijtimoiySoliqJami)}</div>
+          <div class="stat-sub">To'lov muddati: ${soliqTaqvim.ndflDeadline} gacha · O'zR SK 390, 407-moddalar</div>
+        </div>
+        <div class="card stat-card" data-nav="qqs" style="cursor:pointer;" title="QQS hisobotiga o'tish">
+          <div class="stat-top">
+            <div class="stat-label">QQS (12%) Byudjetga to'lov</div>
+            <span class="pill ${soliqTaqvim.qqsDays <= 3 ? 'pill-danger' : soliqTaqvim.qqsDays <= 7 ? 'pill-warn' : 'pill-ok'}">${soliqTaqvim.qqsDays <= 0 ? "Bugun so'nggi kun" : soliqTaqvim.qqsDays + " kun qoldi"}</span>
+          </div>
+          <div class="stat-value">${fmtSum(t.qqsToPay)}</div>
+          <div class="stat-sub">To'lov muddati: ${soliqTaqvim.qqsDeadline} gacha · O'zR SK 273-modda</div>
+        </div>
+        <div class="card stat-card" data-nav="foyda" style="cursor:pointer;" title="Foyda solig'i hisobotiga o'tish">
+          <div class="stat-top">
+            <div class="stat-label">Foyda solig'i (15%)</div>
+            <span class="pill ${soliqTaqvim.foydaDays <= 5 ? 'pill-danger' : soliqTaqvim.foydaDays <= 15 ? 'pill-warn' : 'pill-ok'}">${soliqTaqvim.foydaDays} kun qoldi</span>
+          </div>
+          <div class="stat-value">${fmtSum(t.kalkulyatsiyaFoydaSoligi || 0)}</div>
+          <div class="stat-sub">Choraklik muddat: ${soliqTaqvim.foydaDeadline} gacha · O'zR SK 339-modda</div>
+        </div>
+      </div>
+      <div class="grid grid-3" style="margin-top:12px;">
+        <div class="card stat-card" data-nav="debitorlik" style="cursor:pointer;" title="Muddati o'tgan debitorlik qarzdorligini ko'rish">
+          <div class="stat-top">
+            <div class="stat-label">Muddati o'tgan debitorlik (30+ kun)</div>
+            <span class="pill ${overdueDebitor > 0 ? 'pill-warn' : 'pill-ok'}">${overdueDebitor > 0 ? 'Nazorat talab' : 'Xavfsiz'}</span>
+          </div>
+          <div class="stat-value ${overdueDebitor > 0 ? 'neg' : ''}">${fmtSum(overdueDebitor)}</div>
+          <div class="stat-sub">Mijozlarimizdan 30 kundan ortiq to'lanmay turgan qarz</div>
+        </div>
+        <div class="card stat-card" data-nav="kreditorlik" style="cursor:pointer;" title="Muddati o'tgan kreditorlik majburiyatlarini ko'rish">
+          <div class="stat-top">
+            <div class="stat-label">Muddati o'tgan kreditorlik (30+ kun)</div>
+            <span class="pill ${overdueKreditor > 0 ? 'pill-danger' : 'pill-ok'}">${overdueKreditor > 0 ? "To'lov lozim" : 'Xavfsiz'}</span>
+          </div>
+          <div class="stat-value ${overdueKreditor > 0 ? 'neg' : ''}">${fmtSum(overdueKreditor)}</div>
+          <div class="stat-sub">Yetkazib beruvchilarga 30 kundan ortiq to'lanmagan qarzimiz</div>
+        </div>
+        <div class="card stat-card" data-nav="tabel" style="cursor:pointer;" title="Davomat va Tabel (T-13) ga o'tish">
+          <div class="stat-top">
+            <div class="stat-label">Davomat va Tabel (T-13) holati</div>
+            <span class="pill pill-ok">Faol</span>
+          </div>
+          <div class="stat-value">${(STORE.ishHaqi || []).length} ta xodim</div>
+          <div class="stat-sub">Joriy oy ish vaqti hisobi va to'lovlar tabeli</div>
+        </div>
       </div>
     </div>
 
@@ -2452,6 +2553,7 @@ function invoiceRowHtml(type, r, isDup) {
       <td class="num jami-cell" style="font-weight:700">${fmtSum(r.jamiSumma)}</td>
       <td class="row-actions">
         ${kontragentHistoryBtnHtml(r.kontragentInn, type)}
+        ${provodkaBtnHtml(type, r.id)}
         ${type === "chiqim" ? `<button class="icon-btn" data-kalk="${r.id}" title="Kalkulyatsiya — sotilgan mahsulotlar va ombordan sarf"><svg class="ic" viewBox="0 0 24 24"><use href="#i-calc"/></svg></button>` : ""}
         ${type === "kirim" ? `<button class="icon-btn" data-view="${r.id}" title="Hujjatni ko'rish — mahsulot tarkibi va chop etish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg></button>` : ""}
         <button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
@@ -4163,8 +4265,8 @@ async function deleteMahsulot(id) {
 /* ---------------- KG 1 Kalkulyatsiya va Standart Narxlarni Yuklash ---------------- */
 
 async function importKg1Kalkulyatsiya(btnEl, renderAfter = renderIshlabChiqarish) {
-  const data = typeof KG1_MAHSULOTLAR_DATA !== "undefined" ? KG1_MAHSULOTLAR_DATA : (window.KG1_MAHSULOTLAR_DATA || []);
-  if (!data.length) {
+  const data = typeof KG1_MAHSULOTLAR_DATA !== "undefined" ? KG1_MAHSULOTLAR_DATA : (window.KG1_MAHSULOTLAR_DATA || globalThis.KG1_MAHSULOTLAR_DATA || []);
+  if (!data || !data.length) {
     toast("KG 1 ma'lumotlari topilmadi", "err");
     return;
   }
@@ -4200,31 +4302,56 @@ async function importKg1Kalkulyatsiya(btnEl, renderAfter = renderIshlabChiqarish
 
   // Supabase'ga bo'lib-bo'lib (batch) yuklaymiz
   const BATCH_SIZE = 50;
-  let failed = false;
+  let savedToDb = true;
+  let activeMap = { ...MAHSULOT_DB_MAP };
+
   for (let i = 0; i < toInsert.length; i += BATCH_SIZE) {
     const batch = toInsert.slice(i, i + BATCH_SIZE);
-    try {
-      const dbRows = batch.map((r) => toDbRow(MAHSULOT_DB_MAP, r));
-      const { data: saved, error } = await sbClient.from("mahsulotlar").insert(dbRows).select();
-      if (!error && saved) {
-        saved.forEach((r) => { STORE.mahsulotlar.push(fromDbRow(MAHSULOT_DB_MAP, r)); added++; });
-      } else {
-        failed = true;
-        break;
+    let batchSuccess = false;
+
+    if (sbClient) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const dbRows = batch.map((r) => toDbRow(activeMap, r));
+          const { data: saved, error } = await sbClient.from("mahsulotlar").insert(dbRows).select();
+          if (!error && saved) {
+            saved.forEach((r) => { STORE.mahsulotlar.push(fromDbRow(activeMap, r)); added++; });
+            batchSuccess = true;
+            break;
+          }
+          if (error && isMissingColumnError(error)) {
+            const missingCol = extractMissingColumnName(error);
+            const missingKey = missingCol && Object.keys(activeMap).find((k) => activeMap[k] === missingCol);
+            if (missingKey) {
+              delete activeMap[missingKey];
+              continue;
+            }
+          }
+          console.warn("Supabase batch insert error, fallback to local:", error);
+          break;
+        } catch (err) {
+          console.warn("Supabase exception, fallback to local:", err);
+          break;
+        }
       }
-    } catch (err) {
-      console.error(err);
-      failed = true;
-      break;
+    }
+
+    if (!batchSuccess) {
+      savedToDb = false;
+      batch.forEach((r) => {
+        const localRow = { id: uid(), ...r };
+        STORE.mahsulotlar.push(localRow);
+        added++;
+      });
     }
   }
 
   saveStore();
   renderAfter();
-  if (failed) {
-    toast(`${added} ta yozuv saqlandi, qolganlari bazaga yozilmadi. Internet yoki Supabase sozlamalarini tekshiring.`, "err");
+  if (savedToDb) {
+    toast(`${added} ta polietilen truba kalkulyatsiyasi Supabase bazasiga yuklandi! (Mavjud: ${skipped} ta)`, "ok");
   } else {
-    toast(`${added} ta polietilen truba kalkulyatsiyasi muvaffaqiyatli yuklandi! (Mavjud: ${skipped} ta)`, "ok");
+    toast(`${added} ta polietilen truba kalkulyatsiyasi mahalliy xotiraga yuklandi! (Mavjud: ${skipped} ta)`, "ok");
   }
   if (btnEl) { btnEl.disabled = false; btnEl.textContent = "KG 1 Kalkulyatsiyasini yuklash (353 ta)"; }
 }
@@ -4468,6 +4595,10 @@ function openProvodkaModal(type, row) {
   document.getElementById("mCancel").addEventListener("click", closeModal);
 }
 
+function provodkaBtnHtml(type, id) {
+  return `<button class="icon-btn" data-provodka-type="${escapeHtml(type)}" data-provodka-id="${escapeHtml(id)}" title="1C va BHMS 21 buxgalteriya provodkasi (Dt / Kt)"><svg class="ic" viewBox="0 0 24 24"><use href="#i-scale"/></svg></button>`;
+}
+
 /* ------------------------------ Kontragentlar ------------------------------ */
 
 function renderKontragentlar() {
@@ -4590,9 +4721,6 @@ function kontragentRowHtml(k) {
       <td class="mono">${escapeHtml(k.bankHisob || "")}</td>
       <td class="mono">${escapeHtml(k.bankMfo || "")}</td>
       <td class="row-actions">
-        ${inn
-          ? `<button class="btn btn-sm" data-detail-inn="${escapeHtml(inn)}" data-hist-inn="${escapeHtml(inn)}" title="Tarix (sverka)">Tarix</button>`
-          : `<button class="btn btn-sm" disabled title="Tarixni ko'rish uchun avval INN kiriting">Tarix</button>`}
         <button class="icon-btn" data-edit="${k.id}" title="Tahrirlash"><svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg></button>
         <button class="icon-btn" data-del="${k.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
@@ -4607,6 +4735,23 @@ function bindKontragentHistoryDelegation() {
   KONTRAGENT_HISTORY_BOUND = true;
 
   main.addEventListener("click", (e) => {
+    const provBtn = e.target.closest("[data-provodka-type]");
+    if (provBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const pType = provBtn.getAttribute("data-provodka-type");
+      const pId = provBtn.getAttribute("data-provodka-id");
+      let row = null;
+      if (pType === "kirim" || pType === "chiqim") row = (STORE[pType] || []).find((x) => x.id === pId);
+      else if (pType === "bank") row = (STORE.bank || []).find((x) => x.id === pId);
+      else if (pType === "kassa") row = (STORE.kassa || []).find((x) => x.id === pId);
+      else if (pType === "ishHaqi") row = (STORE.ishHaqi || []).find((x) => x.id === pId);
+      if (row && typeof openProvodkaModal === "function") {
+        openProvodkaModal(pType, row);
+      }
+      return;
+    }
+
     if (e.target.closest("input, select, textarea, [data-edit], [data-del], [data-view]")) return;
 
     const btn = e.target.closest("[data-hist-inn]");
@@ -8195,6 +8340,7 @@ function bankRowHtml(r) {
       <td style="text-align:center;"><input type="checkbox" data-f="xizmat" ${r.xizmat ? "checked" : ""} title="Xizmat xarajati"></td>
       <td class="row-actions">
         ${kontragentHistoryBtnHtml(r.kontragentInn, "bank")}
+        ${provodkaBtnHtml("bank", r.id)}
         <button class="icon-btn" data-del="${r.id}"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </td>
     </tr>
@@ -8530,6 +8676,7 @@ function kassaRowHtml(r) {
         <button class="icon-btn" data-print-kassa="${r.id}" title="${isKirim ? 'KO-1 Kirim orderini chop etish' : 'KO-2 Chiqim orderini chop etish'}">
           <svg class="ic" viewBox="0 0 24 24"><use href="#i-doc"/></svg>
         </button>
+        ${provodkaBtnHtml("kassa", r.id)}
         ${r.kontragentInn ? kontragentHistoryBtnHtml(r.kontragentInn, "kassa") : ""}
         <button class="icon-btn" data-edit-kassa="${r.id}" title="Tahrirlash">
           <svg class="ic" viewBox="0 0 24 24"><use href="#i-edit"/></svg>
@@ -9620,7 +9767,10 @@ function ishHaqiRowHtml(r, isDup) {
       <td class="num ihq-ndfl">${fmt(c.ndfl)}</td>
       <td class="num ihq-inps">${fmt(c.inps)}</td>
       <td class="num ihq-sof" style="font-weight:700">${fmtSum(c.sofIshHaqi)}</td>
-      <td class="row-actions"><button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button></td>
+      <td class="row-actions">
+        ${provodkaBtnHtml("ishHaqi", r.id)}
+        <button class="icon-btn" data-del="${r.id}" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+      </td>
     </tr>
   `;
 }

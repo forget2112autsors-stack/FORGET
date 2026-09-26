@@ -43,6 +43,8 @@ Write-Host "1) Fayllarni yangilanmoqda: $src -> $build\www"
 Copy-Item "$src\index.html" "$build\www\index.html" -Force
 Copy-Item "$src\app.js" "$build\www\app.js" -Force
 Copy-Item "$src\styles.css" "$build\www\styles.css" -Force
+Copy-Item "$src\kg1_data.js" "$build\www\kg1_data.js" -Force
+Copy-Item "$src\kg1_mahsulotlar.json" "$build\www\kg1_mahsulotlar.json" -Force
 Copy-Item "$src\vendor\*" "$build\www\vendor\" -Recurse -Force
 
 Write-Host "2) Capacitor android loyihasiga sinxronlanmoqda..."

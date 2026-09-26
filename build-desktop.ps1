@@ -14,6 +14,8 @@ Copy-Item "$src\electron-main.js" "$build\electron-main.js" -Force
 Copy-Item "$src\package.json" "$build\package.json" -Force
 Copy-Item "$src\icon.ico" "$build\icon.ico" -Force
 Copy-Item "$src\icon.png" "$build\icon.png" -Force
+Copy-Item "$src\kg1_data.js" "$build\kg1_data.js" -Force
+Copy-Item "$src\kg1_mahsulotlar.json" "$build\kg1_mahsulotlar.json" -Force
 Copy-Item "$src\vendor\*" "$build\vendor\" -Recurse -Force
 
 Write-Host "2) .exe build qilinmoqda..."
