@@ -23,6 +23,8 @@
       "styles.css",
       "electron-main.js",
       "icon.png",
+      "kg1_data.js",
+      "kg1_mahsulotlar.json",
       "vendor/**/*"
     ],
     "icon": "icon.ico",
