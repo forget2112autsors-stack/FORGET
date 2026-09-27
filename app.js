@@ -758,21 +758,33 @@ async function loadAllData() {
     const chiqimTafsil = await fetchAllRows("chiqim_tafsil");
     STORE.chiqimTafsil = chiqimTafsil.map((r) => fromDbRow(CHIQIM_TAFSIL_DB_MAP, r));
   } catch (err) {
-    console.error(err);
+    if (err && err.code === "PGRST205") {
+      console.warn("Eslatma: 'chiqim_tafsil' jadvali Supabase'da hali mavjud emas.");
+    } else {
+      console.warn("Chiqim tafsilotlarini yuklashda ogohlantirish:", err);
+    }
     STORE.chiqimTafsil = [];
   }
   try {
     const kassa = await fetchAllRows("kassa");
     STORE.kassa = kassa.map((r) => fromDbRow(KASSA_DB_MAP, r));
   } catch (err) {
-    console.error(err);
+    if (err && err.code === "PGRST205") {
+      console.warn("Eslatma: 'kassa' jadvali Supabase'da hali mavjud emas (migration_kassa_5010.sql).");
+    } else {
+      console.warn("Kassa ma'lumotlarini yuklashda ogohlantirish:", err);
+    }
     STORE.kassa = [];
   }
   try {
     const tabel = await fetchAllRows("tabel");
     STORE.tabel = tabel.map((r) => fromDbRow(TABEL_DB_MAP, r));
   } catch (err) {
-    console.error(err);
+    if (err && err.code === "PGRST205") {
+      console.warn("Eslatma: 'tabel' jadvali Supabase'da hali mavjud emas (migration_tabel_t13.sql).");
+    } else {
+      console.warn("Tabel ma'lumotlarini yuklashda ogohlantirish:", err);
+    }
     STORE.tabel = [];
   }
   recomputeAllPaymentStatus();
@@ -941,6 +953,13 @@ function fmt(n, digits = 0) {
 function fmtSum(n) {
   return fmt(n, 0) + " so'm";
 }
+
+function formatSum(n) {
+  const num = toNum(n);
+  const digits = (Math.abs(num) % 1 > 0.001) ? 2 : 0;
+  return fmt(num, digits);
+}
+window.formatSum = formatSum;
 
 // Grafik o'q belgilari va qator oxiridagi qiymatlar uchun qisqartirilgan
 // format (masalan "5 mln", "500 ming") — to'liq summa tooltip/jadvalda

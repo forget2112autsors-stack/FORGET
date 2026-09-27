@@ -16,6 +16,49 @@
   "use strict";
 
   /* --------------------------------------------------------------------------
+     0. ASOSIY FORMATTER VA YORDAMCHI FUNKSIYALAR
+     -------------------------------------------------------------------------- */
+
+  function formatSum(n) {
+    if (typeof window.fmt === "function") {
+      const num = typeof window.toNum === "function" ? window.toNum(n) : (Number(n) || 0);
+      const digits = (Math.abs(num) % 1 > 0.001) ? 2 : 0;
+      return window.fmt(num, digits);
+    }
+    const num = Number(n) || 0;
+    const digits = (Math.abs(num) % 1 > 0.001) ? 2 : 0;
+    return num.toLocaleString("ru-RU", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+  window.formatSum = formatSum;
+
+  function toNum(v) {
+    if (typeof window.toNum === "function") return window.toNum(v);
+    if (v === null || v === undefined || v === "") return 0;
+    if (typeof v === "number") return isNaN(v) ? 0 : v;
+    const clean = String(v).replace(/\s+/g, "").replace(/,/g, ".");
+    const n = parseFloat(clean);
+    return isNaN(n) ? 0 : n;
+  }
+  if (!window.toNum) window.toNum = toNum;
+
+  function escapeHtml(str) {
+    if (typeof window.escapeHtml === "function") return window.escapeHtml(str);
+    return String(str ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+  if (!window.escapeHtml) window.escapeHtml = escapeHtml;
+
+  function isValidStatus(status) {
+    if (typeof window.isValidStatus === "function") return window.isValidStatus(status);
+    return status !== "bekor" && status !== "qoralama";
+  }
+  if (!window.isValidStatus) window.isValidStatus = isValidStatus;
+
+  /* --------------------------------------------------------------------------
      1. BHMS 21 TO'LIQ HISOBLAR REJASI (CHART OF ACCOUNTS)
      -------------------------------------------------------------------------- */
 
