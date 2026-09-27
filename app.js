@@ -755,10 +755,15 @@ async function loadAllData() {
   // ham ilova to'liq ishlashda davom etishi uchun (fayllar jadvali kabi)
   // xatolik alohida ushlanadi — asosiy Promise.all'ni buzmaydi.
   try {
-    const chiqimTafsil = await fetchAllRows("chiqim_tafsil");
-    STORE.chiqimTafsil = chiqimTafsil.map((r) => fromDbRow(CHIQIM_TAFSIL_DB_MAP, r));
+    if (sessionStorage.getItem("forget_skip_chiqim_tafsil") === "1") {
+      STORE.chiqimTafsil = [];
+    } else {
+      const chiqimTafsil = await fetchAllRows("chiqim_tafsil");
+      STORE.chiqimTafsil = chiqimTafsil.map((r) => fromDbRow(CHIQIM_TAFSIL_DB_MAP, r));
+    }
   } catch (err) {
     if (err && err.code === "PGRST205") {
+      sessionStorage.setItem("forget_skip_chiqim_tafsil", "1");
       console.warn("Eslatma: 'chiqim_tafsil' jadvali Supabase'da hali mavjud emas.");
     } else {
       console.warn("Chiqim tafsilotlarini yuklashda ogohlantirish:", err);
@@ -766,10 +771,15 @@ async function loadAllData() {
     STORE.chiqimTafsil = [];
   }
   try {
-    const kassa = await fetchAllRows("kassa");
-    STORE.kassa = kassa.map((r) => fromDbRow(KASSA_DB_MAP, r));
+    if (sessionStorage.getItem("forget_skip_kassa") === "1") {
+      STORE.kassa = [];
+    } else {
+      const kassa = await fetchAllRows("kassa");
+      STORE.kassa = kassa.map((r) => fromDbRow(KASSA_DB_MAP, r));
+    }
   } catch (err) {
     if (err && err.code === "PGRST205") {
+      sessionStorage.setItem("forget_skip_kassa", "1");
       console.warn("Eslatma: 'kassa' jadvali Supabase'da hali mavjud emas (migration_kassa_5010.sql).");
     } else {
       console.warn("Kassa ma'lumotlarini yuklashda ogohlantirish:", err);
@@ -777,10 +787,15 @@ async function loadAllData() {
     STORE.kassa = [];
   }
   try {
-    const tabel = await fetchAllRows("tabel");
-    STORE.tabel = tabel.map((r) => fromDbRow(TABEL_DB_MAP, r));
+    if (sessionStorage.getItem("forget_skip_tabel") === "1") {
+      STORE.tabel = [];
+    } else {
+      const tabel = await fetchAllRows("tabel");
+      STORE.tabel = tabel.map((r) => fromDbRow(TABEL_DB_MAP, r));
+    }
   } catch (err) {
     if (err && err.code === "PGRST205") {
+      sessionStorage.setItem("forget_skip_tabel", "1");
       console.warn("Eslatma: 'tabel' jadvali Supabase'da hali mavjud emas (migration_tabel_t13.sql).");
     } else {
       console.warn("Tabel ma'lumotlarini yuklashda ogohlantirish:", err);
