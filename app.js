@@ -1349,6 +1349,7 @@ const PAGES = {
   sverkaDetail: { render: renderSverkaDetail },
   settings: { render: renderSettings },
   audit: { render: renderAudit },
+  buxgalteriya: { render: () => (window.renderBuxgalteriyaHub ? window.renderBuxgalteriyaHub() : (window.renderOperatsiyalar ? window.renderOperatsiyalar() : null)) },
   operatsiyalar: { render: () => (window.renderOperatsiyalar ? window.renderOperatsiyalar() : null) },
   aylanma: { render: () => (window.renderAylanma ? window.renderAylanma() : null) },
   shaxmatka: { render: () => (window.renderShaxmatka ? window.renderShaxmatka() : null) },
@@ -1455,8 +1456,11 @@ function updateNavBadges() {
   document.getElementById("navIshlabChiqarishCount").textContent = STORE.ishlabChiqarish.length;
   document.getElementById("navFayllarCount").textContent = STORE.fayllar.length;
   const elOper = document.getElementById("navOperatsiyalarCount");
-  if (elOper && typeof window.getBuxgalteriyaOperatsiyalarCount === "function") {
-    elOper.textContent = window.getBuxgalteriyaOperatsiyalarCount();
+  const elBux = document.getElementById("navBuxgalteriyaCount");
+  if (typeof window.getBuxgalteriyaOperatsiyalarCount === "function") {
+    const c = window.getBuxgalteriyaOperatsiyalarCount();
+    if (elOper) elOper.textContent = c;
+    if (elBux) elBux.textContent = c;
   }
   document.getElementById("brandCompany").textContent = STORE.settings.companyName.replace(/[“”"]/g, "");
   updateTopbarNotifBadge();
@@ -1985,6 +1989,9 @@ function renderDashboard() {
   const kredAging = typeof computeKreditorlikAging === "function" ? computeKreditorlikAging() : { buckets: {} };
   const overdueDebitor = (debAging.buckets["31-60"] || 0) + (debAging.buckets["61-90"] || 0) + (debAging.buckets["90+"] || 0);
   const overdueKreditor = (kredAging.buckets["31-60"] || 0) + (kredAging.buckets["61-90"] || 0) + (kredAging.buckets["90+"] || 0);
+  const buxSummary = typeof window.getBuxgalteriyaSummary === "function"
+    ? window.getBuxgalteriyaSummary()
+    : { opsCount: 0, jamiAylanma: 0, isBalanced: true, bankKassa: t.pulMablaglari, debitorlik: t.debitorlik, kreditorlik: t.kreditorlik, tovarlar: t.tovarZaxira, mulk: 0 };
   const main = document.getElementById("main");
   main.innerHTML = `
     <div class="page-header">
@@ -2148,6 +2155,72 @@ function renderDashboard() {
       </div>
     </div>
 
+    <!-- Buxgalteriya Balansi va Bosh Kitob (BHMS 21 & 20.xlsx andazasi) -->
+    <div class="section">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <h2 class="section-title" style="margin:0;">📚 Buxgalteriya Daftari va Balans (BHMS 21 & 20.xlsx andazasi)</h2>
+          <span class="pill ${buxSummary.isBalanced ? 'pill-ok' : 'pill-danger'}" style="font-size:12px;font-weight:600;">
+            ${buxSummary.isBalanced ? '✓ Debet = Kredit Muvozanatda' : '⚠️ Debet ≠ Kredit Farq bor'}
+          </span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn btn-sm btn-primary" data-nav="buxgalteriya" title="Yagona Buxgalteriya ish paneliga o'tish">
+            <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-clipboard"/></svg>Buxgalteriya ish paneli
+          </button>
+          <button class="btn btn-sm" id="btnDashQuickExport20Xlsx" title="Бухгалтерская_программа_УЗБ_версия 20.xlsx andazasi bo'yicha to'liq kitobni yuklash">
+            <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-cloud-download"/></svg>20.xlsx Kitobini yuklash
+          </button>
+        </div>
+      </div>
+
+      <div class="grid grid-4">
+        <div class="card stat-card" data-nav="operatsiyalar" style="cursor:pointer;" title="Xo'jalik operatsiyalari jurnali (12 oy)">
+          <div class="stat-top">
+            <div class="stat-label">Jami Provodkalar (Aylanma)</div>
+            <span class="pill pill-ok">${buxSummary.opsCount} ta yozuv</span>
+          </div>
+          <div class="stat-value">${fmtSum(buxSummary.jamiAylanma)}</div>
+          <div class="stat-sub">Dt / Kt aylanmasi · 12 oylik order-jurnallar</div>
+        </div>
+
+        <div class="card stat-card" data-nav="aylanma" style="cursor:pointer;" title="Schyotlar aylanmasi (5110 / 5010 Pul mablag'lari)">
+          <div class="stat-top">
+            <div class="stat-label">Pul mablag'lari (5110 / 5010)</div>
+            <span class="pill ${buxSummary.bankKassa >= 0 ? 'pill-ok' : 'pill-danger'}">${buxSummary.bankKassa >= 0 ? 'Ijobiy' : 'Manfiy'}</span>
+          </div>
+          <div class="stat-value">${fmtSum(buxSummary.bankKassa)}</div>
+          <div class="stat-sub">Bank (5110) va Kassa (5010) qoldiqlari</div>
+        </div>
+
+        <div class="card stat-card" data-nav="shaxmatka" style="cursor:pointer;" title="Shaxmatka va Bosh kitob (4010 / 6010)">
+          <div class="stat-top">
+            <div class="stat-label">Hisob-kitoblar (4010 vs 6010)</div>
+            <span class="pill pill-warn">Sverka</span>
+          </div>
+          <div class="stat-value" style="font-size:15px;">Dt ${fmtSum(buxSummary.debitorlik)} / Kt ${fmtSum(buxSummary.kreditorlik)}</div>
+          <div class="stat-sub">Mijozlar qarzi (4010) / Ta'minotchi (6010)</div>
+        </div>
+
+        <div class="card stat-card" data-nav="boshlangich" style="cursor:pointer;" title="Boshlang'ich qoldiqlar va Moddiy zaxiralar">
+          <div class="stat-top">
+            <div class="stat-label">Tovar va Zaxiralar (2910)</div>
+            <span class="pill pill-ok">BHMS</span>
+          </div>
+          <div class="stat-value">${fmtSum(buxSummary.tovarlar)}</div>
+          <div class="stat-sub">Ombordagi moddiy tovarlar buxgalteriya saldosi</div>
+        </div>
+      </div>
+
+      <!-- Tezkor o'tish tugmalari -->
+      <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+        <button class="btn btn-sm" data-nav="operatsiyalar"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-doc"/></svg>Operatsiyalar jurnali</button>
+        <button class="btn btn-sm" data-nav="aylanma"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-scale"/></svg>Schyotlar aylanmasi (OSV)</button>
+        <button class="btn btn-sm" data-nav="shaxmatka"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-chart"/></svg>Shaxmatka & Bosh kitob</button>
+        <button class="btn btn-sm" data-nav="boshlangich"><svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-wallet"/></svg>Boshlang'ich qoldiqlar</button>
+      </div>
+    </div>
+
     <div class="section">
       <h2 class="section-title">So'nggi 6 oy — savdo, tannarx, foyda</h2>
       <div class="card" data-nav="f2" style="padding:18px;cursor:pointer;" title="Moliyaviy natijalar (F2) hisobotini ochish">
@@ -2202,6 +2275,14 @@ function renderDashboard() {
   if (btnExpDash) btnExpDash.addEventListener("click", exportDashboardXlsx);
   const btnPrnDash = document.getElementById("btnPrintDashboard");
   if (btnPrnDash) btnPrnDash.addEventListener("click", printDashboardPdf);
+  const btnDashExport20 = document.getElementById("btnDashQuickExport20Xlsx");
+  if (btnDashExport20) {
+    btnDashExport20.addEventListener("click", () => {
+      if (typeof window.exportUzbBuxgalteriyaXlsx === "function") {
+        window.exportUzbBuxgalteriyaXlsx();
+      }
+    });
+  }
 }
 
 // Bosh sahifadagi "Foyda solig'i" yorlig'i kalkulyatsiya bo'yicha foydadan

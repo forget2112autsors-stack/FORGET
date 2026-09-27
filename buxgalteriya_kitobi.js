@@ -1002,6 +1002,94 @@
   window.loadBuxgalteriyaPreset = loadBuxgalteriyaPreset;
 
   /* --------------------------------------------------------------------------
+     8.5 YAGONA BUXGALTERIYA ISH PANELI (WORKSTATION) VA DASHBOARD XULOSASI
+     -------------------------------------------------------------------------- */
+
+  function getBuxgalteriyaSummary() {
+    initBuxgalteriyaStore();
+    const ops = getAllBuxgalteriyaOperatsiyalar();
+    let jamiDt = 0;
+    let jamiKt = 0;
+    ops.forEach((op) => {
+      jamiDt += toNum(op.summa);
+      jamiKt += toNum(op.summa);
+    });
+
+    const b5110 = computeSchyotAylanma("5110", "all");
+    const b5010 = computeSchyotAylanma("5010", "all");
+    const b4010 = computeSchyotAylanma("4010", "all");
+    const b6010 = computeSchyotAylanma("6010", "all");
+    const b2910 = computeSchyotAylanma("2910", "all");
+    const b0100 = computeSchyotAylanma("0100", "all");
+
+    const bankKassa = (b5110.oxirgiDt - b5110.oxirgiKt) + (b5010.oxirgiDt - b5010.oxirgiKt);
+    const debitorlik = (b4010.oxirgiDt - b4010.oxirgiKt);
+    const kreditorlik = (b6010.oxirgiKt - b6010.oxirgiDt);
+    const tovarlar = (b2910.oxirgiDt - b2910.oxirgiKt);
+    const mulk = (b0100.oxirgiDt - b0100.oxirgiKt);
+
+    return {
+      opsCount: ops.length,
+      jamiAylanma: jamiDt,
+      isBalanced: Math.abs(jamiDt - jamiKt) < 0.01,
+      bankKassa,
+      debitorlik,
+      kreditorlik,
+      tovarlar,
+      mulk
+    };
+  }
+
+  function renderBuxWorkstationHeader(activeTab) {
+    const allOps = getAllBuxgalteriyaOperatsiyalar();
+    const opsCount = allOps.length;
+    return `
+      <div class="bux-workstation-nav">
+        <div class="bux-workstation-tabs">
+          <button class="bux-wtab ${activeTab === 'operatsiyalar' ? 'active' : ''}" data-nav="operatsiyalar" title="Xo'jalik operatsiyalari jurnali (12 oylik order-jurnallar)">
+            <svg class="ic" viewBox="0 0 24 24"><use href="#i-clipboard"/></svg>
+            <span>Operatsiyalar jurnali</span>
+            <span class="bux-wtab-badge">${opsCount}</span>
+          </button>
+          <button class="bux-wtab ${activeTab === 'aylanma' ? 'active' : ''}" data-nav="aylanma" title="Hisoblar bo'yicha aylanma vedomost (OSV)">
+            <svg class="ic" viewBox="0 0 24 24"><use href="#i-scale"/></svg>
+            <span>Schyotlar aylanmasi (OSV)</span>
+          </button>
+          <button class="bux-wtab ${activeTab === 'shaxmatka' ? 'active' : ''}" data-nav="shaxmatka" title="Shaxmatka va Bosh kitob (Главная книга)">
+            <svg class="ic" viewBox="0 0 24 24"><use href="#i-chart"/></svg>
+            <span>Shaxmatka & Bosh kitob</span>
+          </button>
+          <button class="bux-wtab ${activeTab === 'boshlangich' ? 'active' : ''}" data-nav="boshlangich" title="Boshlang'ich qoldiqlar (Balans nazorati)">
+            <svg class="ic" viewBox="0 0 24 24"><use href="#i-wallet"/></svg>
+            <span>Boshlang'ich qoldiqlar</span>
+          </button>
+        </div>
+        <div class="bux-workstation-actions">
+          <button class="btn btn-sm btn-primary" id="btnBuxQuickUnifiedExportXlsx" title="Бухгалтерская_программа_УЗБ_версия 20.xlsx andazasi bo'yicha to'liq 20 ta varaqli kitobni yuklab olish">
+            <svg class="ic" viewBox="0 0 24 24" style="width:14px;height:14px;margin-right:4px;"><use href="#i-cloud-download"/></svg>20.xlsx Kitobini yuklash
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  function bindBuxWorkstationEvents() {
+    const btnQuickXlsx = document.getElementById("btnBuxQuickUnifiedExportXlsx");
+    if (btnQuickXlsx) {
+      btnQuickXlsx.addEventListener("click", () => {
+        exportUzbBuxgalteriyaXlsx();
+      });
+    }
+  }
+
+  function renderBuxgalteriyaHub(tab = "operatsiyalar") {
+    if (tab === "aylanma") return renderAylanma();
+    if (tab === "shaxmatka") return renderShaxmatka();
+    if (tab === "boshlangich") return renderBoshlangichQoldiqlar();
+    return renderOperatsiyalar();
+  }
+
+  /* --------------------------------------------------------------------------
      9. UI SAHIFA 1: OPERATSIYALAR JURNALI (RENDER OPERATSIYALAR)
      -------------------------------------------------------------------------- */
 
@@ -1071,6 +1159,7 @@
     }).join("");
 
     main.innerHTML = `
+      ${renderBuxWorkstationHeader("operatsiyalar")}
       <div class="page-header">
         <div>
           <h1 class="page-title">Xo'jalik Operatsiyalari Jurnali (Order-jurnal)</h1>
@@ -1290,6 +1379,8 @@
         renderOperatsiyalar();
       });
     });
+
+    bindBuxWorkstationEvents();
   }
 
   window.renderOperatsiyalar = renderOperatsiyalar;
@@ -1456,6 +1547,7 @@
     }).join("");
 
     main.innerHTML = `
+      ${renderBuxWorkstationHeader("aylanma")}
       <div class="page-header">
         <div>
           <h1 class="page-title">Hisoblar Bo'yicha Aylanma (Schyot Kartochkasi / ОСВ)</h1>
@@ -1615,6 +1707,8 @@
 
     const btnPrnAyl = document.getElementById("btnPrintAylanmaPdf");
     if (btnPrnAyl) btnPrnAyl.addEventListener("click", () => printAylanmaPdf(osvRes, AYLANMA_TARGET_SCHYOT, AYLANMA_OY));
+
+    bindBuxWorkstationEvents();
   }
 
   window.renderAylanma = renderAylanma;
@@ -1662,6 +1756,7 @@
     }).join("");
 
     main.innerHTML = `
+      ${renderBuxWorkstationHeader("shaxmatka")}
       <div class="page-header">
         <div>
           <h1 class="page-title">Shaxmatka va Bosh Kitob (Шахматка & Главная книга)</h1>
@@ -1889,6 +1984,8 @@
 
     const btnPrnShx = document.getElementById("btnPrintShaxmatkaPdf");
     if (btnPrnShx) btnPrnShx.addEventListener("click", () => printShaxmatkaPdf(shx, bk, ACTIVE_SHAXMATKA_TAB, SHAXMATKA_OY));
+
+    bindBuxWorkstationEvents();
   }
 
   window.renderShaxmatka = renderShaxmatka;
@@ -1991,6 +2088,7 @@
     });
 
     main.innerHTML = `
+      ${renderBuxWorkstationHeader("boshlangich")}
       <div class="page-header">
         <div>
           <h1 class="page-title">Boshlang'ich Qoldiqlar (Йил бошига қолдиқ)</h1>
@@ -2128,6 +2226,8 @@
 
     const btnPrnBsh = document.getElementById("btnPrintBoshlangichPdf");
     if (btnPrnBsh) btnPrnBsh.addEventListener("click", () => printBoshlangichPdf(STORE.boshlangichQoldiqlar || {}));
+
+    bindBuxWorkstationEvents();
   }
 
   window.renderBoshlangichQoldiqlar = renderBoshlangichQoldiqlar;
@@ -2720,6 +2820,10 @@
   window.exportBoshlangichXlsx = exportBoshlangichXlsx;
   window.printBoshlangichPdf = printBoshlangichPdf;
   window.printOperatsiyalarPdf = printOperatsiyalarPdf;
+
+  window.getBuxgalteriyaSummary = getBuxgalteriyaSummary;
+  window.renderBuxgalteriyaHub = renderBuxgalteriyaHub;
+  window.renderBuxWorkstationHeader = renderBuxWorkstationHeader;
 
   // Ilova ishga tushganda avtomatik saqlangan ma'lumotlarni tekshirish
   initBuxgalteriyaStore();
