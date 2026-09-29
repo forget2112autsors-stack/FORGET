@@ -37,16 +37,30 @@ create index if not exists idx_kassa_kontragent_inn on public.kassa(firma_id, ko
 
 alter table public.kassa enable row level security;
 
+-- Boshqa firma jadvallari bilan bir xil naqsh (schema_multi_firma.sql, migration_xavfsizlik_v2.sql):
+-- o'qish/qo'shish/tahrirlash — firma a'zolariga, o'chirish — faqat firma egasiga (is_firma_admin).
+-- Avvalgi versiyadagi "kassa_firma_access" (for all — o'chirishni ham har kimga ochardi) olib tashlanadi.
 do $$
+declare
+  del_check text := case
+    when exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                 where n.nspname = 'public' and p.proname = 'is_firma_admin')
+    then 'public.is_firma_admin(firma_id)'
+    else 'public.is_admin()'
+  end;
 begin
-  if not exists (
-    select 1 from pg_policies where schemaname = 'public' and tablename = 'kassa' and policyname = 'kassa_firma_access'
-  ) then
-    create policy "kassa_firma_access" on public.kassa
-      for all to authenticated
-      using (public.has_firma_access(firma_id))
-      with check (public.has_firma_access(firma_id));
-  end if;
+  drop policy if exists "kassa_firma_access" on public.kassa;
+  drop policy if exists "firma_select" on public.kassa;
+  drop policy if exists "firma_insert" on public.kassa;
+  drop policy if exists "firma_update" on public.kassa;
+  drop policy if exists "firma_delete_admin" on public.kassa;
+  create policy "firma_select" on public.kassa for select to authenticated
+    using (public.has_firma_access(firma_id));
+  create policy "firma_insert" on public.kassa for insert to authenticated
+    with check (public.has_firma_access(firma_id));
+  create policy "firma_update" on public.kassa for update to authenticated
+    using (public.has_firma_access(firma_id)) with check (public.has_firma_access(firma_id));
+  execute format('create policy "firma_delete_admin" on public.kassa for delete to authenticated using (%s)', del_check);
 end $$;
 
 /* ============================ 3) Audit log trigger ============================ */

@@ -15281,7 +15281,7 @@ function openDidoxSyncModal(defaultType = "kirim") {
   const btnEimzo = document.getElementById("btnDidoxEimzoAuth");
   if (btnEimzo) {
     btnEimzo.addEventListener("click", async () => {
-      if (!eimzoAvailable()) {
+      if (!(await eimzoAvailable())) {
         toast("E-IMZO moduli (vendor/capiws.js) kompyuterda topilmadi. Tokenni qo'lda kiriting.", "warn");
         return;
       }
@@ -18437,8 +18437,21 @@ document.getElementById("authPassword").addEventListener("keydown", (e) => {
    to'xtaydi (email/parol bilan kirish bunga bog'liq emas). */
 const EIMZO_INN_OID = "1.2.860.3.16.1.1"; // yuridik shaxs INN'i (sertifikat subjectName maydoni)
 
+// vendor/capiws.js faqat E-IMZO tugmasi bosilganda yuklanadi: u ilova bilan birga kelmaydi
+// (qarang: index.html izohi), sahifa ochilishida so'ralsa har safar konsolda 404 xatosi chiqardi.
+let eimzoLoadPromise = null;
 function eimzoAvailable() {
-  return typeof window.CAPIWS !== "undefined" && !window.EIMZO_MISSING;
+  if (typeof window.CAPIWS !== "undefined") return Promise.resolve(true);
+  if (!eimzoLoadPromise) {
+    eimzoLoadPromise = new Promise((resolve) => {
+      const s = document.createElement("script");
+      s.src = "vendor/capiws.js";
+      s.onload = () => resolve(typeof window.CAPIWS !== "undefined");
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    });
+  }
+  return eimzoLoadPromise;
 }
 
 function setEimzoStatus(msg, isErr) {
@@ -18449,7 +18462,7 @@ function setEimzoStatus(msg, isErr) {
 }
 
 document.getElementById("authEimzoBtn").addEventListener("click", async () => {
-  if (!eimzoAvailable()) {
+  if (!(await eimzoAvailable())) {
     setEimzoStatus("E-IMZO kutubxonasi topilmadi (vendor/capiws.js) — administratorga murojaat qiling.", true);
     return;
   }
