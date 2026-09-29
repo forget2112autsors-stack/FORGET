@@ -39,6 +39,7 @@ const toNumCode = extractFunction("toNum");
 const normalizeDateCode = extractFunction("normalizeDate");
 const normalizeKontragentNomiCode = extractFunction("normalizeKontragentNomi");
 const tryParseAbsBankStatementCode = extractFunction("tryParseAbsBankStatement");
+const findBankDupCode = extractFunction("findBankDup");
 
 const context = {
   XLSX,
@@ -55,15 +56,17 @@ ${toNumCode}
 ${normalizeDateCode}
 ${normalizeKontragentNomiCode}
 ${tryParseAbsBankStatementCode}
-return { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement, extractPayerFromBankTavsif };
+${findBankDupCode}
+return { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement, extractPayerFromBankTavsif, findBankDup };
 `;
 
+const STORE = { bank: [] };
 const fns = new Function(
-  "XLSX",
+  "XLSX", "STORE",
   scriptCode
-)(XLSX);
+)(XLSX, STORE);
 
-const { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement, extractPayerFromBankTavsif } = fns;
+const { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement, extractPayerFromBankTavsif, findBankDup } = fns;
 
 let passCount = 0;
 function test(name, fn) {
@@ -129,7 +132,8 @@ if (fs.existsSync(sampleFilePath)) {
     const services = parsed.rows.filter((r) => r.xizmat);
     assert.strictEqual(services.length, 7);
     assert(services.some((s) => s.tavsif.includes("Накд пул бериш")));
-    assert(services.some((s) => s.kontragent.includes("Начисленные %%")));
+    // "Начисленные %% <firma>" — firmaning o'z foizlar hisobi, kontragent sifatida olinmaydi
+    assert(services.every((s) => !s.kontragent.includes("Начисленные %%")));
   });
 
   test("Kontragent nomidan ortiqcha qo'shtirnoqlar tozalandi", () => {
@@ -268,6 +272,48 @@ test("Nomsiz INN — faqat INN olinadi; INN yo'q yoki vositachining o'zi bo'lsa 
   assert.deepStrictEqual(extractPayerFromBankTavsif("от ИНН:305123456 xarid.uzex.uz"), { inn: "305123456", nomi: "" });
   assert.strictEqual(extractPayerFromBankTavsif("Устав кап. шаклантириш"), null);
   assert.strictEqual(extractPayerFromBankTavsif("ИНН: 201122919 (UZEX)"), null);
+});
+
+console.log("\n[7] 'TurnoverSaldoInfoByDate' (История по счету: INN va hujjat raqamisiz)");
+const saldoRows = [
+  ["История по счету: 20208000905596227001", "", "", "", "", "", "", "", "", ""],
+  ["Остаток на начала периода Пассив 0", "", "", "", "", "", "", "", "", ""],
+  ["Счет клиента", "Наименование клиента", "Счет кореспондента", "Наименование кореспондента", "Транзакционный номер", "МФО", "Сумма дебита", "Сумма кредита", "Дата", "Назначение платежа"],
+  ["", "", "", "", "", "Корес", "", "", "", ""],
+  ["20208000905596227001", "RISE SPACE МЧЖ", "10111000000010886400", "Амалиёт кассаларидаги накд пуллар", "", "", 0, 1500000, "30.01.2026", "1900  Юлчиев Э Устав кап. шаклантириш"],
+  ["20208000905596227001", "RISE SPACE МЧЖ", "16401000005596227001", "Начисленные %% \"HOJI DADA FAYZ MAKONI\" MChJ", "", "10883", 0.96, 0, "30.01.2026", "00668 BC 30.01.2026 погашение Дебетовый оборот (внеш) -0.96"],
+  ["20208000905596227001", "RISE SPACE МЧЖ", "23106000000000001001", "RISE SPACE МЧЖ", "", "", 2500000, 0, "13.08.2026", "00633 июл ойи иш хаки"],
+  ["20208000905596227001", "RISE SPACE МЧЖ", "23402000300100001010", "Узбекистон Республикаси Молия вазирлиги Газначилиги", "", "", 28300, 0, "13.08.2026", "08101~4014228603304123430937093~201423281~199 СОРЖ пеня"]
+];
+const saldoParsed = tryParseAbsBankStatement(saldoRows, { ownInn: "310068867" });
+
+test("Sarlavha ('Сумма дебита', 'кореспондента') tanildi, 4 ta qator o'qildi", () => {
+  assert(saldoParsed !== null);
+  assert.strictEqual(saldoParsed.rows.length, 4);
+  assert.strictEqual(saldoParsed.rows[0].kirim, 1500000);
+  assert.strictEqual(saldoParsed.rows[3].chiqim, 28300);
+  assert.strictEqual(saldoParsed.rows[3].sana, "2026-08-13");
+});
+
+test("Kontragent — korrespondent; firmaning o'z nomi va foizlar hisobi olinmadi", () => {
+  assert.strictEqual(saldoParsed.rows[3].kontragent, "Узбекистон Республикаси Молия вазирлиги Газначилиги");
+  assert.strictEqual(saldoParsed.rows[1].kontragent, "");
+  assert.strictEqual(saldoParsed.rows[1].xizmat, true);
+  assert.strictEqual(saldoParsed.rows[2].kontragent, "");
+});
+
+test("Takror: hujjat raqamisiz qator tavsif bo'yicha, sana 1 kun farqli bo'lsa ham topildi", () => {
+  STORE.bank = [
+    { id: 1, sana: "2026-08-12", hujjatRaqami: "52", kontragent: "", tavsif: "08101~4014228603304123430937093~201423281~199 СОРЖ пеня", kirim: 0, chiqim: 28300 },
+    { id: 2, sana: "2026-01-30", hujjatRaqami: "48839288", kontragent: "", tavsif: "1900  Юлчиев Э Устав кап. шаклантириш", kirim: 1500000, chiqim: 0 }
+  ];
+  const used = new Set();
+  assert.strictEqual(findBankDup(saldoParsed.rows[3], used), STORE.bank[0]);
+  assert.strictEqual(findBankDup(saldoParsed.rows[0], used), STORE.bank[1]);
+  // Bir xil qator ikkinchi marta kelsa — ishlatilgan yozuvga qayta yopishmaydi
+  assert.strictEqual(findBankDup(saldoParsed.rows[0], used), undefined);
+  // Tavsif farqli bo'lsa — sana yaqin bo'lsa ham takror emas
+  assert.strictEqual(findBankDup({ ...saldoParsed.rows[3], tavsif: "boshqa to'lov" }, new Set()), undefined);
 });
 
 console.log(`\n✓ Hammasi o'tdi (${passCount} ta sinov muvaffaqiyatli!)\n`);
