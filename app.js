@@ -4150,6 +4150,20 @@ function isPlaceholderInn(inn) {
   return /^0+$/.test(s) || /^(\d)\1+$/.test(s);
 }
 
+// Vositachi (to'lov agenti) INN'lari: pul ular hisobidan keladi, lekin haqiqiy to'lovchi
+// to'lov maqsadida "...от ИНН: 207323290(Ёшлар ишлари агентлиги (...) xarid.uzex.uz..." ko'rinishida yoziladi.
+// 201122919 — "UZEX" tovar-xom ashyo birjasi (xarid.uzex.uz elektron do'koni).
+const BANK_VOSITACHI_INNS = ["201122919"];
+
+// Vositachi orqali kelgan to'lovda to'lov maqsadidan haqiqiy kontragentning INN va nomini ajratadi.
+// Topilmasa null qaytaradi.
+function extractPayerFromBankTavsif(tavsif) {
+  const m = String(tavsif || "").match(/(?:ИНН|INN|STIR)\s*[:№]?\s*(\d{9}|\d{14})(?:\s*\(\s*([^()]*))?/i);
+  if (!m || BANK_VOSITACHI_INNS.includes(m[1])) return null;
+  const nomi = String(m[2] || "").replace(/^["'«\s]+|["'»\s]+$/g, "").replace(/\s+/g, " ").trim();
+  return { inn: m[1], nomi };
+}
+
 function normalizeKontragentNomi(s) {
   return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
@@ -17708,6 +17722,17 @@ async function handleBankImport(file) {
       }
     }
   }
+
+    // Vositachi (masalan UZEX, 201122919) orqali kelgan to'lovlar — haqiqiy kontragent to'lov
+    // maqsadidagi "ИНН: ...(Nomi ..." dan olinadi va yozuv shu kontragentga biriktiriladi.
+    // Nom bo'lmasa, pastdagi blok uni INN bo'yicha spravochnikdan to'ldiradi.
+    candidates.forEach((c) => {
+      if (!BANK_VOSITACHI_INNS.includes(String(c.kontragentInn || "").trim())) return;
+      const payer = extractPayerFromBankTavsif(c.tavsif);
+      if (!payer) return;
+      c.kontragentInn = payer.inn;
+      c.kontragent = payer.nomi;
+    });
 
     // Faylda kontragent nomi bo'lmasa (faqat INN kelgan bo'lsa) — nomni INN bo'yicha
     // Kontragentlar spravochnigidan yoki mavjud Bank yozuvlaridan olamiz.
