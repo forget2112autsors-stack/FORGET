@@ -17618,7 +17618,11 @@ function tryParseAbsBankStatement(rows, opts) {
     const kirim = toNum(row[col.kredit]);
     if (chiqim <= 0 && kirim <= 0) continue; // Nol yoki bo'sh yakuniy qatorlarni o'tkazib yuborish
 
-    const tavsif = col.naznach >= 0 ? String(row[col.naznach] || "").trim() : "";
+    // Ba'zi banklar 5 xonali to'lov kodini matnga yopishtirib yozadi ("0069809.09.2026 yildagi",
+    // "00675Юлчиев") — kod va matn orasiga bo'shliq qo'yiladi. Kod ortidan hisob raqami ("00602700110...~")
+    // kelgan qatorlarga tegilmaydi.
+    const tavsif = (col.naznach >= 0 ? String(row[col.naznach] || "").trim() : "")
+      .replace(/^(\d{5})(?=\d{2}\.\d{2}\.\d{4}|\d{5}\s|[^\d\s~])/, "$1 ");
 
     // Bank xizmati / komissiyasi avtomatik aniqlanishi (xizmat xarajatlariga avtomat belgilash)
     const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|\bBC\s+\d{2}\.\d{2}\.\d{4}\s+погашение|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragentNomi);
@@ -17659,6 +17663,7 @@ async function handleBankImport(file) {
 
     const wasEmpty = STORE.bank.length === 0;
     const candidates = [];
+    const dupPairs = []; // [mavjud yozuv, fayldagi takror qator] — bo'sh kontragent/INN'ni to'ldirish uchun
     let skipped = 0;
     let newOpening = null;
 
@@ -17668,7 +17673,7 @@ async function handleBankImport(file) {
         newOpening = parsed1C.opening;
       }
       for (const r of parsed1C.rows) {
-        const dup = STORE.bank.some((b) => {
+        const dup = STORE.bank.find((b) => {
           const sameDate = b.sana === r.sana;
           const sameKirim = Math.abs(toNum(b.kirim) - toNum(r.kirim)) < 1;
           const sameChiqim = Math.abs(toNum(b.chiqim) - toNum(r.chiqim)) < 1;
@@ -17680,7 +17685,7 @@ async function handleBankImport(file) {
           const sameTavsif = (b.tavsif || "").trim().toLowerCase() === (r.tavsif || "").trim().toLowerCase();
           return sameKontragent && (sameTavsif || !r.tavsif || !b.tavsif);
         });
-        if (dup) { skipped++; continue; }
+        if (dup) { skipped++; dupPairs.push([dup, r]); continue; }
         candidates.push(r);
       }
     } else {
@@ -17698,7 +17703,7 @@ async function handleBankImport(file) {
         newOpening = abs.opening;
       }
       for (const r of abs.rows) {
-        const dup = STORE.bank.some((b) => {
+        const dup = STORE.bank.find((b) => {
           const sameDate = b.sana === r.sana;
           const sameKirim = Math.abs(toNum(b.kirim) - toNum(r.kirim)) < 1;
           const sameChiqim = Math.abs(toNum(b.chiqim) - toNum(r.chiqim)) < 1;
@@ -17710,7 +17715,7 @@ async function handleBankImport(file) {
           const sameTavsif = (b.tavsif || "").trim().toLowerCase() === (r.tavsif || "").trim().toLowerCase();
           return sameKontragent && (sameTavsif || !r.tavsif || !b.tavsif);
         });
-        if (dup) { skipped++; continue; }
+        if (dup) { skipped++; dupPairs.push([dup, r]); continue; }
         candidates.push(r);
       }
     } else {
@@ -17730,7 +17735,7 @@ async function handleBankImport(file) {
         const chiqim = toNum(row[5]);
         if (!sana && !kirim && !chiqim) continue;
         if (kirim <= 0 && chiqim <= 0) continue;
-        const dup = STORE.bank.some((b) => {
+        const dup = STORE.bank.find((b) => {
           const sameDate = b.sana === sana;
           const sameKirim = Math.abs(toNum(b.kirim) - toNum(kirim)) < 1;
           const sameChiqim = Math.abs(toNum(b.chiqim) - toNum(chiqim)) < 1;
@@ -17740,7 +17745,7 @@ async function handleBankImport(file) {
           }
           return normalizeKontragentNomi(b.kontragent) === normalizeKontragentNomi(kontragent);
         });
-        if (dup) { skipped++; continue; }
+        if (dup) { skipped++; dupPairs.push([dup, { kontragent, kontragentInn: "", tavsif }]); continue; }
         const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragent);
         candidates.push({ sana, hujjatRaqami, kontragent, kontragentInn: "", tavsif, kirim, chiqim, xizmat: isService });
       }
@@ -17750,13 +17755,36 @@ async function handleBankImport(file) {
     // Vositachi (masalan UZEX, 201122919) orqali kelgan to'lovlar — haqiqiy kontragent to'lov
     // maqsadidagi "ИНН: ...(Nomi ..." dan olinadi va yozuv shu kontragentga biriktiriladi.
     // Nom bo'lmasa, pastdagi blok uni INN bo'yicha spravochnikdan to'ldiradi.
-    candidates.forEach((c) => {
+    const applyVositachi = (c) => {
       if (!BANK_VOSITACHI_INNS.includes(String(c.kontragentInn || "").trim())) return;
       const payer = extractPayerFromBankTavsif(c.tavsif);
       if (!payer) return;
       c.kontragentInn = payer.inn;
       c.kontragent = payer.nomi;
-    });
+    };
+    candidates.forEach(applyVositachi);
+    dupPairs.forEach(([, r]) => applyVositachi(r));
+
+    // Takror qatorlar: avval kontragentsiz formatda (masalan "TurnoverOperInfo") import qilingan
+    // yozuvlar keyinroq to'liq ko'chirma (Biznes 24/7 "История по счету") bilan qayta import
+    // qilinsa — mavjud yozuvning bo'sh (yoki vositachi/placeholder) kontragent va INN'i to'ldiriladi.
+    // To'ldirilgan maydonlarga tegilmaydi.
+    let enriched = 0;
+    for (const [b, r] of dupPairs) {
+      // Bank xizmati/komissiyasi: "korrespondent" — firmaning o'z foizlar hisobi, kontragent emas
+      if (b.xizmat) continue;
+      const patch = {};
+      const bInn = String(b.kontragentInn || "").trim();
+      const rInn = String(r.kontragentInn || "").trim();
+      const innReplaceable = isPlaceholderInn(bInn) || BANK_VOSITACHI_INNS.includes(bInn);
+      if (rInn && !isPlaceholderInn(rInn) && innReplaceable && rInn !== bInn) patch.kontragentInn = rInn;
+      if (r.kontragent && (!String(b.kontragent || "").trim() || patch.kontragentInn)) patch.kontragent = r.kontragent;
+      if (!Object.keys(patch).length) continue;
+      Object.assign(b, patch);
+      pushFieldsUpdate("bank", b.id, patch);
+      if (b.kontragent) await ensureKontragentAutoAdded(b.kontragentInn, b.kontragent);
+      enriched++;
+    }
 
     // Faylda kontragent nomi bo'lmasa (faqat INN kelgan bo'lsa) — nomni INN bo'yicha
     // Kontragentlar spravochnigidan yoki mavjud Bank yozuvlaridan olamiz.
@@ -17825,7 +17853,7 @@ async function handleBankImport(file) {
     closeModal();
     renderBank();
     const openingNote = (newOpening !== null) ? `, boshlang'ich qoldiq: ${fmtSum(newOpening)}` : "";
-    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}${openingNote}`);
+    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}${enriched ? `, ${enriched} ta mavjud yozuvning kontragenti to'ldirildi` : ""}${openingNote}`);
     if (unresolvedNomi.size) openBankInnPromptModal([...unresolvedNomi]);
   } catch (err) {
     console.error(err);
