@@ -787,9 +787,33 @@ async function loadAllData() {
     }
     STORE.tabel = [];
   }
+  fixVositachiBankRows();
   recomputeAllPaymentStatus();
   DATA_LOADED = true;
   if (markDataReady) { markDataReady(); markDataReady = null; }
+}
+
+// Vositachi (BANK_VOSITACHI_INNS) orqali kelgan, avvalroq vositachining o'ziga biriktirib
+// import qilingan bank yozuvlarini haqiqiy kontragentga ko'chiradi (qarang: handleBankImport).
+// Tuzatilgan yozuv endi vositachi INN'iga ega bo'lmaydi — shu sabab keyingi yuklashlarda qayta ishlamaydi.
+function fixVositachiBankRows() {
+  const fixed = [];
+  STORE.bank.forEach((r) => {
+    if (!BANK_VOSITACHI_INNS.includes(String(r.kontragentInn || "").trim())) return;
+    const payer = extractPayerFromBankTavsif(r.tavsif);
+    if (!payer) return;
+    const k = STORE.kontragentlar.find((x) => String(x.inn || "").trim() === payer.inn && x.nomi);
+    r.kontragentInn = payer.inn;
+    r.kontragent = payer.nomi || (k ? k.nomi : "");
+    pushFieldsUpdate("bank", r.id, { kontragentInn: r.kontragentInn, kontragent: r.kontragent });
+    fixed.push(r);
+  });
+  const seen = new Set();
+  fixed.forEach((r) => {
+    if (!r.kontragent || seen.has(r.kontragentInn)) return;
+    seen.add(r.kontragentInn);
+    ensureKontragentAutoAdded(r.kontragentInn, r.kontragent);
+  });
 }
 
 // To'lov moslashtirish (recomputeAllPaymentStatus) natijasida BOSHQA qatorlarning

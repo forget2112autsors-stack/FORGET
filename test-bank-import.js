@@ -46,12 +46,16 @@ const context = {
   todayISO: () => "2026-09-23"
 };
 
+const vositachiStart = appJsCode.indexOf("const BANK_VOSITACHI_INNS");
+const vositachiCode = appJsCode.slice(vositachiStart, appJsCode.indexOf("function normalizeKontragentNomi(", vositachiStart));
+
 const scriptCode = `
+${vositachiCode}
 ${toNumCode}
 ${normalizeDateCode}
 ${normalizeKontragentNomiCode}
 ${tryParseAbsBankStatementCode}
-return { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement };
+return { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement, extractPayerFromBankTavsif };
 `;
 
 const fns = new Function(
@@ -59,7 +63,7 @@ const fns = new Function(
   scriptCode
 )(XLSX);
 
-const { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement } = fns;
+const { toNum, normalizeDate, normalizeKontragentNomi, tryParseAbsBankStatement, extractPayerFromBankTavsif } = fns;
 
 let passCount = 0;
 function test(name, fn) {
@@ -252,6 +256,18 @@ test("'Платежная цель' tavsif sifatida olindi, BC komissiyasi xizma
   assert(turnoverParsed.rows[0].tavsif.includes("Устав"));
   assert.strictEqual(turnoverParsed.rows[2].xizmat, true);
   assert.strictEqual(turnoverParsed.rows[1].xizmat, false);
+});
+
+console.log("\n[6] Vositachi (UZEX 201122919) orqali kelgan to'lov — haqiqiy kontragent to'lov maqsadidan");
+test("To'lov maqsadidan INN va kontragent nomi ajratildi", () => {
+  const p = extractPayerFromBankTavsif("00602700110860262877950600262007~200933985~За Одежда, договор №4304240 от 01.04.2026 от ИНН: 207323290(Ёшлар ишлари агентлиги (Ёшларга оид давлат сиёсатини куллаб-кувватлаш ) xarid.uzex.uz (Электронный магазин)");
+  assert.deepStrictEqual(p, { inn: "207323290", nomi: "Ёшлар ишлари агентлиги" });
+});
+
+test("Nomsiz INN — faqat INN olinadi; INN yo'q yoki vositachining o'zi bo'lsa — null", () => {
+  assert.deepStrictEqual(extractPayerFromBankTavsif("от ИНН:305123456 xarid.uzex.uz"), { inn: "305123456", nomi: "" });
+  assert.strictEqual(extractPayerFromBankTavsif("Устав кап. шаклантириш"), null);
+  assert.strictEqual(extractPayerFromBankTavsif("ИНН: 201122919 (UZEX)"), null);
 });
 
 console.log(`\n✓ Hammasi o'tdi (${passCount} ta sinov muvaffaqiyatli!)\n`);
