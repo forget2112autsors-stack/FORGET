@@ -17472,12 +17472,16 @@ function parseBalanceLine(cell, pattern) {
 
 // ABS/Klient-Bank ko'chirmasi: ham eski birlashgan "Cчет/ИНН/Наименование", ham zamonaviy "Biznes 24/7" (TurnoverOperationsInfoByDate),
 // Markaziy Bank va boshqa O'zbekiston banklari formatlarini (alohida "ИНН", "Наименование корреспондента", "Сумма дебет/кредит")
-// avtomatik va to'liq tanib oladi.
-function tryParseAbsBankStatement(rows) {
+// avtomatik va to'liq tanib oladi. Shuningdek "TurnoverOperInfo" (BRB va b.) formatini ham: unda sarlavha
+// "Счёт/инн" ("ё" bilan), hisob raqami va INN slashsiz qo'shib yozilgan (20 xona hisob + 9/14 xona INN/PINFL),
+// tavsif esa "Платежная цель" ustunida. Chiqim qatorlarida u yerda firmaning O'ZINING INN'i turadi —
+// opts.ownInn berilsa, u kontragent INN'i sifatida olinmaydi.
+function tryParseAbsBankStatement(rows, opts) {
+  const ownInn = String((opts && opts.ownInn) || "").replace(/\D/g, "");
   let headerIdx = -1;
   const col = {};
   for (let i = 0; i < Math.min(rows.length, 30); i++) {
-    const joined = rows[i].map((c) => String(c).trim().toLowerCase());
+    const joined = rows[i].map((c) => String(c).trim().toLowerCase().replace(/ё/g, "е"));
     const dateI = joined.findIndex((c) => /дата|sana/i.test(c) && !/tugash|boshlanish|davr/i.test(c));
     const debetI = joined.findIndex((c) => /дебет|расход|chiqim/i.test(c));
     const kreditI = joined.findIndex((c) => /кредит|приход|kirim/i.test(c));
@@ -17487,7 +17491,7 @@ function tryParseAbsBankStatement(rows) {
       col.debet = debetI;
       col.kredit = kreditI;
       col.doc = joined.findIndex((c) => /№\s*док|номер\s*док|hujjat/i.test(c));
-      col.naznach = joined.findIndex((c) => /назначен|детали|tavsif|izoh|maqsad/i.test(c));
+      col.naznach = joined.findIndex((c) => /назначен|детали|цель|tavsif|izoh|maqsad/i.test(c));
 
       // Kontragent nomi ustuni (lekin "Счет", "Банк", "МФО" so'zlari aralashmasin)
       col.kontragentNomi = joined.findIndex((c) =>
@@ -17557,6 +17561,8 @@ function tryParseAbsBankStatement(rows) {
     if ((!kontragentInn || !kontragentNomi) && col.schetCombined >= 0) {
       const schetCell = String(row[col.schetCombined] || "");
       const parts = schetCell.split("/");
+      const glued = schetCell.replace(/\s/g, "").match(/^(\d{20})(\d{9}|\d{14})$/);
+      if (!kontragentInn && parts.length === 1 && glued) kontragentInn = glued[2];
       if (!kontragentInn && parts[1]) kontragentInn = parts[1].replace(/\D/g, "").trim();
       if (!kontragentNomi && parts[2]) {
         kontragentNomi = parts.slice(2).join("/")
@@ -17567,6 +17573,8 @@ function tryParseAbsBankStatement(rows) {
       }
     }
 
+    if (ownInn && kontragentInn === ownInn) kontragentInn = "";
+
     const hujjatRaqami = col.doc >= 0 ? String(row[col.doc] || "").trim() : "";
     const chiqim = toNum(row[col.debet]);
     const kirim = toNum(row[col.kredit]);
@@ -17575,7 +17583,7 @@ function tryParseAbsBankStatement(rows) {
     const tavsif = col.naznach >= 0 ? String(row[col.naznach] || "").trim() : "";
 
     // Bank xizmati / komissiyasi avtomatik aniqlanishi (xizmat xarajatlariga avtomat belgilash)
-    const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragentNomi);
+    const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|\bBC\s+\d{2}\.\d{2}\.\d{4}\s+погашение|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragentNomi);
 
     parsed.push({
       sana: normalizeDate(typeof dateCell === "string" ? dateCell.split(" ")[0] : dateCell),
@@ -17643,7 +17651,9 @@ async function handleBankImport(file) {
       const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
       if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
 
-      const abs = tryParseAbsBankStatement(rows);
+      // Firmaning o'z INN'i: sozlamalardan, bo'lmasa fayl nomidan ("TurnoverOperInfo 310068867.xlsx")
+      const fileInn = (String(file.name || "").match(/(?:^|\D)(\d{9})(?:\D|$)/) || [])[1] || "";
+      const abs = tryParseAbsBankStatement(rows, { ownInn: String(STORE.settings.inn || "").trim() || fileInn });
 
     if (abs) {
       if (abs.opening !== null && (wasEmpty || !toNum(STORE.settings.bankOpeningBalance))) {
@@ -17698,6 +17708,16 @@ async function handleBankImport(file) {
       }
     }
   }
+
+    // Faylda kontragent nomi bo'lmasa (faqat INN kelgan bo'lsa) — nomni INN bo'yicha
+    // Kontragentlar spravochnigidan yoki mavjud Bank yozuvlaridan olamiz.
+    candidates.forEach((c) => {
+      if (c.kontragent || isPlaceholderInn(c.kontragentInn)) return;
+      const inn = String(c.kontragentInn).trim();
+      const k = STORE.kontragentlar.find((x) => String(x.inn || "").trim() === inn && x.nomi);
+      const b = k ? null : STORE.bank.find((x) => String(x.kontragentInn || "").trim() === inn && x.kontragent);
+      c.kontragent = k ? k.nomi : (b ? b.kontragent : "");
+    });
 
     if (newOpening !== null) {
       STORE.settings.bankOpeningBalance = newOpening;

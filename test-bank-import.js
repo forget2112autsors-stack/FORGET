@@ -224,4 +224,34 @@ test("Hujjat raqami 0 bo'lsa ham kontragent boshqa bo'lsa dublikat bo'lmaydi", (
   assert.strictEqual(isDup, false);
 });
 
+// 5. "TurnoverOperInfo" formati (Счёт/инн — hisob+INN slashsiz qo'shilgan, "Платежная цель")
+console.log("\n[5] 'TurnoverOperInfo' formati (Счёт/инн qo'shib yozilgan)");
+const turnoverRows = [
+  ["01037 / TOSHKENT SH, Biznesni rivojlantirish banki ATB BOSH OFISI", "", "", "", "", ""],
+  ["Дата", "Счёт/инн", "Номер документа", "Дебет", "Кредит", "Платежная цель"],
+  ["2026-01-30 13:30:22", "20208000905596227001206916313", "48839288", "0.00", "1,500,000.00", "1900  Устав кап. шаклантириш"],
+  ["2026-01-30 13:44:45", "20208000905596227001310068867", "19", "144,840.00", "0.00", "08102~Оплата за 100 Айланмадан олинадиган солик"],
+  ["2026-03-13 12:45:44", "20208000905596227001310068867", "61032388", "741.60", "0.00", "00668 BC 13.03.2026 погашение Электрон хужжат. -741.60"],
+  ["Итого:", "", "", 145581.6, 1500000, ""]
+];
+const turnoverParsed = tryParseAbsBankStatement(turnoverRows, { ownInn: "310068867" });
+
+test("Barcha 3 ta operatsiya va summalar o'qildi", () => {
+  assert(turnoverParsed !== null);
+  assert.strictEqual(turnoverParsed.rows.length, 3);
+  assert.strictEqual(turnoverParsed.rows[0].kirim, 1500000);
+  assert.strictEqual(turnoverParsed.rows[1].chiqim, 144840);
+});
+
+test("Kontragent INN'i hisob raqamidan ajratildi, firmaning o'z INN'i olinmadi", () => {
+  assert.strictEqual(turnoverParsed.rows[0].kontragentInn, "206916313");
+  assert.strictEqual(turnoverParsed.rows[1].kontragentInn, "");
+});
+
+test("'Платежная цель' tavsif sifatida olindi, BC komissiyasi xizmat deb belgilandi", () => {
+  assert(turnoverParsed.rows[0].tavsif.includes("Устав"));
+  assert.strictEqual(turnoverParsed.rows[2].xizmat, true);
+  assert.strictEqual(turnoverParsed.rows[1].xizmat, false);
+});
+
 console.log(`\n✓ Hammasi o'tdi (${passCount} ta sinov muvaffaqiyatli!)\n`);
