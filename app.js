@@ -17714,6 +17714,7 @@ async function handleBankImport(file) {
 
     const wasEmpty = STORE.bank.length === 0;
     const candidates = [];
+    let badDate = 0; // sanasi o'qilmagan qatorlar (tanilmagan format) — bazaga yuborilmaydi
     const usedDup = new Set(); // bitta mavjud yozuv faqat bitta fayl qatoriga mos kelsin
     const dupPairs = []; // [mavjud yozuv, fayldagi takror qator] — bo'sh kontragent/INN'ni to'ldirish uchun
     let skipped = 0;
@@ -17765,6 +17766,9 @@ async function handleBankImport(file) {
         const chiqim = toNum(row[5]);
         if (!sana && !kirim && !chiqim) continue;
         if (kirim <= 0 && chiqim <= 0) continue;
+        // Oddiy jadval: 1-ustun sana bo'lishi shart. Aks holda (tanilmagan bank formati) hisob
+        // raqami va h.k. sana o'rniga bazaga ketib, butun importni 400 xatosi bilan yiqitardi.
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(sana)) { badDate++; continue; }
         const dup = findBankDup({ sana, hujjatRaqami, kontragent, tavsif, kirim, chiqim }, usedDup);
         if (dup) { skipped++; dupPairs.push([dup, { kontragent, kontragentInn: "", tavsif }]); continue; }
         const isService = /комиссия|komissiya|хизмат|xizmat|начисленные\s*%%|погашение\s*дебетовый\s*оборот|банк\s*хизмат|bank\s*xizmat/i.test(tavsif + " " + kontragent);
@@ -17776,6 +17780,11 @@ async function handleBankImport(file) {
     // Vositachi (masalan UZEX, 201122919) orqali kelgan to'lovlar — haqiqiy kontragent to'lov
     // maqsadidagi "ИНН: ...(Nomi ..." dan olinadi va yozuv shu kontragentga biriktiriladi.
     // Nom bo'lmasa, pastdagi blok uni INN bo'yicha spravochnikdan to'ldiradi.
+    if (badDate && !candidates.length && !dupPairs.length) {
+      toast("Fayl formati tanilmadi: sana, summa va tavsif ustunlari topilmadi. Bankdan \"История по счету\" (Excel) yoki 1C formatidagi ko'chirmani yuklang.", "err");
+      return;
+    }
+
     const applyVositachi = (c) => {
       if (!BANK_VOSITACHI_INNS.includes(String(c.kontragentInn || "").trim())) return;
       const payer = extractPayerFromBankTavsif(c.tavsif);
@@ -17882,7 +17891,7 @@ async function handleBankImport(file) {
     closeModal();
     renderBank();
     const openingNote = (newOpening !== null) ? `, boshlang'ich qoldiq: ${fmtSum(newOpening)}` : "";
-    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}${enriched ? `, ${enriched} ta mavjud yozuvning kontragenti to'ldirildi` : ""}${redated ? `, ${redated} ta yozuv sanasi ko'chirma bo'yicha tuzatildi` : ""}${openingNote}`);
+    toast(`Import: ${added} ta qo'shildi${skipped ? `, ${skipped} ta takror o'tkazib yuborildi` : ""}${enriched ? `, ${enriched} ta mavjud yozuvning kontragenti to'ldirildi` : ""}${redated ? `, ${redated} ta yozuv sanasi ko'chirma bo'yicha tuzatildi` : ""}${badDate ? `, ${badDate} ta qator sanasi o'qilmagani uchun o'tkazib yuborildi` : ""}${openingNote}`);
     if (unresolvedNomi.size) openBankInnPromptModal([...unresolvedNomi]);
   } catch (err) {
     console.error(err);
