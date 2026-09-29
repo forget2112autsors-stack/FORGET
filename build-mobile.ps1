@@ -52,8 +52,14 @@ Copy-Item "$src\vendor\*" "$build\www\vendor\" -Recurse -Force
 Write-Host "2) Capacitor android loyihasiga sinxronlanmoqda..."
 $env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-21.0.12.101-hotspot"
 $env:ANDROID_HOME = "C:\Android\sdk"
+# Gradle/npx oddiy ogohlantirishlarni ham stderr'ga yozadi (masalan "SDK XML
+# version 4"). PowerShell 5.1 "Stop" rejimida buni xato deb build'ni to'xtatadi,
+# shu sabab tashqi buyruqlarni "Continue" rejimida ishga tushirib, haqiqiy
+# natijani chiqish kodi ($LASTEXITCODE) bo'yicha tekshiramiz.
+$ErrorActionPreference = "Continue"
 Push-Location $build
 npx cap sync android
+if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npx cap sync xato bilan tugadi (kod $LASTEXITCODE)" }
 
 Write-Host "3) .apk build qilinmoqda ($Variant)..."
 Push-Location "$build\android"
@@ -62,8 +68,11 @@ if ($Variant -eq "release") {
 } else {
   .\gradlew.bat assembleDebug
 }
+$gradleExit = $LASTEXITCODE
 Pop-Location
 Pop-Location
+$ErrorActionPreference = "Stop"
+if ($gradleExit -ne 0) { throw "Gradle build xato bilan tugadi (kod $gradleExit)" }
 
 if ($Variant -eq "release") {
   $apk = "$build\android\app\build\outputs\apk\release\app-release.apk"
