@@ -190,10 +190,8 @@ const k1TdPhone = k1Row.children[3];
 k1TdPhone.dispatchEvent({ type: "click", preventDefault: () => {} });
 t("Telefon katagiga bosilsa ham tarix ochiladi", opened.length, 1);
 
-opened.length = 0;
-const k1TarixBtn = k1Row.querySelector("[data-detail-inn]");
-k1TarixBtn.dispatchEvent({ type: "click", preventDefault: () => {} });
-t("Tarix tugmasi bosilsa tarix ochiladi", opened, [{ inn: "123456789", back: "kontragentlar" }]);
+// Alohida "Tarix" tugmasi olib tashlangan — butun qator bosiladi (data-hist-inn qatorning o'zida)
+t("Qatorda alohida tarix tugmasi yo'q", k1Row.querySelector("[data-detail-inn]"), null);
 
 opened.length = 0;
 const editBtn = k1Row.querySelector("[data-edit]");

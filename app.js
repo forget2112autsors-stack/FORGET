@@ -10,6 +10,9 @@
 const THEME_KEY = "bux2112_theme";
 const FILTERS_KEY = "bux2112_filters";
 
+// Yuklangan kod versiyasi (index.html'dagi "app.js?v=..."). Qarang: watchForNewVersion.
+const APP_VERSION = ((document.currentScript && document.currentScript.src) || "").match(/[?&]v=([^&#]+)/)?.[1] || "";
+
 function normStatus(s) {
   if (s == null) return "";
   return String(s)
@@ -1067,6 +1070,33 @@ function toast(msg, type = "ok") {
   stack.appendChild(node);
   setTimeout(() => node.remove(), 3200);
 }
+
+// Sahifa uzoq ochiq tursa, yangi deploy'dan keyin ham ESKI kod ishlayveradi (masalan eski
+// bank importi yangi formatni tanimay, bazaga noto'g'ri ma'lumot yuboradi). Oyna faollashganda
+// va har 10 daqiqada index.html'dagi versiya tekshiriladi; farq qilsa — yangilash taklif qilinadi.
+// Faqat web'da: desktop (file://) va mobil (localhost) ilovalarda kod ilova ichida keladi.
+function watchForNewVersion() {
+  if (!APP_VERSION || !/^https?:$/.test(location.protocol) || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return;
+  let shown = false;
+  const check = async () => {
+    if (shown || document.hidden) return;
+    try {
+      const res = await fetch(location.pathname, { cache: "no-store" });
+      if (!res.ok) return;
+      const latest = ((await res.text()).match(/app\.js\?v=([^"'&#]+)/) || [])[1];
+      if (!latest || latest === APP_VERSION) return;
+      shown = true;
+      const bar = el(`<div class="toast warn" style="display:flex;align-items:center;gap:10px;">
+        <span>Dasturning yangi versiyasi chiqdi. Xatolarning oldini olish uchun sahifani yangilang.</span>
+        <button class="btn btn-sm btn-primary" type="button">Yangilash</button></div>`);
+      bar.querySelector("button").addEventListener("click", () => location.reload());
+      document.getElementById("toastStack").appendChild(bar);
+    } catch (e) { /* tarmoq yo'q — keyingi safar */ }
+  };
+  document.addEventListener("visibilitychange", check);
+  setInterval(check, 10 * 60 * 1000);
+}
+watchForNewVersion();
 
 // Yuklanish paytida jadval o'rniga ko'rsatiladigan "skelet" qatorlar.
 function skeletonRows(cols, n = 6) {
@@ -4159,9 +4189,9 @@ function kontragentlarDatalistHtml() {
 // Kiritilgan nomga aniq (katta-kichik harfga sezgir bo'lmagan) mos keladigan
 // kontragent yozuvini topadi — topilsa, uning INN'i avtomat to'ldiriladi.
 function resolveKontragentByNomi(nomi) {
-  const q = String(nomi || "").trim().toLowerCase();
+  const q = normalizeKontragentNomi(nomi);
   if (!q) return null;
-  return STORE.kontragentlar.find((k) => String(k.nomi || "").trim().toLowerCase() === q) || null;
+  return STORE.kontragentlar.find((k) => normalizeKontragentNomi(k.nomi) === q) || null;
 }
 
 // Bank ko'chirmasida ba'zi operatsiya turlari uchun kontragent INN'i
@@ -4188,8 +4218,13 @@ function extractPayerFromBankTavsif(tavsif) {
   return { inn: m[1], nomi };
 }
 
+// Nomlarni solishtirish kaliti: katta-kichik harf, qo'shtirnoq/tutuq belgisi turlari
+// ("O'ZAUTO", "O`ZAUTO", 'ООО "O'ZAUTO') va ortiqcha bo'shliqlar farq qilmaydi.
 function normalizeKontragentNomi(s) {
-  return String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return String(s || "").toLowerCase()
+    .replace(/["'`´‘’ʻʼ“”«»]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Berilgan kontragent nomi uchun HAQIQIY (placeholder bo'lmagan) INN'ni
@@ -17863,7 +17898,7 @@ async function handleBankImport(file) {
       const seenKontragents = new Set();
       for (const c of candidates) {
         if (!c.kontragent) continue;
-        const key = c.kontragentInn + "|" + c.kontragent.toLowerCase();
+        const key = c.kontragentInn + "|" + normalizeKontragentNomi(c.kontragent);
         if (seenKontragents.has(key)) continue;
         seenKontragents.add(key);
         await ensureKontragentAutoAdded(c.kontragentInn, c.kontragent);
