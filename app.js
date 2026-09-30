@@ -104,7 +104,10 @@ const OMBOR_DB_MAP = {
   createdAt: "created_at"
 };
 
-const MAHSULOT_DB_MAP = { nomi: "nomi", birlik: "birlik", tarkib: "tarkib", standartNarxi: "standart_narxi", foydaNormasi: "foyda_normasi" };
+// xarajatNormalari — 1 birlik mahsulot uchun xomashyodan tashqari xarajat
+// normalari: { ishHaqi, elektr, amortizatsiya, logistika, boshqa } (so'm).
+// Qarang: mahsulotToliqTannarx, migration_tannarx_qoidalari.sql.
+const MAHSULOT_DB_MAP = { nomi: "nomi", birlik: "birlik", tarkib: "tarkib", standartNarxi: "standart_narxi", foydaNormasi: "foyda_normasi", xarajatNormalari: "xarajat_normalari" };
 const ISHLAB_CHIQARISH_DB_MAP = {
   sana: "sana", mahsulotId: "mahsulot_id", mahsulotNomi: "mahsulot_nomi",
   miqdor: "miqdor", birlik: "birlik", tannarx: "tannarx", izoh: "izoh",
@@ -169,6 +172,14 @@ const SETTINGS_DB_MAP = {
   // computeMahsulotConsumption, computeTotals.
   tannarxUsuli: "tannarx_usuli",
   defaultFoydaNormasi: "default_foyda_normasi",
+  // Kalkulyatsiya qoidalari — qarang: migration_tannarx_qoidalari.sql,
+  // marjaTekshir, omborSarfTekshir, kritikQoldiqRoyxati.
+  //   minMarjaFoiz          — tannarx ≤ sotuv narxi × (1 − minMarjaFoiz/100)
+  //   kirimsizSarfBloklash  — qo'lda kiritilgan sarfda kirimsiz/0 qoldiqli xomashyoni bloklash
+  //   kritikQoldiqlar       — { "xomashyo nomi": minimal qoldiq (asosiy birlikda) }
+  minMarjaFoiz: "min_marja_foiz",
+  kirimsizSarfBloklash: "kirimsiz_sarf_bloklash",
+  kritikQoldiqlar: "kritik_qoldiqlar",
   // Faoliyat yo'nalishi ("Funksionallik") — qarang: migration_faoliyat_yonalishi.sql,
   // YONALISHLAR, applyModuleVisibility. modul* null bo'lsa "ko'rinadi" deb qaraladi.
   yonalish: "yonalish",
@@ -249,7 +260,7 @@ async function saveSettingsToDb(partial) {
 // Sozlama qiymatlariga qo'yiladigan cheklovlar. "Stavka" maydonlari 0..100
 // oralig'ida, "summa" maydonlari manfiy bo'lmasligi kerak. INN va korxona nomi
 // faqat ogohlantiradi (saqlashni bloklamaydi).
-const SETTINGS_RATE_FIELDS = ["qqsStavka", "foydaStavka", "ijtimoiySoliqStavka", "ndflStavka", "inpsStavka"];
+const SETTINGS_RATE_FIELDS = ["qqsStavka", "foydaStavka", "ijtimoiySoliqStavka", "ndflStavka", "inpsStavka", "minMarjaFoiz"];
 const SETTINGS_AMOUNT_FIELDS = [
   "davrXarajati", "moliyaviyXarajat", "boshqaDaromad", "imtiyozlar", "bankOpeningBalance", "kassaOpeningBalance",
   "f1AsosiyVositalar", "f1TovarZaxira", "f1Kassa", "f1UstavKapitali", "f1OldingiFoyda", "f1UzoqMajburiyat"
@@ -285,6 +296,9 @@ function validateSettings(s) {
   if (!isBlank(s.defaultFoydaNormasi)) {
     const n = Number(s.defaultFoydaNormasi);
     if (!Number.isFinite(n) || n < 0 || n > 0.95) errors.defaultFoydaNormasi = "0 dan 0.95 gacha bo'lgan son bo'lishi kerak";
+  }
+  if (!isBlank(s.minMarjaFoiz) && !errors.minMarjaFoiz && Number(s.minMarjaFoiz) > 95) {
+    errors.minMarjaFoiz = "Minimal marja 0 dan 95 gacha bo'lishi kerak";
   }
   if (s.inn !== undefined && String(s.inn).trim() && !/^\d{9}$/.test(String(s.inn).trim())) {
     warnings.inn = "Odatda INN 9 ta raqamdan iborat bo'ladi";
@@ -590,6 +604,9 @@ function defaultStore() {
       // Ombor tannarx hisobi — qarang: SETTINGS_DB_MAP, computeMahsulotConsumption.
       tannarxUsuli: "fifo",
       defaultFoydaNormasi: 0.2,
+      minMarjaFoiz: 15,
+      kirimsizSarfBloklash: true,
+      kritikQoldiqlar: {},
       // Faoliyat yo'nalishi — qarang: applyModuleVisibility, YONALISHLAR.
       yonalish: "",
       modulOmbor: null,
@@ -748,7 +765,9 @@ async function loadAllData() {
   STORE.chiqim = chiqim.map((r) => fromDbRow(INVOICE_DB_MAP, r));
   STORE.bank = bank.map((r) => fromDbRow(BANK_DB_MAP, r));
   STORE.ishHaqi = ishHaqi.map((r) => fromDbRow(ISHHAQI_DB_MAP, r));
-  STORE.ombor = ombor.map((r) => fromDbRow(OMBOR_DB_MAP, r));
+  // Omborda faqat mahsulot turadi — filtr kuchaytirilishidan oldin import
+  // qilinib bazada qolgan xizmat qatorlari ham ko'rsatilmaydi.
+  STORE.ombor = ombor.map((r) => fromDbRow(OMBOR_DB_MAP, r)).filter((r) => !isServiceOmborItem(r));
   STORE.mahsulotlar = mahsulotlar.map((r) => fromDbRow(MAHSULOT_DB_MAP, r));
   STORE.ishlabChiqarish = ishlabChiqarish.map((r) => fromDbRow(ISHLAB_CHIQARISH_DB_MAP, r));
   STORE.fayllar = fayllar.map((r) => fromDbRow(FAYL_DB_MAP, r));
@@ -1554,10 +1573,11 @@ function computeAttentionSummary() {
   const yaqinlashayotganKirim = computeUpcomingKreditorlik().length;
   const yaqinlashayotganChiqim = computeUpcomingDebitorlik().length;
   const ishHaqiReminder = computeIshHaqiPayReminder();
+  const kritikQoldiq = moduleEnabled("modulOmbor") ? kritikQoldiqRoyxati().length : 0;
   return {
     kalkulyatsiyasiz, tasdiqlanmaganChiqim, muddatiOtganKirim, muddatiOtganChiqim, innsiz, takrorlar,
-    yaqinlashayotganKirim, yaqinlashayotganChiqim, ishHaqiReminder,
-    total: tasdiqlanmaganChiqim + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar + yaqinlashayotganKirim + yaqinlashayotganChiqim + (ishHaqiReminder ? 1 : 0)
+    yaqinlashayotganKirim, yaqinlashayotganChiqim, ishHaqiReminder, kritikQoldiq,
+    total: tasdiqlanmaganChiqim + muddatiOtganKirim + muddatiOtganChiqim + innsiz + takrorlar + yaqinlashayotganKirim + yaqinlashayotganChiqim + kritikQoldiq + (ishHaqiReminder ? 1 : 0)
   };
 }
 
@@ -1577,6 +1597,7 @@ function openAttentionModal() {
   const s = computeAttentionSummary();
   const items = [
     { count: s.tasdiqlanmaganChiqim, label: "Tasdiqlanmagan chiqim fakturalar", desc: "Kalkulyatsiyasiz yoki ombor zaxirasi yetishmaydigan savdo fakturalari — tannarx taxminiy hisoblanmoqda. \"Faktura chiqim\" sahifasida ko'ring.", action: () => { INVOICE_PROBLEM_FILTER.chiqim = true; navigate("chiqim"); } },
+    { count: s.kritikQoldiq, label: "Xomashyo qoldig'i kritik normadan past", desc: "Ombor qoldig'i belgilangan minimal normaga yetgan yoki undan past — xarid (kirim) rejalashtiring. \"Ombor → Qoldiq\" jadvalida ko'ring.", action: () => { OMBOR_TAB = "qoldiq"; navigate("ombor"); } },
     { count: moduleEnabled("modulIshlabChiqarish") ? s.kalkulyatsiyasiz : 0, label: "Kalkulyatsiya bilan bog'lanmagan sotuv qatorlari", desc: "Sotilgan mahsulot ombordan hali sarflanmagan — \"Ishlab chiqarish\" bo'limida bog'lang.", action: () => navigate("ishlabchiqarish") },
     { count: s.muddatiOtganKirim, label: "30 kundan ortiq to'lanmagan kirim fakturalar", desc: "Muddati o'tgan kreditorlik — \"Kreditorlik muddati\" hisobotida ko'ring.", action: () => navigate("kreditorlik") },
     { count: s.muddatiOtganChiqim, label: "30 kundan ortiq to'lanmagan chiqim fakturalar", desc: "Muddati o'tgan debitorlik (xaridorlar qarzi) — \"Debitorlik muddati\" hisobotida ko'ring.", action: () => navigate("debitorlik") },
@@ -2467,6 +2488,10 @@ function chiqimOmborKamomadlari(chiqim) {
   const nomlar = new Set();
   STORE.chiqimTafsil.forEach((t) => {
     if (t.chiqimId !== chiqim.id || !t.mahsulotId) return;
+    // Haqiqatda yechilgan nomlar (xomashyo yoki — omborda bo'lsa — tayyor
+    // mahsulotning o'zi); sarf hali yozilmagan bo'lsa — retsept.
+    const yozilgan = STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === "CHT-" + t.id);
+    if (yozilgan.length) { yozilgan.forEach((r) => { if (r.nomi) nomlar.add(r.nomi); }); return; }
     const m = STORE.mahsulotlar.find((x) => x.id === t.mahsulotId);
     if (m) (m.tarkib || []).forEach((tk) => { if (tk.nomi) nomlar.add(tk.nomi); });
   });
@@ -3042,14 +3067,93 @@ function omborKirimRows() {
   return STORE.ombor.filter((r) => r.turi !== "chiqim");
 }
 
+/* ===================== O'lchov birliklari (konvertatsiya) ===================== */
+// Xomashyo odatda tonnada kirim qilinadi, retseptda (tarkib normasi) esa kg bilan
+// yoziladi ("1 metr trubaga 5 kg granula"). Ombor hisobi har bir nom bo'yicha
+// bitta ASOSIY birlikda yuritiladi (shu nomning birinchi kirimidagi birlik) —
+// boshqa birlikdagi har qanday miqdor (retsept sarfi, boshqa fakturadagi "kg")
+// o'qilayotganda shu asosiy birlikka o'giriladi. Bazadagi yozuvlar o'zgarmaydi.
+// Bir toifadagi birliklargina o'giriladi (massa↔massa); "dona"↔"kg" kabi mos
+// kelmaydigan juftlik o'zgarishsiz qoladi va birlikMosmi() bilan ogohlantiriladi.
+const BIRLIK_TURLARI = [
+  { kod: "t", tur: "massa", koef: 1000, nomlar: ["t", "tn", "tonna", "тонна", "т", "тн"] },
+  { kod: "kg", tur: "massa", koef: 1, nomlar: ["kg", "кг", "kilogramm", "kilogram", "килограмм"] },
+  { kod: "g", tur: "massa", koef: 0.001, nomlar: ["g", "gr", "gramm", "г", "гр", "грамм"] },
+  { kod: "km", tur: "uzunlik", koef: 1000, nomlar: ["km", "км"] },
+  { kod: "m", tur: "uzunlik", koef: 1, nomlar: ["m", "metr", "м", "метр", "pm", "пм", "pogm"] },
+  { kod: "sm", tur: "uzunlik", koef: 0.01, nomlar: ["sm", "cm", "см"] },
+  { kod: "mm", tur: "uzunlik", koef: 0.001, nomlar: ["mm", "мм"] },
+  { kod: "m3", tur: "hajm", koef: 1000, nomlar: ["m3", "м3", "kub", "куб"] },
+  { kod: "l", tur: "hajm", koef: 1, nomlar: ["l", "litr", "л", "литр"] },
+  { kod: "dona", tur: "dona", koef: 1, nomlar: ["dona", "шт", "штук", "ta", "дона"] }
+];
+function birlikKalit(s) {
+  return String(s || "").toLowerCase().replace(/³/g, "3").replace(/[\s.]/g, "");
+}
+const BIRLIK_MAP = new Map();
+BIRLIK_TURLARI.forEach((b) => b.nomlar.forEach((n) => BIRLIK_MAP.set(birlikKalit(n), b)));
+const BIRLIK_PREFIKS = [["tonn", "t"], ["тонн", "t"], ["kilog", "kg"], ["килог", "kg"], ["gramm", "g"], ["грамм", "g"], ["metr", "m"], ["метр", "m"], ["litr", "l"], ["литр", "l"]];
+
+function birlikAniqla(birlik) {
+  const k = birlikKalit(birlik);
+  if (!k) return null;
+  if (BIRLIK_MAP.has(k)) return BIRLIK_MAP.get(k);
+  const p = BIRLIK_PREFIKS.find(([s]) => k.startsWith(s));
+  return p ? BIRLIK_TURLARI.find((b) => b.kod === p[1]) : null;
+}
+
+// qty — "from" birligida; natija — "to" birligida (1 t → 1000 kg).
+function birlikKonvert(qty, from, to) {
+  const a = birlikAniqla(from), b = birlikAniqla(to);
+  if (!a || !b || a === b || a.tur !== b.tur) return qty;
+  return qty * a.koef / b.koef;
+}
+
+// false — faqat ikkala birlik ham tanilgan va toifasi turlicha bo'lsa.
+function birlikMosmi(from, to) {
+  const a = birlikAniqla(from), b = birlikAniqla(to);
+  if (!a || !b) return true;
+  return a.tur === b.tur;
+}
+
+// Nomning asosiy (hisob) birligi — birinchi kirim qatoridagi birlik; kirim
+// bo'lmasa birinchi har qanday qatordagi birlik. invalidateFifo() keshni tozalaydi.
+let ASOSIY_BIRLIK_CACHE = null;
+function omborAsosiyBirlik(nomi) {
+  if (!ASOSIY_BIRLIK_CACHE) {
+    ASOSIY_BIRLIK_CACHE = new Map();
+    const sorted = STORE.ombor.slice().sort(cmpOmbor);
+    [true, false].forEach((faqatKirim) => sorted.forEach((r) => {
+      const n = (r.nomi || "").trim();
+      if (!n || !r.birlik || ASOSIY_BIRLIK_CACHE.has(n)) return;
+      if (faqatKirim && r.turi === "chiqim") return;
+      ASOSIY_BIRLIK_CACHE.set(n, r.birlik);
+    }));
+  }
+  return ASOSIY_BIRLIK_CACHE.get((nomi || "").trim()) || "";
+}
+
+// Ombor qatorining miqdori — o'sha nomning asosiy birligida.
+function omborMiqdorAsosiy(r, asosiyBirlik) {
+  return birlikKonvert(toNum(r.miqdor), r.birlik, asosiyBirlik !== undefined ? asosiyBirlik : omborAsosiyBirlik(r.nomi));
+}
+
+// Kirim qatorining QQSsiz jami qiymati. Ishlab chiqarishdan kirim (2810) va
+// tez qo'shilgan qatorlarda "yetkazibBerishNarxi" 0 bo'lib, faqat birlik
+// narxi ("narx") yozilgan — ular FIFO'da 0 so'mlik partiya bo'lib qolmasligi uchun.
+function omborKirimBaza(r) {
+  return toNum(r.yetkazibBerishNarxi) || toNum(r.narx) * toNum(r.miqdor);
+}
+
 function omborQoldiqList() {
   const map = {};
   STORE.ombor.forEach((r) => {
     if (!r.nomi) return;
-    const key = r.nomi + "||" + (r.birlik || "");
-    if (!map[key]) map[key] = { nomi: r.nomi, birlik: r.birlik, kirim: 0, chiqim: 0 };
-    if (r.turi === "chiqim") map[key].chiqim += toNum(r.miqdor);
-    else map[key].kirim += toNum(r.miqdor);
+    const key = r.nomi;
+    if (!map[key]) map[key] = { nomi: r.nomi, birlik: omborAsosiyBirlik(r.nomi) || r.birlik, kirim: 0, chiqim: 0 };
+    const q = omborMiqdorAsosiy(r, map[key].birlik);
+    if (r.turi === "chiqim") map[key].chiqim += q;
+    else map[key].kirim += q;
   });
   return Object.values(map)
     .map((x) => Object.assign(x, { qoldiq: x.kirim - x.chiqim }))
@@ -3093,9 +3197,11 @@ function avgOmborNarx(nomi, asOfDate) {
     const uptoDate = rows.filter((r) => !r.sana || r.sana <= asOfDate);
     if (uptoDate.length) rows = uptoDate;
   }
-  const totalMiqdor = rows.reduce((a, r) => a + toNum(r.miqdor), 0);
+  // Natija — asosiy birlikning 1 birligi narxi (qarang omborAsosiyBirlik).
+  const base = omborAsosiyBirlik(nomi);
+  const totalMiqdor = rows.reduce((a, r) => a + omborMiqdorAsosiy(r, base), 0);
   if (!totalMiqdor) return 0;
-  const totalBaza = rows.reduce((a, r) => a + toNum(r.yetkazibBerishNarxi), 0);
+  const totalBaza = rows.reduce((a, r) => a + omborKirimBaza(r), 0);
   return totalBaza / totalMiqdor;
 }
 
@@ -3133,16 +3239,19 @@ function cmpOmbor(a, b) {
 // kamomad (yetishmovchilik) bo'lsa: ilgari kirim bo'lgan bo'lsa sabab="kam" va
 // yetmagan qism oxirgi ma'lum partiya narxida baholanadi (tannarx kam
 // ko'rsatilmasin); umuman kirim bo'lmagan bo'lsa sabab="kirim_yoq", narx 0.
-function buildFifoLedgerFromRows(rows) {
+// Barcha miqdorlar (byDoc.qty/kamomad, qtyAsOf) asosiyBirlik'da — har bir qator
+// o'z birligidan shunga o'giriladi (masalan kirim "tonna", retsept sarfi "kg").
+function buildFifoLedgerFromRows(rows, asosiyBirlik) {
   const layers = [];        // {qty, unit}
-  let lastUnit = 0, hadKirim = false;
+  let lastUnit = 0, hadKirim = false, oxirgiSana = "";
   const byDoc = new Map();
   const snaps = [];         // {sana, qty, qiymat} — sana bo'yicha o'smaydigan emas, o'suvchi
 
   for (const r of rows) {
-    const qty = toNum(r.miqdor);
+    const qty = birlikKonvert(toNum(r.miqdor), r.birlik, asosiyBirlik || "");
+    if ((r.sana || "") > oxirgiSana) oxirgiSana = r.sana;
     if (r.turi !== "chiqim") {
-      const unit = qty > 0 ? toNum(r.yetkazibBerishNarxi) / qty : 0;
+      const unit = qty > 0 ? omborKirimBaza(r) / qty : 0;
       if (qty > 0) { layers.push({ qty, unit }); lastUnit = unit; hadKirim = true; }
     } else {
       let need = qty, cost = 0;
@@ -3180,7 +3289,9 @@ function buildFifoLedgerFromRows(rows) {
     return v;
   };
   return {
-    byDoc, hadKirim,
+    byDoc, hadKirim, lastUnit, oxirgiSana, asosiyBirlik: asosiyBirlik || "",
+    // Oxirgi harakatdan keyin qolgan partiyalar (eskisidan yangisiga) — nusxa.
+    qolganPartiyalar: () => layers.map((L) => ({ qty: L.qty, unit: L.unit })),
     qiymatAsOf: (sana) => pick("qiymat", sana),
     qtyAsOf: (sana) => pick("qty", sana)
   };
@@ -3198,7 +3309,7 @@ function buildAllFifoLedgers() {
   const ledgers = new Map();
   byName.forEach((rows, n) => {
     rows.sort(cmpOmbor);
-    ledgers.set(n, buildFifoLedgerFromRows(rows));
+    ledgers.set(n, buildFifoLedgerFromRows(rows, omborAsosiyBirlik(n)));
   });
   return ledgers;
 }
@@ -3210,41 +3321,52 @@ function buildFifoLedger(nomi) {
 // Render doirasidagi kesh — invalidateFifo() har mutatsiyada (yoki sahifa
 // qayta chizilishida) uni bo'shatadi.
 let FIFO_LEDGERS = null;
-function invalidateFifo() { FIFO_LEDGERS = null; CHIQIM_HOLAT_CACHE = null; }
+function invalidateFifo() { FIFO_LEDGERS = null; CHIQIM_HOLAT_CACHE = null; ASOSIY_BIRLIK_CACHE = null; }
 function fifoLedger(nomi) {
   if (!FIFO_LEDGERS) FIFO_LEDGERS = buildAllFifoLedgers();
   const key = (nomi || "").trim();
   let l = FIFO_LEDGERS.get(key);
   if (!l) {
-    l = buildFifoLedgerFromRows([]);
+    l = buildFifoLedgerFromRows([], "");
     FIFO_LEDGERS.set(key, l);
   }
   return l;
 }
 
-// Gipotetik sarf: "nomi"dan "need" birlik "sana"gacha bo'lgan partiyalardan
+// Gipotetik sarf: "nomi"dan "need" miqdor "sana"gacha bo'lgan partiyalardan
 // yechilsa qancha turadi (bazaga yozilmagan — oldindan ko'rish / hali CHT-
-// qatori yaratilmagan holatlar uchun).
-function fifoHypotheticalCost(nomi, need, sana) {
-  const rows = STORE.ombor
-    .filter((r) => r.nomi === nomi && (!sana || (r.sana || "") <= sana))
-    .slice().sort(cmpOmbor);
-  const layers = [];
-  let lastUnit = 0, hadKirim = false;
-  for (const r of rows) {
-    const qty = toNum(r.miqdor);
-    if (r.turi !== "chiqim") {
-      const unit = qty > 0 ? toNum(r.yetkazibBerishNarxi) / qty : 0;
-      if (qty > 0) { layers.push({ qty, unit }); lastUnit = unit; hadKirim = true; }
-    } else {
-      let n = qty;
-      while (n > 1e-9 && layers.length) {
-        const L = layers[0]; const t = Math.min(L.qty, n); L.qty -= t; n -= t;
-        if (L.qty <= 1e-9) layers.shift();
+// qatori yaratilmagan holatlar uchun). needBirlik berilsa — need shu birlikda
+// (masalan retseptdagi "kg"), aks holda nomning asosiy birligida. Qaytgan
+// kamomad — asosiy birlikda.
+// Misol: kirim 5 t × 13 500 000 va 10 t × 15 500 000 → 6 t sarf =
+// 5 × 13,5 mln + 1 × 15,5 mln = 83 mln (avval eski partiya to'liq tugaydi).
+function fifoHypotheticalCost(nomi, need, sana, needBirlik) {
+  const base = omborAsosiyBirlik(nomi);
+  const ledger = fifoLedger(nomi);
+  let layers, lastUnit, hadKirim;
+  if (!sana || sana >= ledger.oxirgiSana) {
+    // Sana barcha harakatlardan keyin — tayyor daftarning qoldiq partiyalari.
+    layers = ledger.qolganPartiyalar(); lastUnit = ledger.lastUnit; hadKirim = ledger.hadKirim;
+  } else {
+    const rows = STORE.ombor
+      .filter((r) => r.nomi === nomi && (r.sana || "") <= sana)
+      .slice().sort(cmpOmbor);
+    layers = []; lastUnit = 0; hadKirim = false;
+    for (const r of rows) {
+      const qty = omborMiqdorAsosiy(r, base);
+      if (r.turi !== "chiqim") {
+        const unit = qty > 0 ? omborKirimBaza(r) / qty : 0;
+        if (qty > 0) { layers.push({ qty, unit }); lastUnit = unit; hadKirim = true; }
+      } else {
+        let n = qty;
+        while (n > 1e-9 && layers.length) {
+          const L = layers[0]; const t = Math.min(L.qty, n); L.qty -= t; n -= t;
+          if (L.qty <= 1e-9) layers.shift();
+        }
       }
     }
   }
-  let n = need, cost = 0;
+  let n = needBirlik ? birlikKonvert(toNum(need), needBirlik, base) : toNum(need), cost = 0;
   while (n > 1e-9 && layers.length) {
     const L = layers[0]; const t = Math.min(L.qty, n);
     cost += t * L.unit; L.qty -= t; n -= t;
@@ -3276,10 +3398,11 @@ function omborQoldiqQiymatiAsOf(asOfDate) {
   rows.forEach((r) => {
     if (!r.nomi) return;
     if (!map[r.nomi]) map[r.nomi] = { kirimMiqdor: 0, kirimBaza: 0, chiqimMiqdor: 0 };
-    if (r.turi === "chiqim") map[r.nomi].chiqimMiqdor += toNum(r.miqdor);
+    const q = omborMiqdorAsosiy(r);
+    if (r.turi === "chiqim") map[r.nomi].chiqimMiqdor += q;
     else {
-      map[r.nomi].kirimMiqdor += toNum(r.miqdor);
-      map[r.nomi].kirimBaza += toNum(r.yetkazibBerishNarxi);
+      map[r.nomi].kirimMiqdor += q;
+      map[r.nomi].kirimBaza += omborKirimBaza(r);
     }
   });
   return Object.values(map).reduce((sum, x) => {
@@ -3570,22 +3693,27 @@ function renderOmborQoldiq() {
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Maxsulot nomi</th><th>O'lchov birligi</th><th class="num">Kirim (jami)</th><th class="num">Sarflandi (chiqim)</th><th class="num">Qoldiq</th><th class="num">Qoldiq qiymati (so'm)</th><th style="width:110px;text-align:center;">Amal</th></tr>
+          <tr><th>Maxsulot nomi</th><th>O'lchov birligi</th><th class="num">Kirim (jami)</th><th class="num">Sarflandi (chiqim)</th><th class="num">Qoldiq</th><th class="num" title="Qoldiq shu miqdorgacha tushsa — bildirishnoma">Kritik norma</th><th class="num">Qoldiq qiymati (so'm)</th><th style="width:110px;text-align:center;">Amal</th></tr>
         </thead>
         <tbody>
-          ${qoldiq.length ? qoldiq.map((q) => `
+          ${qoldiq.length ? qoldiq.map((q) => {
+            const norma = kritikQoldiqNormasi(q.nomi);
+            const kritik = norma > 0 && q.qoldiq <= norma + 1e-9;
+            const rang = q.qoldiq <= 0 ? "color:var(--danger,#e5484d)" : (kritik ? "color:var(--warn,#b8860b)" : "");
+            return `
             <tr>
-              <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(q.nomi)}">${escapeHtml(q.nomi)}</td>
+              <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;" title="${escapeHtml(q.nomi)}">${escapeHtml(q.nomi)}${q.kirim <= 1e-9 ? ` <span class="pill pill-danger">Kirim qilinishi shart</span>` : (kritik ? ` <span class="pill pill-warn">Kritik</span>` : "")}</td>
               <td>${escapeHtml(q.birlik || "")}</td>
               <td class="num">${fmt(q.kirim, 3)}</td>
               <td class="num">${fmt(q.chiqim, 3)}</td>
-              <td class="num" style="font-weight:700;${q.qoldiq < 0 ? "color:var(--danger,#e5484d)" : ""}">${fmt(q.qoldiq, 3)}</td>
+              <td class="num" style="font-weight:700;${rang}">${fmt(q.qoldiq, 3)}</td>
+              <td class="num"><input class="cell-input num" data-kritik-nomi="${escapeHtml(q.nomi)}" value="${norma ? fmt(norma, 3) : ""}" placeholder="—" style="width:90px;"></td>
               <td class="num">${fmtSum(q.qiymat)}</td>
               <td style="text-align:center;">
                 ${q.qoldiq > 0 ? `<button class="btn btn-sm" data-qi-nomi="${escapeHtml(q.nomi)}" title="Ushbu mahsulotni qayta ishlash" style="padding:2px 8px;font-size:11.5px;white-space:nowrap;">🔄 Qayta ishlash</button>` : `<span class="faint">—</span>`}
               </td>
             </tr>
-          `).join("") : `<tr><td colspan="7" class="faint" style="text-align:center;padding:16px;">Hozircha ma'lumot yo'q</td></tr>`}
+          `; }).join("") : `<tr><td colspan="8" class="faint" style="text-align:center;padding:16px;">Hozircha ma'lumot yo'q</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -3596,6 +3724,16 @@ function renderOmborQoldiq() {
   if (btnKg1Qoldiq) btnKg1Qoldiq.addEventListener("click", () => importKg1Kalkulyatsiya(btnKg1Qoldiq, renderOmborQoldiq));
   document.getElementById("btnQaytaIshlashQoldiq").addEventListener("click", () => openOmborQaytaIshlashModal());
   main.querySelectorAll("[data-qi-nomi]").forEach((b) => b.addEventListener("click", () => openOmborQaytaIshlashModal(b.dataset.qiNomi)));
+  main.querySelectorAll("[data-kritik-nomi]").forEach((inp) => inp.addEventListener("change", () => {
+    if (!requireDataReady()) return;
+    const v = toNum(inp.value);
+    if (v < 0) { toast("Manfiy bo'lmagan son kiriting", "err"); return; }
+    const map = Object.assign({}, STORE.settings.kritikQoldiqlar || {});
+    if (v > 0) map[inp.dataset.kritikNomi] = v; else delete map[inp.dataset.kritikNomi];
+    applySettingsChange({ kritikQoldiqlar: map });
+    updateNavBadges();
+    toast("Kritik norma saqlandi");
+  }));
   document.getElementById("btnExportOmborQoldiq").addEventListener("click", () => exportOmborQoldiqXlsx(qoldiq));
   document.getElementById("btnPrintOmborQoldiq").addEventListener("click", () => printOmborQoldiqPdf(qoldiq));
 }
@@ -3818,7 +3956,8 @@ function parseOmborLineItems(rows, col) {
       };
     }
     const nomi = String(row[col.nomi] || "").trim();
-    if (!nomi || !isValidStatus(ctx.status)) continue;
+    const birlik = String(row[col.birlik] || "").trim();
+    if (!nomi || !isValidStatus(ctx.status) || isServiceOmborItem({ nomi, birlik, type: col.itemType >= 0 ? row[col.itemType] : "" })) continue;
 
     const yetkazibBerishNarxi = toNum(row[col.base]);
     const qqsSumma = toNum(row[col.qqsSumma]);
@@ -3827,7 +3966,7 @@ function parseOmborLineItems(rows, col) {
     items.push({
       sana: ctx.sana, hujjatRaqami: ctx.hujjatRaqami,
       kontragentInn: ctx.kontragentInn, kontragentNomi: ctx.kontragentNomi,
-      nomi, birlik: String(row[col.birlik] || "").trim(),
+      nomi, birlik,
       miqdor: toNum(row[col.miqdor]), narx: toNum(row[col.narx]),
       yetkazibBerishNarxi, qqsSumma, yetkazibBerishNarxiQQSBilan
     });
@@ -3880,7 +4019,7 @@ async function handleOmborImport(file) {
       return;
     }
 
-    const items = parseOmborLineItems(rows, col);
+    const items = filterOmborStockRows(parseOmborLineItems(rows, col));
     const candidates = [];
     let skipped = 0;
     for (const it of items) {
@@ -4000,21 +4139,32 @@ function openOmborMergeNomiModal(turi) {
 // tegishli xomashyo miqdori Ombordan avtomat ayiriladi (turi="chiqim" qatori
 // sifatida) va mahsulotning taxminiy tannarxi hisoblanadi.
 
+// 1 birlik mahsulotning to'liq (normativ) tannarxi — qarang mahsulotToliqTannarx.
 function mahsulotTannarx(m) {
-  return (m.tarkib || []).reduce((sum, item) => sum + toNum(item.norma) * avgOmborNarx(item.nomi), 0);
+  return mahsulotToliqTannarx(m).jami;
 }
 
 function mahsulotCardHtml(m) {
-  const tarkib = m.tarkib || [];
+  const k = mahsulotToliqTannarx(m);
+  const tavsiya = k.jami + toNum(m.foydaNormasi);
+  const marja = marjaTekshir(k.jami, toNum(m.standartNarxi));
+  const kirimYoq = k.qatorlar.filter((q) => q.kirimYoq);
+  const birlikXato = k.qatorlar.filter((q) => q.birlikXato);
   return `
-    <div class="card">
+    <div class="card" ${kirimYoq.length || marja.holat === "buzildi" || marja.holat === "zarar" ? `style="border-color:var(--danger);"` : ""}>
       <div class="card-title">${escapeHtml(m.nomi || "(nomsiz)")} <span class="faint" style="font-weight:400;">/ ${escapeHtml(m.birlik || "")}</span></div>
-      <div class="report-line"><span class="label">Tannarx (1 ${escapeHtml(m.birlik || "birlik")})</span><span class="code"></span><span class="val">${fmtSum(mahsulotTannarx(m))}</span></div>
-      <div class="report-line"><span class="label">+ Foyda normasi</span><span class="code"></span><span class="val">${fmtSum(toNum(m.foydaNormasi))}</span></div>
-      <div class="report-line"><span class="label">Tavsiya etilgan narx (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(mahsulotTannarx(m) + toNum(m.foydaNormasi))}</span></div>
+      <div class="report-line"><span class="label">Xomashyo (FIFO)</span><span class="code"></span><span class="val">${fmtSum(k.xomashyo)}</span></div>
+      ${k.ishHaqi ? `<div class="report-line"><span class="label">+ Ish haqi va ijtimoiy soliq</span><span class="code"></span><span class="val">${fmtSum(k.ishHaqi + k.ijtimoiySoliq)}</span></div>` : ""}
+      ${k.qoshimcha ? `<div class="report-line"><span class="label">+ Qo'shimcha xarajatlar</span><span class="code"></span><span class="val">${fmtSum(k.qoshimcha)}</span></div>` : ""}
+      <div class="report-line"><span class="label"><b>Tannarx (1 ${escapeHtml(m.birlik || "birlik")})</b></span><span class="code"></span><span class="val"><b>${fmtSum(k.jami)}</b></span></div>
+      <div class="report-line"><span class="label">Tavsiya etilgan narx (QQSsiz)</span><span class="code"></span><span class="val">${fmtSum(tavsiya)}</span></div>
       <div class="report-line"><span class="label">Standart sotuv narxi</span><span class="code"></span><span class="val">${toNum(m.standartNarxi) ? fmtSum(m.standartNarxi) : "—"}</span></div>
+      <div class="report-line"><span class="label">Minimal narx (marja ${fmt(marja.min, 1)}%)</span><span class="code"></span><span class="val">${fmtSum(marja.minNarx)}</span></div>
+      <div style="margin-top:6px;">${marjaPillHtml(marja)}</div>
+      ${kirimYoq.length ? `<div class="note" style="margin-top:8px;border-color:var(--danger);color:var(--danger);"><b>Kirim qilinishi shart:</b> ${kirimYoq.map((q) => escapeHtml(q.nomi)).join(", ")}</div>` : ""}
+      ${birlikXato.length ? `<div class="note warn" style="margin-top:8px;">Birlik mos emas (retsept ↔ ombor): ${birlikXato.map((q) => `${escapeHtml(q.nomi)} (${escapeHtml(q.birlik)} ↔ ${escapeHtml(q.asosiyBirlik)})`).join(", ")}</div>` : ""}
       <div class="note" style="margin-top:10px;">
-        ${tarkib.length ? tarkib.map((t) => `<div>${escapeHtml(t.nomi)} — ${fmt(t.norma, 3)} ${escapeHtml(t.birlik || "")}</div>`).join("") : `<span class="faint">Tarkib kiritilmagan</span>`}
+        ${k.qatorlar.length ? k.qatorlar.map((q) => `<div>${escapeHtml(q.nomi)} — ${fmt(q.norma, 3)} ${escapeHtml(q.birlik || "")} × ${fmtSum(q.birlikNarx)} = ${fmtSum(q.summa)}</div>`).join("") : `<span class="faint">Tarkib kiritilmagan</span>`}
       </div>
       <div class="page-actions" style="margin-top:12px;">
         <button class="btn btn-sm" data-edit-m="${m.id}">Tahrirlash</button>
@@ -4060,6 +4210,8 @@ function renderIshlabChiqarish() {
         <button class="btn btn-primary" id="btnAddMahsulot">+ Mahsulot va kalkulyatsiya</button>
       </div>
     </div>
+
+    ${tannarxSozlamalariHtml()}
 
     ${uncostedRows.length ? `
     <div class="section">
@@ -4124,6 +4276,7 @@ function renderIshlabChiqarish() {
   `;
 
   document.getElementById("btnAddMahsulot").addEventListener("click", () => openMahsulotModal(null));
+  bindTannarxSozlamalari();
   const btnImportKg1 = document.getElementById("btnImportKg1");
   if (btnImportKg1) btnImportKg1.addEventListener("click", function() { importKg1Kalkulyatsiya(this, renderIshlabChiqarish); });
   document.getElementById("btnIcQaytaIshlash").addEventListener("click", () => openOmborQaytaIshlashModal());
@@ -4157,6 +4310,72 @@ function renderIshlabChiqarish() {
     if (rematchId) { rematchChiqimTafsil(rematchId).then(() => renderIshlabChiqarish()); return; }
     const kalkChiqimId = e.target.dataset.openKalk;
     if (kalkChiqimId) openChiqimKalkulyatsiyaModal(kalkChiqimId);
+  });
+}
+
+// Ishlab chiqarish (Kalkulyatsiya) sahifasidagi umumiy tannarx sozlamalari va
+// amaldagi qoidalar ro'yxati. Qiymatlar STORE.settings'da (Sozlamalar sahifasi
+// bilan umumiy) — applySettingsChange orqali saqlanadi.
+function tannarxSozlamalariHtml() {
+  const s = STORE.settings;
+  let marjaBuzilgan = 0, kirimShart = 0;
+  STORE.mahsulotlar.forEach((m) => {
+    const k = mahsulotToliqTannarx(m);
+    const t = marjaTekshir(k.jami, toNum(m.standartNarxi));
+    if (t.holat === "buzildi" || t.holat === "zarar") marjaBuzilgan++;
+    if (k.qatorlar.some((q) => q.kirimYoq)) kirimShart++;
+  });
+  const kritik = kritikQoldiqRoyxati();
+  return `
+    <div class="section">
+      <div class="card">
+        <div class="card-title">Tannarx sozlamalari va qoidalari</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;align-items:end;">
+          <div class="field" style="margin:0;"><label>Tannarx usuli</label>
+            <select id="tsUsul">
+              <option value="fifo" ${fifoUsulActive() ? "selected" : ""}>FIFO — partiyalar ketma-ketligi</option>
+              <option value="ortacha" ${fifoUsulActive() ? "" : "selected"}>O'rtacha xarid narxi</option>
+            </select>
+          </div>
+          <div class="field" style="margin:0;"><label>Minimal marja (% sotuv narxidan)</label><input id="tsMarja" inputmode="decimal" value="${fmt(minMarjaFoiz(), 1)}"></div>
+          <div class="switch-row" style="margin:0;">
+            <span class="switch"><input type="checkbox" id="tsBlok" ${kirimsizSarfBloklanadimi() ? "checked" : ""}><span class="track"></span></span>
+            <label for="tsBlok">Kirim qilinmagan / qoldig'i 0 xomashyoni sarflashni bloklash</label>
+          </div>
+          <div><button class="btn btn-primary" id="tsSave">Saqlash</button></div>
+        </div>
+        <div class="note" style="margin-top:10px;font-size:12.5px;">
+          <div><b>1. Birliklar:</b> retseptda kg, omborda tonna bo'lsa avtomat o'giriladi (1 t = 1000 kg, 1 kg = 1000 g, 1 m = 100 sm).</div>
+          <div><b>2. FIFO:</b> xomashyo narxi kirim partiyalari ketma-ketligida olinadi — eski partiya tugagach keyingisiga o'tiladi.</div>
+          <div><b>3. Tannarx</b> = Xomashyo + Ish haqi (+ ijtimoiy soliq ${fmt(ijtimoiySoliqStavkasi(), 1)}%) + Elektr + Amortizatsiya + Logistika + Boshqa (1 birlik uchun normalar mahsulot kartasida).</div>
+          <div><b>4. Marja:</b> Tannarx ≤ Sotuv narxi × ${fmt(1 - minMarjaFoiz() / 100, 2)} (QQSsiz). Buzilsa — qizil ogohlantirish.</div>
+          <div><b>5. Qoldiq:</b> kirim qilinmagan yoki qoldig'i 0 xomashyo sarfi ${kirimsizSarfBloklanadimi() ? "<b>bloklanadi</b>" : "faqat ogohlantiriladi"}; import qilingan chiqim faktura bloklanmaydi, qizil "tasdiqlanmagan" bo'ladi.</div>
+          <div><b>6. Kritik qoldiq:</b> "Ombor → Qoldiq" jadvalida har bir xomashyo uchun minimal norma — pastga tushsa bildirishnoma.</div>
+        </div>
+        ${(marjaBuzilgan || kirimShart || kritik.length) ? `<div class="page-actions" style="margin-top:10px;gap:6px;flex-wrap:wrap;">
+          ${marjaBuzilgan ? `<span class="pill pill-danger">Marja buzilgan mahsulotlar: ${marjaBuzilgan}</span>` : ""}
+          ${kirimShart ? `<span class="pill pill-danger">Kirim qilinishi shart xomashyo bor: ${kirimShart} mahsulotda</span>` : ""}
+          ${kritik.length ? `<span class="pill pill-warn">Kritik qoldiq: ${kritik.map((x) => escapeHtml(x.nomi)).slice(0, 4).join(", ")}${kritik.length > 4 ? "…" : ""}</span>` : ""}
+        </div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function bindTannarxSozlamalari() {
+  const btn = document.getElementById("tsSave");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    if (!requireDataReady()) return;
+    const partial = {
+      tannarxUsuli: document.getElementById("tsUsul").value === "ortacha" ? "ortacha" : "fifo",
+      minMarjaFoiz: toNum(document.getElementById("tsMarja").value),
+      kirimsizSarfBloklash: document.getElementById("tsBlok").checked
+    };
+    if (!guardSettingsPartial(partial)) return;
+    invalidateFifo();
+    applySettingsChange(partial);
+    toast("Tannarx sozlamalari saqlandi");
   });
 }
 
@@ -4284,7 +4503,7 @@ function tarkibRowHtml(item) {
     <div class="tarkib-row-wrap" style="margin-bottom:8px;">
       <div class="tarkib-row" style="display:flex;gap:8px;align-items:center;">
         <input class="search-input tarkib-nomi" list="omborNomiList" placeholder="Xomashyo nomi (Ombordagi nomi bilan bir xil bo'lishi kerak)" value="${escapeHtml(item.nomi || "")}" style="flex:2">
-        <input class="search-input tarkib-birlik" placeholder="Birlik" value="${escapeHtml(item.birlik || "")}" style="width:90px">
+        <input class="search-input tarkib-birlik" list="birlikList" placeholder="kg" title="Retseptdagi birlik — ombor tonnada bo'lsa ham avtomat o'giriladi" value="${escapeHtml(item.birlik || "")}" style="width:90px">
         <input class="search-input tarkib-norma" placeholder="Norma" value="${item.norma ? fmt(item.norma, 4) : ""}" style="width:110px">
         <button type="button" class="icon-btn tarkib-del" title="O'chirish"><svg class="ic" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
       </div>
@@ -4305,10 +4524,29 @@ function updateTarkibRowHint(rowWrapEl) {
   const norma = toNum(rowWrapEl.querySelector(".tarkib-norma").value);
   const hintEl = rowWrapEl.querySelector(".tarkib-hint");
   if (!hintEl) return;
+  hintEl.style.color = "";
   if (!nomi || !norma) { hintEl.textContent = ""; return; }
-  const narx = avgOmborNarx(nomi);
-  if (!narx) { hintEl.textContent = `"${nomi}" uchun Ombor kirimida narx topilmadi.`; return; }
-  hintEl.textContent = `Omborda 1 ${rowWrapEl.querySelector(".tarkib-birlik").value.trim() || "birlik"} narxi: ${fmtSum(narx)} · shu normaga (${fmt(norma, 4)}) ko'ra 1 mahsulot uchun taxminiy tannarx: ${fmtSum(norma * narx)}`;
+  const birlik = rowWrapEl.querySelector(".tarkib-birlik").value.trim();
+  const asosiy = omborAsosiyBirlik(nomi);
+  if (!fifoLedger(nomi).hadKirim) {
+    hintEl.style.color = "var(--danger)";
+    hintEl.textContent = `"${nomi}" — kirim qilinishi shart: Ombor kirimida bu nom yo'q, narx aniqlanmaydi.`;
+    return;
+  }
+  if (!birlikMosmi(birlik, asosiy)) {
+    hintEl.style.color = "var(--danger)";
+    hintEl.textContent = `Birlik mos emas: retseptda "${birlik}", omborda "${asosiy}" — o'girib bo'lmaydi.`;
+    return;
+  }
+  const b = birlik || asosiy;
+  const narx = getXomashyoBirlikNarx(nomi, norma, null, b);
+  const konv = birlik && asosiy && birlikKalit(birlik) !== birlikKalit(asosiy)
+    ? ` (omborda ${asosiy}: 1 ${b} = ${fmt(birlikKonvert(1, b, asosiy), 6)} ${asosiy})` : "";
+  hintEl.textContent = `FIFO bo'yicha 1 ${b} narxi: ${fmtSum(narx)}${konv} · ${fmt(norma, 4)} ${b} × ${fmtSum(narx)} = ${fmtSum(norma * narx)} (1 mahsulot uchun)`;
+}
+
+function birlikDatalistHtml() {
+  return `<datalist id="birlikList">${["kg", "tonna", "g", "metr", "sm", "mm", "dona", "litr", "m3"].map((b) => `<option value="${b}">`).join("")}</datalist>`;
 }
 
 function openMahsulotModal(existingId) {
@@ -4325,6 +4563,14 @@ function openMahsulotModal(existingId) {
     <div id="tarkibRows">${tarkib.map((t) => tarkibRowHtml(t)).join("")}</div>
     <button type="button" class="btn btn-sm" id="btnAddTarkibRow" style="margin-top:4px;">+ Xomashyo qo'shish</button>
     ${omborNomiDatalistHtml()}
+    ${birlikDatalistHtml()}
+    <div class="card-title" style="margin-top:16px;">Boshqa xarajatlar (1 birlik mahsulot uchun, so'm)</div>
+    <div id="mXarajatlar" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;">
+      ${XARAJAT_NORMA_MAYDONLARI.map((f) => {
+        const v = mahsulotXarajatNormalari(existing)[f.key];
+        return `<div class="field" style="margin:0;"><label>${escapeHtml(f.label)}</label><input data-xarajat="${f.key}" inputmode="decimal" value="${v ? fmt(v, 2) : ""}" placeholder="0"></div>`;
+      }).join("")}
+    </div>
     <div class="card-title" style="margin-top:16px;">Narx kalkulyatsiyasi (1 birlik uchun)</div>
     <div class="field"><label>Foyda normasi (1 birlik uchun, so'm)</label><input id="mFoydaNormasi" value="${fmt(existing && toNum(existing.foydaNormasi) ? existing.foydaNormasi : 100)}" placeholder="masalan: 100"></div>
     <div class="note" id="narxKalkulyatsiyasiPanel" style="margin-top:8px;"></div>
@@ -4353,6 +4599,8 @@ function openMahsulotModal(existingId) {
   });
   tarkibRowsEl.querySelectorAll(".tarkib-row-wrap").forEach((wrap) => updateTarkibRowHint(wrap));
   document.getElementById("mFoydaNormasi").addEventListener("input", updateNarxKalkulyatsiyasiPanel);
+  document.getElementById("mStandartNarxi").addEventListener("input", updateNarxKalkulyatsiyasiPanel);
+  document.getElementById("mXarajatlar").addEventListener("input", updateNarxKalkulyatsiyasiPanel);
   updateNarxKalkulyatsiyasiPanel();
   document.getElementById("btnQollashNarx").addEventListener("click", () => {
     const narxExVat = computeNarxKalkulyatsiyasi().narxQqssiz;
@@ -4369,32 +4617,54 @@ function openMahsulotModal(existingId) {
 // Bu — ishlab chiqarish/umumxo'jalik xarajatlarini emas, faqat XOMASHYO
 // tannarxini hisobga oladigan SODDALASHTIRILGAN narx kalkulyatsiyasi (ilova
 // har bir mahsulotga ish haqi/overhead taqsimotini alohida yuritmaydi).
+function modalTarkibOqi() {
+  return Array.from(document.querySelectorAll("#tarkibRows .tarkib-row")).map((row) => ({
+    nomi: row.querySelector(".tarkib-nomi").value.trim(),
+    birlik: row.querySelector(".tarkib-birlik").value.trim(),
+    norma: toNum(row.querySelector(".tarkib-norma").value)
+  })).filter((t) => t.nomi && t.norma > 0);
+}
+
+function modalXarajatlarOqi() {
+  const out = {};
+  document.querySelectorAll("#mXarajatlar [data-xarajat]").forEach((el) => { out[el.dataset.xarajat] = toNum(el.value); });
+  return out;
+}
+
 function computeNarxKalkulyatsiyasi() {
-  const rows = document.querySelectorAll("#tarkibRows .tarkib-row-wrap");
-  let xomashyoTannarx = 0;
-  rows.forEach((wrap) => {
-    const nomi = wrap.querySelector(".tarkib-nomi").value.trim();
-    const norma = toNum(wrap.querySelector(".tarkib-norma").value);
-    if (nomi && norma > 0) xomashyoTannarx += norma * avgOmborNarx(nomi);
-  });
+  const k = kalkulyatsiyaHisobla(modalTarkibOqi(), modalXarajatlarOqi());
+  const xomashyoTannarx = k.xomashyo;
   const foydaNormasi = toNum(document.getElementById("mFoydaNormasi").value);
-  const narxQqssiz = xomashyoTannarx + foydaNormasi;
+  const narxQqssiz = k.jami + foydaNormasi;
   const qqsStavka = toNum(STORE.settings.qqsStavka);
   const qqsSumma = narxQqssiz * (qqsStavka / 100);
   const narxQqsBilan = narxQqssiz + qqsSumma;
-  return { xomashyoTannarx, foydaNormasi, narxQqssiz, qqsStavka, qqsSumma, narxQqsBilan };
+  return { kalk: k, xomashyoTannarx, foydaNormasi, narxQqssiz, qqsStavka, qqsSumma, narxQqsBilan };
 }
 
 function updateNarxKalkulyatsiyasiPanel() {
   const panel = document.getElementById("narxKalkulyatsiyasiPanel");
   if (!panel) return;
   const k = computeNarxKalkulyatsiyasi();
+  const standart = toNum(document.getElementById("mStandartNarxi").value);
+  const marja = marjaTekshir(k.kalk.jami, standart);
+  const marjaTavsiya = marjaTekshir(k.kalk.jami, k.narxQqssiz);
   panel.innerHTML = `
-    <div class="report-line"><span class="label">Xomashyo tannarxi</span><span class="code"></span><span class="val">${fmtSum(k.xomashyoTannarx)}</span></div>
+    <div class="report-line"><span class="label">Xomashyo tannarxi (FIFO)</span><span class="code"></span><span class="val">${fmtSum(k.xomashyoTannarx)}</span></div>
+    <div class="report-line"><span class="label">+ Ish haqi</span><span class="code"></span><span class="val">${fmtSum(k.kalk.ishHaqi)}</span></div>
+    <div class="report-line"><span class="label">+ Ijtimoiy soliq (${fmt(ijtimoiySoliqStavkasi(), 1)}%)</span><span class="code"></span><span class="val">${fmtSum(k.kalk.ijtimoiySoliq)}</span></div>
+    <div class="report-line"><span class="label">+ Qo'shimcha (elektr, amortizatsiya, logistika, boshqa)</span><span class="code"></span><span class="val">${fmtSum(k.kalk.qoshimcha)}</span></div>
+    <div class="report-line"><span class="label"><b>= To'liq tannarx</b></span><span class="code"></span><span class="val"><b>${fmtSum(k.kalk.jami)}</b></span></div>
+    <div class="report-line"><span class="label">Minimal sotuv narxi (marja ${fmt(marja.min, 1)}%)</span><span class="code"></span><span class="val">${fmtSum(marja.minNarx)}</span></div>
     <div class="report-line"><span class="label">+ Foyda normasi</span><span class="code"></span><span class="val">${fmtSum(k.foydaNormasi)}</span></div>
     <div class="report-line"><span class="label"><b>= Sotish narxi (QQSsiz)</b></span><span class="code"></span><span class="val"><b>${fmtSum(k.narxQqssiz)}</b></span></div>
     <div class="report-line"><span class="label">+ QQS (${fmt(k.qqsStavka)}%)</span><span class="code"></span><span class="val">${fmtSum(k.qqsSumma)}</span></div>
     <div class="report-line"><span class="label"><b>= Sotish narxi (QQS bilan)</b></span><span class="code"></span><span class="val"><b>${fmtSum(k.narxQqsBilan)}</b></span></div>
+    <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <span class="faint">Tavsiya narxda:</span> ${marjaPillHtml(marjaTavsiya)}
+      <span class="faint" style="margin-left:8px;">Standart narxda:</span> ${marjaPillHtml(marja)}
+    </div>
+    ${marja.holat === "buzildi" || marja.holat === "zarar" ? `<div class="note" style="margin-top:8px;border-color:var(--danger);color:var(--danger);">Standart sotuv narxi minimal marja qoidasini buzadi: tannarx ${fmtSum(k.kalk.jami)} &gt; ${fmtSum(standart)} × ${fmt(1 - marja.min / 100, 2)}. Narx kamida <b>${fmtSum(marja.minNarx)}</b> bo'lishi kerak.</div>` : ""}
   `;
 }
 
@@ -4426,18 +4696,19 @@ async function saveMahsulotFromModal(existingId) {
   const standartNarxi = toNum(document.getElementById("mStandartNarxi").value);
   const foydaNormasi = toNum(document.getElementById("mFoydaNormasi").value);
   if (!nomi) { toast("Mahsulot nomini kiriting", "err"); return; }
-  const tarkib = Array.from(document.querySelectorAll("#tarkibRows .tarkib-row")).map((row) => ({
-    nomi: row.querySelector(".tarkib-nomi").value.trim(),
-    birlik: row.querySelector(".tarkib-birlik").value.trim(),
-    norma: toNum(row.querySelector(".tarkib-norma").value)
-  })).filter((t) => t.nomi && t.norma > 0);
+  const tarkib = modalTarkibOqi();
+  const xarajatNormalari = modalXarajatlarOqi();
+  const kalk = kalkulyatsiyaHisobla(tarkib, xarajatNormalari);
+  const marja = marjaTekshir(kalk.jami, standartNarxi);
+  if ((marja.holat === "buzildi" || marja.holat === "zarar") &&
+      !confirm(`Standart sotuv narxi (${fmtSum(standartNarxi)}) minimal marja ${fmt(marja.min, 1)}% qoidasini buzadi — tannarx ${fmtSum(kalk.jami)}, minimal narx ${fmtSum(marja.minNarx)}.\n\nBaribir saqlansinmi?`)) return;
 
   // "standart_narxi"/"foyda_normasi" ustunlari alohida migratsiyalar orqali
   // qo'shiladi — biri ishga tushirilib, ikkinchisi hali tushirilmagan bo'lishi
   // ham mumkin. Shu sabab "column does not exist" xatosida FAQAT o'sha aniq
   // ustunni chiqarib tashlab qayta urinamiz (applySettingsChange'dagi bilan
   // bir xil naqsh), boshqa maydonlar baribir saqlanishi uchun.
-  let attempt = { nomi, birlik, tarkib, standartNarxi, foydaNormasi };
+  let attempt = { nomi, birlik, tarkib, standartNarxi, foydaNormasi, xarajatNormalari };
   let droppedAny = false;
   let data, error;
   for (let i = 0; i < 5; i++) {
@@ -5389,13 +5660,20 @@ function formatIshlabChiqarishIzoh(userText, kalkDetails) {
   return base ? `${base} [KALK:${JSON.stringify(kalkDetails)}]` : `[KALK:${JSON.stringify(kalkDetails)}]`;
 }
 
-function getXomashyoBirlikNarx(nomi, miqdor, asOfDate) {
+// "birlik"ning 1 birligi narxi (berilmasa — ombordagi asosiy birlik). Masalan
+// granula tonnada 13 500 000 dan kirim qilingan, birlik="kg" → 13 500.
+// miqdor — shu birlikda qancha olinishi (FIFO: katta miqdor keyingi partiyaga
+// o'tsa o'rtacha birlik narxi shunga qarab chiqadi).
+function getXomashyoBirlikNarx(nomi, miqdor, asOfDate, birlik) {
   if (!nomi) return 0;
-  const fifo = fifoUsulActive();
-  if (!fifo) return avgOmborNarx(nomi, asOfDate);
-  const h = fifoHypotheticalCost(nomi, miqdor || 1, asOfDate);
-  if (h && h.tannarx > 0) return h.tannarx / (miqdor || 1);
-  return avgOmborNarx(nomi, asOfDate);
+  const base = omborAsosiyBirlik(nomi);
+  const b = birlik || base;
+  const qty = toNum(miqdor) > 0 ? toNum(miqdor) : 1;
+  if (fifoUsulActive()) {
+    const h = fifoHypotheticalCost(nomi, qty, asOfDate, b);
+    if (h && h.tannarx > 0) return h.tannarx / qty;
+  }
+  return avgOmborNarx(nomi, asOfDate) * birlikKonvert(1, b, base);
 }
 
 function openIshlabChiqarishModal() {
@@ -5471,11 +5749,11 @@ function openIshlabChiqarishModal() {
             <input type="number" id="icIshHaqi" value="0" placeholder="0 so'm">
           </div>
           <div class="field" style="margin:0;">
-            <label style="font-size:11.5px;font-weight:600;" title="Ish haqiga 12% ijtimoiy soliq">Ijtimoiy soliq (12%)</label>
+            <label style="font-size:11.5px;font-weight:600;" title="Ish haqiga ijtimoiy soliq (Sozlamalardagi stavka)">Ijtimoiy soliq (${fmt(ijtimoiySoliqStavkasi(), 1)}%)</label>
             <input type="number" id="icIjtimoiySoliq" value="0" placeholder="0 so'm">
           </div>
           <div class="field" style="margin:0;">
-            <label style="font-size:11.5px;font-weight:600;" title="Elektr energiyasi, gaz, uskunalar eskirishi (amortizatsiya)">Elektr/amortizatsiya</label>
+            <label style="font-size:11.5px;font-weight:600;" title="Elektr energiyasi, gaz, uskunalar eskirishi (amortizatsiya), logistika va boshqalar — mahsulot kartasidagi normalardan avtomat to'ldiriladi">Elektr/amort./logistika</label>
             <input type="number" id="icBoshqaXarajat" value="0" placeholder="0 so'm">
           </div>
           <div class="field" style="margin:0;">
@@ -5492,6 +5770,7 @@ function openIshlabChiqarishModal() {
             <div style="font-size:12px;color:var(--text-muted);margin-bottom:3px;">Ishlab chiqarish (sex) tannarxi:</div>
             <div style="font-size:18px;font-weight:800;color:var(--ok,#2f6f5e);" id="icSummaryJamiTannarx">0 so'm</div>
             <div style="font-size:12.5px;margin-top:2px;">1 birlik mahsulot tannarxi: <b id="icSummaryBirlikTannarx">0 so'm</b></div>
+            <div style="margin-top:4px;" id="icSummaryMarja"></div>
           </div>
           <div style="border-left:1px solid var(--border);padding-left:14px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
@@ -5546,10 +5825,14 @@ function openIshlabChiqarishModal() {
     }
 
     tbody.innerHTML = currentMaterials.map((m, idx) => {
-      const qoldiq = omborQoldiqByNomiAsOf(m.nomi, sana);
-      const yetarli = qoldiq >= m.faktMiqdor;
+      // Qoldiq material birligida (retseptda kg, omborda tonna bo'lsa ham).
+      const [ann] = m.nomi ? annotateOmborShortages([{ nomi: m.nomi, birlik: m.birlik, miqdor: m.faktMiqdor }], { asOfDate: sana }) : [null];
+      const qoldiq = ann ? ann.qoldiq : 0;
+      const yetarli = ann ? ann.yetarli : true;
       const statusColor = yetarli ? "color:var(--ok,#2f6f5e);" : "color:var(--danger,#b3432b);font-weight:700;";
-      const qoldiqText = Number.isFinite(qoldiq) ? fmt(qoldiq, 2) : "0";
+      const qoldiqText = (Number.isFinite(qoldiq) ? fmt(qoldiq, 2) : "0") +
+        (ann && ann.kirimShart ? `<div style="font-size:10.5px;">Kirim qilinishi shart <button type="button" class="btn btn-sm mat-kirim" data-kirim-nomi="${escapeHtml(m.nomi)}" style="padding:0 6px;font-size:10.5px;">+ Kirim</button></div>` : "") +
+        (ann && ann.birlikXato ? `<div style="font-size:10.5px;">Birlik mos emas (omborda ${escapeHtml(ann.asosiyBirlik)})</div>` : "");
 
       return `
         <tr data-idx="${idx}">
@@ -5611,6 +5894,24 @@ function openIshlabChiqarishModal() {
 
     const sotishQqsBilanEl = document.getElementById("icSummarySotishQqsBilan");
     if (sotishQqsBilanEl) sotishQqsBilanEl.textContent = fmtSum(sotishQqsBilan);
+
+    const marjaEl = document.getElementById("icSummaryMarja");
+    const mSel = STORE.mahsulotlar.find((x) => x.id === document.getElementById("icMahsulot").value);
+    if (marjaEl) {
+      const t = marjaTekshir(birlikTannarx, mSel ? toNum(mSel.standartNarxi) : 0);
+      marjaEl.innerHTML = t.holat === "yoq" ? "" : `<span class="faint" style="font-size:11.5px;">Standart narx ${fmtSum(mSel.standartNarxi)}:</span> ${marjaPillHtml(t)}`;
+    }
+  }
+
+  // Mahsulot kartasidagi 1 birlik normalari × miqdor (ish haqi, qo'shimcha).
+  function applyXarajatNormalari() {
+    const m = STORE.mahsulotlar.find((x) => x.id === document.getElementById("icMahsulot").value);
+    const miqdor = toNum(document.getElementById("icMiqdor").value) || 0;
+    const n = mahsulotXarajatNormalari(m);
+    const ishHaqi = n.ishHaqi * miqdor;
+    document.getElementById("icIshHaqi").value = Math.round(ishHaqi);
+    document.getElementById("icIjtimoiySoliq").value = Math.round(ishHaqi * ijtimoiySoliqStavkasi() / 100);
+    document.getElementById("icBoshqaXarajat").value = Math.round((n.elektr + n.amortizatsiya + n.logistika + n.boshqa) * miqdor);
   }
 
   function populateMaterialsFromRecipe() {
@@ -5628,10 +5929,11 @@ function openIshlabChiqarishModal() {
       fInput.value = toNum(m.foydaNormasi) || 0;
     }
 
+    applyXarajatNormalari();
     currentMaterials = (m.tarkib || []).map((t) => {
       const norma = toNum(t.norma);
       const rejaMiqdor = norma * miqdor;
-      const narx = getXomashyoBirlikNarx(t.nomi, rejaMiqdor || 1, sana);
+      const narx = getXomashyoBirlikNarx(t.nomi, rejaMiqdor || 1, sana, t.birlik);
       return {
         nomi: t.nomi,
         birlik: t.birlik || "",
@@ -5653,7 +5955,7 @@ function openIshlabChiqarishModal() {
   document.getElementById("icSana").addEventListener("change", () => {
     const sana = document.getElementById("icSana").value || todayISO();
     currentMaterials.forEach((m) => {
-      m.narx = getXomashyoBirlikNarx(m.nomi, m.faktMiqdor || 1, sana);
+      m.narx = getXomashyoBirlikNarx(m.nomi, m.faktMiqdor || 1, sana, m.birlik);
       m.summa = m.faktMiqdor * m.narx;
     });
     renderMaterialsRows();
@@ -5670,13 +5972,14 @@ function openIshlabChiqarishModal() {
       }
       m.summa = m.faktMiqdor * m.narx;
     });
+    applyXarajatNormalari();
     renderMaterialsRows();
     recalcCosting();
   });
 
   document.getElementById("icIshHaqi").addEventListener("input", (e) => {
     const oylik = toNum(e.target.value);
-    document.getElementById("icIjtimoiySoliq").value = Math.round(oylik * 0.12);
+    document.getElementById("icIjtimoiySoliq").value = Math.round(oylik * ijtimoiySoliqStavkasi() / 100);
     recalcCosting();
   });
   document.getElementById("icIjtimoiySoliq").addEventListener("input", recalcCosting);
@@ -5708,6 +6011,12 @@ function openIshlabChiqarishModal() {
   });
 
   matBody.addEventListener("click", (e) => {
+    const kirimBtn = e.target.closest(".mat-kirim");
+    if (kirimBtn) {
+      const sana = document.getElementById("icSana").value || todayISO();
+      openOmborKirimQuickAddModal(kirimBtn.dataset.kirimNomi, sana, () => openIshlabChiqarishModal());
+      return;
+    }
     const btn = e.target.closest(".mat-del");
     if (!btn) return;
     const idx = Number(btn.dataset.delIdx);
@@ -5755,6 +6064,10 @@ function openIshlabChiqarishModal() {
       summa: x.summa
     }));
 
+    // Qoida: kirim qilinmagan / qoldig'i 0 xomashyo — bloklanadi; kam — tasdiq.
+    const tekshiruv = omborSarfTekshir(faktMateriallar.map((c) => ({ nomi: c.nomi, birlik: c.birlik, miqdor: c.faktMiqdor })), sana);
+    if (!omborSarfRuxsat(tekshiruv)) return;
+
     const matTotal = faktMateriallar.reduce((a, c) => a + c.summa, 0);
     const ishHaqi = toNum(document.getElementById("icIshHaqi").value);
     const ijtimoiySoliq = toNum(document.getElementById("icIjtimoiySoliq").value);
@@ -5798,6 +6111,7 @@ function openIshlabChiqarishModal() {
     closeModal();
     renderIshlabChiqarish();
     toast(omborgaKirim ? "Saqlandi: xomashyo ayirildi va tayyor mahsulot omborga kirim qilindi" : "Saqlandi: xomashyo ombordan ayirildi");
+    kritikQoldiqOgohlantir(faktMateriallar.map((c) => c.nomi));
 
     if (isPrint && res.id) {
       setTimeout(() => printIshlabChiqarishDalolatnoma(res.id), 300);
@@ -5823,15 +6137,18 @@ function openIshlabChiqarishModal() {
 // to'g'ri javob beriladi. excludeHujjat — shu hujjat raqamli chiqim qatorlarini
 // hisobdan chiqaradi (sarf allaqachon yozib bo'lingan bo'lsa, "yozishdan oldin
 // nima bor edi"ni o'lchash uchun).
-function omborQoldiqByNomiAsOf(nomi, asOfDate, excludeHujjat) {
+// Natija asosiy birlikda; natijaBirlik berilsa — shu birlikka o'girib qaytaradi
+// (masalan omborda "tonna", ishlab chiqarish oynasida "kg" ko'rsatish uchun).
+function omborQoldiqByNomiAsOf(nomi, asOfDate, excludeHujjat, natijaBirlik) {
+  const base = omborAsosiyBirlik(nomi);
   let kirim = 0, chiqim = 0;
   STORE.ombor.forEach((r) => {
     if (r.nomi !== nomi) return;
     if (asOfDate && r.sana && r.sana > asOfDate) return;
-    if (r.turi === "chiqim") { if (excludeHujjat && r.hujjatRaqami === excludeHujjat) return; chiqim += toNum(r.miqdor); }
-    else kirim += toNum(r.miqdor);
+    if (r.turi === "chiqim") { if (excludeHujjat && r.hujjatRaqami === excludeHujjat) return; chiqim += omborMiqdorAsosiy(r, base); }
+    else kirim += omborMiqdorAsosiy(r, base);
   });
-  return kirim - chiqim;
+  return natijaBirlik ? birlikKonvert(kirim - chiqim, base, natijaBirlik) : kirim - chiqim;
 }
 
 function omborQoldiqByNomi(nomi) {
@@ -5841,7 +6158,7 @@ function omborQoldiqByNomi(nomi) {
 // Yetishmovchilik sabablari — foydalanuvchiga ko'rsatiladigan matn.
 const OMBOR_KAMOMAD_LABEL = {
   kam: "ombor zaxirasi yetarli emas",
-  kirim_yoq: "kirim faktura kiritilmagan",
+  kirim_yoq: "kirim qilinmagan — kirim qilinishi shart",
   kirim_kech: "kirim faktura sanasi sotuvdan keyin"
 };
 
@@ -5851,30 +6168,39 @@ const OMBOR_KAMOMAD_LABEL = {
 // Natija bir nom bo'yicha bitta element (takror tarkib nomlari jamlanadi):
 //   { nomi, birlik, miqdor(=kerak), qoldiq, yetarli, kamomad, sabab }
 //   sabab: "kam" (kirim bor, lekin kam) | "kirim_yoq" (umuman kirim yo'q) | null
+// miqdor/qoldiq/kamomad — shu xomashyo uchun birinchi uchragan sarf qatorining
+// birligida (odatda retseptdagi "kg"); ombor esa boshqa birlikda (tonna) bo'lsa
+// ham to'g'ri solishtiriladi. birlikXato — sarf birligi ombor birligiga
+// o'girib bo'lmaydigan toifada (masalan retseptda "dona", omborda "kg").
+// "Kirim qilinishi shart" (kirimShart) — kirim umuman yo'q, sanadan keyin
+// kiritilgan yoki shu sanaga qoldiq 0/manfiy: bunday sarf qo'lda kiritilganda
+// bloklanadi (qarang omborSarfTekshir).
 function annotateOmborShortages(consumptions, opts) {
   const asOfDate = opts && opts.asOfDate;
   const excl = opts && opts.excludeHujjat;
   const agg = new Map();
   consumptions.forEach((c) => {
-    const cur = agg.get(c.nomi) || { nomi: c.nomi, birlik: c.birlik, miqdor: 0 };
-    cur.miqdor += toNum(c.miqdor);
+    const cur = agg.get(c.nomi) || { nomi: c.nomi, birlik: c.birlik || omborAsosiyBirlik(c.nomi), miqdor: 0 };
+    cur.miqdor += birlikKonvert(toNum(c.miqdor), c.birlik, cur.birlik);
     agg.set(c.nomi, cur);
   });
   return Array.from(agg.values()).map((c) => {
+    const base = omborAsosiyBirlik(c.nomi);
     let kirim = 0, chiqim = 0, kirimLifetime = 0;
     STORE.ombor.forEach((r) => {
       if (r.nomi !== c.nomi) return;
+      const q = omborMiqdorAsosiy(r, base);
       if (r.turi === "chiqim") {
         if (asOfDate && r.sana && r.sana > asOfDate) return;
         if (excl && r.hujjatRaqami === excl) return;
-        chiqim += toNum(r.miqdor);
+        chiqim += q;
       } else {
-        kirimLifetime += toNum(r.miqdor);
+        kirimLifetime += q;
         if (asOfDate && r.sana && r.sana > asOfDate) return;
-        kirim += toNum(r.miqdor);
+        kirim += q;
       }
     });
-    const qoldiq = kirim - chiqim;
+    const qoldiq = birlikKonvert(kirim - chiqim, base, c.birlik);
     const kamomad = Math.max(0, c.miqdor - qoldiq);
     let sabab = null;
     if (kamomad > 1e-4) {
@@ -5882,8 +6208,44 @@ function annotateOmborShortages(consumptions, opts) {
       else if (kirimLifetime > 1e-9) sabab = "kirim_kech";
       else sabab = "kirim_yoq";
     }
-    return Object.assign({}, c, { qoldiq, yetarli: kamomad <= 1e-4, kamomad, sabab });
+    const kirimShart = sabab === "kirim_yoq" || sabab === "kirim_kech" || (c.miqdor > 1e-9 && qoldiq <= 1e-9);
+    return Object.assign({}, c, {
+      qoldiq, yetarli: kamomad <= 1e-4, kamomad, sabab, kirimShart,
+      asosiyBirlik: base, birlikXato: !birlikMosmi(c.birlik, base)
+    });
   });
+}
+
+// Qo'lda kiritilayotgan sarf (Ishlab chiqarish, Ombor chiqimi) uchun yagona
+// qoida tekshiruvi. Qaytaradi: { bloklar[], kamlar[], birlikXatolar[], annotated[] }
+//   bloklar — "Kirim qilinishi shart" (Sozlamada bloklash yoqilgan bo'lsa saqlanmaydi)
+//   kamlar  — kirim bor, lekin kerakli miqdordan kam (tasdiqlatiladi)
+// Import qilingan chiqim faktura (yuridik hujjat) bu tekshiruv bilan
+// to'xtatilmaydi — u faqat "tasdiqlanmagan" qizil holatini oladi.
+function omborSarfTekshir(consumptions, sana, opts) {
+  const annotated = annotateOmborShortages(consumptions, Object.assign({ asOfDate: sana }, opts || {}));
+  return {
+    annotated,
+    bloklar: annotated.filter((c) => c.kirimShart),
+    kamlar: annotated.filter((c) => !c.yetarli && !c.kirimShart),
+    birlikXatolar: annotated.filter((c) => c.birlikXato)
+  };
+}
+
+function kirimsizSarfBloklanadimi() {
+  return STORE.settings.kirimsizSarfBloklash !== false;
+}
+
+// Saqlash tugmasi bosilganda chaqiriladi: bloklansa false (toast bilan),
+// faqat kamomad bo'lsa foydalanuvchidan tasdiq so'raydi.
+function omborSarfRuxsat(tekshiruv) {
+  if (tekshiruv.bloklar.length && kirimsizSarfBloklanadimi()) {
+    toast(`Kirim qilinishi shart: ${tekshiruv.bloklar.map((c) => c.nomi).join(", ")} — avval "Ombor kirimi"ga kiriting`, "err");
+    return false;
+  }
+  const ogoh = [...tekshiruv.bloklar, ...tekshiruv.kamlar];
+  if (ogoh.length && !confirm(`Omborda yetarli emas:\n${ogoh.map((c) => `• ${c.nomi}: kerak ${fmt(c.miqdor, 3)} ${c.birlik || ""}, qoldiq ${fmt(c.qoldiq, 3)}`).join("\n")}\n\nBaribir saqlansinmi? (tannarx oxirgi partiya narxida taxminiy hisoblanadi)`)) return false;
+  return true;
 }
 
 function checkOmborShortages(consumptions, opts) {
@@ -5899,7 +6261,7 @@ function updateIshlabChiqarishPreview() {
   const m = STORE.mahsulotlar.find((x) => x.id === mahsulotId);
   if (!m || !miqdor) { el.innerHTML = `<span class="faint">Mahsulot va miqdorni kiriting</span>`; return; }
 
-  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor, sana);
+  const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor, sana, { retseptBoyicha: true });
   const annotated = annotateOmborShortages(consumptions, { asOfDate: sana });
   const hasShortage = annotated.some((c) => !c.yetarli);
   const hasKirimYoq = annotated.some((c) => c.sabab === "kirim_yoq" || c.sabab === "kirim_kech");
@@ -5934,18 +6296,28 @@ function updateIshlabChiqarishPreview() {
 // ko'rish, yoki hali CHT- qatori yaratilmagan holat).
 // Qaytaradi: { consumptions, tannarx, kamomadlar[] }
 //   kamomadlar — [{nomi, sabab:"kam"|"kirim_yoq", miqdor}] (ombor yetmagan xomashyolar)
+//
+// opts.docRef bo'yicha omborda sarf qatorlari allaqachon yozilgan bo'lsa —
+// consumptions aynan o'sha yozilgan qatorlardan olinadi (keyin retsept
+// o'zgartirilsa ham eski hujjat tannarxi haqiqiy harakatga mos qoladi).
+// opts.retseptBoyicha — tayyor mahsulot zaxirasidan qat'i nazar retsept
+// (ishlab chiqarish uchun). Miqdorlar tarkib birligida (kg), hisob esa har
+// bir xomashyoning ombordagi asosiy birligiga o'girib (tonna) olib boriladi.
 function computeMahsulotConsumption(m, miqdor, asOfDate, opts) {
   const docRef = opts && opts.docRef;
   const fifo = fifoUsulActive();
-  const consumptions = (m.tarkib || [])
-    .map((t) => ({ nomi: t.nomi, birlik: t.birlik, miqdor: toNum(t.norma) * toNum(miqdor) }))
-    .filter((c) => c.miqdor > 0);
+  const recorded = docRef ? STORE.ombor.filter((r) => r.turi === "chiqim" && r.hujjatRaqami === docRef) : [];
+  const consumptions = recorded.length
+    ? recorded.map((r) => ({ nomi: r.nomi, birlik: r.birlik, miqdor: toNum(r.miqdor) }))
+    : mahsulotSarfRejasi(m, miqdor, asOfDate, opts);
 
   // Tannarx bir xil nomdagi tarkibiy qism ikki marta yozilgan bo'lsa ham ikki
   // baravar hisoblanib ketmasligi uchun nomi bo'yicha jamlab hisoblanadi
-  // (FIFO byDoc allaqachon shu nom bo'yicha butun sarfni jamlaydi).
+  // (FIFO byDoc allaqachon shu nom bo'yicha butun sarfni jamlaydi). need —
+  // xomashyoning asosiy birligida.
   const byNomi = new Map();
-  consumptions.forEach((c) => byNomi.set(c.nomi, (byNomi.get(c.nomi) || 0) + c.miqdor));
+  consumptions.forEach((c) => byNomi.set(c.nomi,
+    (byNomi.get(c.nomi) || 0) + birlikKonvert(c.miqdor, c.birlik, omborAsosiyBirlik(c.nomi))));
 
   let tannarx = 0;
   const kamomadlar = [];
@@ -5962,6 +6334,130 @@ function computeMahsulotConsumption(m, miqdor, asOfDate, opts) {
     }
   });
   return { consumptions, tannarx, kamomadlar };
+}
+
+// Sotuvda ombordan NIMA yechiladi. Mahsulotning o'zi omborga kirim qilingan
+// bo'lsa (Ishlab chiqarishdan kirim 2810 yoki xarid) — tayyor mahsulotning
+// o'zi; aks holda retsept bo'yicha xomashyo. Ilgari har doim retsept olinardi:
+// avval ishlab chiqarilib omborga kirim qilingan mahsulot sotilganda xomashyo
+// IKKINCHI marta yechilar, tayyor mahsulot qoldig'i esa kamaymasdi.
+function mahsulotSarfRejasi(m, miqdor, sana, opts) {
+  const tarkib = m.tarkib || [];
+  const otkazuvchi = tarkib.length === 1 && tarkib[0].nomi === m.nomi;
+  if (!(opts && opts.retseptBoyicha) && !otkazuvchi && tayyorMahsulotKirimiBor(m.nomi, sana)) {
+    return toNum(miqdor) > 0 ? [{ nomi: m.nomi, birlik: m.birlik, miqdor: toNum(miqdor) }] : [];
+  }
+  return tarkib
+    .map((t) => ({ nomi: t.nomi, birlik: t.birlik, miqdor: toNum(t.norma) * toNum(miqdor) }))
+    .filter((c) => c.miqdor > 0);
+}
+
+function tayyorMahsulotKirimiBor(nomi, sana) {
+  return STORE.ombor.some((r) => r.turi !== "chiqim" && r.nomi === nomi && toNum(r.miqdor) > 0 &&
+    (!sana || !r.sana || r.sana <= sana));
+}
+
+/* ------------------- To'liq tannarx va marja nazorati ------------------- */
+// Yakuniy tannarx (1 birlik) = Xomashyo (FIFO, retsept normasi bo'yicha, kg→t
+// o'girilgan) + Ish haqi normasi + unga ijtimoiy soliq + Qo'shimcha xarajatlar
+// (elektr, amortizatsiya, logistika, boshqa). Bu — narx belgilash uchun
+// NORMATIV kalkulyatsiya: F2 dagi sotuv tannarxiga faqat xomashyo kiradi, ish
+// haqi esa "Ish haqi" bo'limi orqali xarajatga tushadi (ikki marta hisoblanmasin).
+const XARAJAT_NORMA_MAYDONLARI = [
+  { key: "ishHaqi", label: "Ish haqi (ishchi)" },
+  { key: "elektr", label: "Elektr energiya" },
+  { key: "amortizatsiya", label: "Amortizatsiya" },
+  { key: "logistika", label: "Logistika" },
+  { key: "boshqa", label: "Boshqa xarajatlar" }
+];
+
+function mahsulotXarajatNormalari(m) {
+  const x = (m && m.xarajatNormalari) || {};
+  const out = {};
+  XARAJAT_NORMA_MAYDONLARI.forEach((f) => { out[f.key] = toNum(x[f.key]); });
+  return out;
+}
+
+function ijtimoiySoliqStavkasi() {
+  const s = STORE.settings.ijtimoiySoliqStavka;
+  return s === undefined || s === null || s === "" ? 12 : toNum(s);
+}
+
+// tarkib — [{nomi, birlik, norma}], xarajatlar — mahsulotXarajatNormalari()
+// natijasi. sana berilmasa — bugungi (qolgan partiyalar) narxi.
+function kalkulyatsiyaHisobla(tarkib, xarajatlar, sana) {
+  const qatorlar = (tarkib || []).filter((t) => t.nomi && toNum(t.norma) > 0).map((t) => {
+    const norma = toNum(t.norma);
+    const birlikNarx = getXomashyoBirlikNarx(t.nomi, norma, sana, t.birlik);
+    const asosiy = omborAsosiyBirlik(t.nomi);
+    return {
+      nomi: t.nomi, birlik: t.birlik || asosiy, norma, birlikNarx, summa: norma * birlikNarx,
+      asosiyBirlik: asosiy, birlikXato: !birlikMosmi(t.birlik, asosiy), kirimYoq: !fifoLedger(t.nomi).hadKirim
+    };
+  });
+  const xomashyo = qatorlar.reduce((a, q) => a + q.summa, 0);
+  const ishHaqi = toNum(xarajatlar.ishHaqi);
+  const ijtimoiySoliq = ishHaqi * ijtimoiySoliqStavkasi() / 100;
+  const qoshimcha = toNum(xarajatlar.elektr) + toNum(xarajatlar.amortizatsiya) + toNum(xarajatlar.logistika) + toNum(xarajatlar.boshqa);
+  return { qatorlar, xomashyo, ishHaqi, ijtimoiySoliq, qoshimcha, jami: xomashyo + ishHaqi + ijtimoiySoliq + qoshimcha };
+}
+
+function mahsulotToliqTannarx(m, sana) {
+  return kalkulyatsiyaHisobla(m.tarkib, mahsulotXarajatNormalari(m), sana);
+}
+
+function minMarjaFoiz() {
+  const v = STORE.settings.minMarjaFoiz;
+  return v === undefined || v === null || v === "" ? 15 : Math.max(0, Math.min(95, toNum(v)));
+}
+
+// Qoida: Tannarx ≤ Sotuv narxi × (1 − minMarja/100). Narxlar QQSsiz.
+// -> { holat: "yoq"|"ok"|"chegara"|"buzildi"|"zarar", marja (%), minNarx }
+//   chegara — qoida bajarilgan, lekin marja chegaradan 5 punktdan kam yuqori.
+function marjaTekshir(tannarx, sotuvNarxi) {
+  const min = minMarjaFoiz();
+  const minNarx = tannarx > 0 ? tannarx / (1 - min / 100) : 0;
+  if (!(sotuvNarxi > 0) || !(tannarx > 0)) return { holat: "yoq", marja: null, minNarx, min };
+  const marja = (1 - tannarx / sotuvNarxi) * 100;
+  let holat = "ok";
+  if (tannarx > sotuvNarxi) holat = "zarar";
+  else if (marja < min - 1e-9) holat = "buzildi";
+  else if (marja < min + 5) holat = "chegara";
+  return { holat, marja, minNarx, min };
+}
+
+function marjaPillHtml(t) {
+  if (!t || t.holat === "yoq") return `<span class="pill pill-muted">Sotuv narxi yo'q</span>`;
+  const txt = `Marja ${fmt(t.marja, 1)}%`;
+  if (t.holat === "zarar") return `<span class="pill pill-danger" title="Tannarx sotuv narxidan yuqori">Zarar! ${txt}</span>`;
+  if (t.holat === "buzildi") return `<span class="pill pill-danger" title="Minimal marja ${fmt(t.min, 1)}% — narx kamida ${fmtSum(t.minNarx)} bo'lishi kerak">${txt} &lt; ${fmt(t.min, 1)}%</span>`;
+  if (t.holat === "chegara") return `<span class="pill pill-warn" title="Chegaraga yaqin (min ${fmt(t.min, 1)}%)">${txt}</span>`;
+  return `<span class="pill pill-ok">${txt}</span>`;
+}
+
+/* ------------------- Kritik qoldiq ------------------- */
+// STORE.settings.kritikQoldiqlar = { nomi: minimal qoldiq (asosiy birlikda) }.
+// Qoldiq shu normagacha yoki undan past tushsa — bildirishnoma (qo'ng'iroq),
+// Ombor qoldig'i jadvalida sariq/qizil belgi va sarfdan keyin toast.
+function kritikQoldiqNormasi(nomi) {
+  const map = STORE.settings.kritikQoldiqlar || {};
+  return toNum(map[nomi]);
+}
+
+function kritikQoldiqRoyxati() {
+  const map = STORE.settings.kritikQoldiqlar || {};
+  return Object.keys(map).filter((nomi) => toNum(map[nomi]) > 0).map((nomi) => {
+    const qoldiq = omborQoldiqByNomiAsOf(nomi, null);
+    return { nomi, birlik: omborAsosiyBirlik(nomi), qoldiq, norma: toNum(map[nomi]) };
+  }).filter((x) => x.qoldiq <= x.norma + 1e-9);
+}
+
+// Sarfdan keyin chaqiriladi — faqat shu nomlar ichida kritikka tushganlarini aytadi.
+function kritikQoldiqOgohlantir(nomlar) {
+  const set = new Set(nomlar);
+  const past = kritikQoldiqRoyxati().filter((x) => set.has(x.nomi));
+  if (!past.length) return;
+  setTimeout(() => toast(`Kritik qoldiq: ${past.map((x) => `${x.nomi} — ${fmt(x.qoldiq, 3)} ${x.birlik} (norma ${fmt(x.norma, 3)})`).join("; ")}`, "err"), 1200);
 }
 
 // computeMahsulotConsumption natijasini "ombor" jadvaliga turi="chiqim"
@@ -6395,20 +6891,30 @@ function openChiqimKalkulyatsiyaModal(chiqimId) {
   const mahsulotOptions = (selectedId) => `<option value="">— tanlanmagan —</option>` +
     STORE.mahsulotlar.map((m) => `<option value="${m.id}" ${m.id === selectedId ? "selected" : ""}>${escapeHtml(m.nomi)}</option>`).join("");
 
+  // Qator bo'yicha 1 birlik tannarx: haqiqiy xomashyo (FIFO, shu sotuv sarfi) +
+  // mahsulot kartasidagi ish haqi/qo'shimcha normalari — marja qoidasi uchun.
+  const qatorMarja = (t) => {
+    const mahsulot = t.mahsulotId ? STORE.mahsulotlar.find((m) => m.id === t.mahsulotId) : null;
+    if (!mahsulot || !(toNum(t.miqdor) > 0)) return null;
+    const xom = computeMahsulotConsumption(mahsulot, t.miqdor, t.sana, { docRef: "CHT-" + t.id }).tannarx / toNum(t.miqdor);
+    const k = kalkulyatsiyaHisobla([], mahsulotXarajatNormalari(mahsulot));
+    return marjaTekshir(xom + k.jami, toNum(t.narx));
+  };
   const bodyHtml = rows.length ? `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Nomi (facturada)</th><th class="num">Miqdor</th><th class="num">Narx</th><th>Kalkulyatsiya</th><th>Holat</th></tr></thead>
+        <thead><tr><th>Nomi (facturada)</th><th class="num">Miqdor</th><th class="num">Narx</th><th>Kalkulyatsiya</th><th>Holat</th><th>Marja</th></tr></thead>
         <tbody>
-          ${rows.map((t) => `
+          ${rows.map((t) => { const mj = qatorMarja(t); return `
             <tr data-tafsil-id="${t.id}">
               <td>${escapeHtml(t.nomi)}</td>
               <td class="num">${fmt(t.miqdor, 3)} ${escapeHtml(t.birlik || "")}</td>
               <td class="num">${fmtSum(t.narx)}</td>
               <td><select class="search-input" data-tafsil-select="${t.id}">${mahsulotOptions(t.mahsulotId)}</select></td>
               <td>${CHIQIM_TAFSIL_MOS_LABEL[t.mosTuri] || CHIQIM_TAFSIL_MOS_LABEL.none}</td>
+              <td>${mj ? marjaPillHtml(mj) : `<span class="faint">—</span>`}</td>
             </tr>
-          `).join("")}
+          `; }).join("")}
         </tbody>
       </table>
     </div>
@@ -6606,17 +7112,17 @@ function computeChiqimMaterialBreakdown(chiqimId) {
     // FIFO byDoc allaqachon shu nom bo'yicha butun sarfni jamlagani uchun, aks
     // holda ikki baravar qo'shilib ketardi.
     const perNomi = new Map();
-    computeMahsulotConsumption(mahsulot, t.miqdor, t.sana).consumptions.forEach((c) => {
+    computeMahsulotConsumption(mahsulot, t.miqdor, t.sana, { docRef: "CHT-" + t.id }).consumptions.forEach((c) => {
       const p = perNomi.get(c.nomi) || { birlik: c.birlik, miqdor: 0 };
-      p.miqdor += c.miqdor;
+      p.miqdor += birlikKonvert(toNum(c.miqdor), c.birlik, p.birlik);
       perNomi.set(c.nomi, p);
     });
     perNomi.forEach((p, nomi) => {
       const cur = materialMap.get(nomi) || { nomi, birlik: p.birlik, miqdor: 0, summa: 0 };
-      cur.miqdor += p.miqdor;
+      cur.miqdor += birlikKonvert(p.miqdor, p.birlik, cur.birlik);
       if (fifo) {
         const d = fifoLedger(nomi).byDoc.get("CHT-" + t.id);
-        cur.summa += d ? d.tannarx : fifoHypotheticalCost(nomi, p.miqdor, t.sana).tannarx;
+        cur.summa += d ? d.tannarx : fifoHypotheticalCost(nomi, p.miqdor, t.sana, p.birlik).tannarx;
       }
       materialMap.set(nomi, cur);
     });
@@ -6624,7 +7130,7 @@ function computeChiqimMaterialBreakdown(chiqimId) {
   const asOfDate = chiqimRow ? chiqimRow.sana : null;
   let total = 0;
   const materials = Array.from(materialMap.values()).map((c) => {
-    const summa = fifo ? c.summa : c.miqdor * avgOmborNarx(c.nomi, asOfDate);
+    const summa = fifo ? c.summa : birlikKonvert(c.miqdor, c.birlik, omborAsosiyBirlik(c.nomi)) * avgOmborNarx(c.nomi, asOfDate);
     const narx = c.miqdor ? summa / c.miqdor : 0;
     total += summa;
     return { nomi: c.nomi, birlik: c.birlik, miqdor: c.miqdor, narx, summa };
@@ -6968,20 +7474,21 @@ function printIshlabChiqarishDalolatnoma(icId) {
   } else {
     // Eski yozuvlar uchun fallback
     const fifo = fifoUsulActive();
-    const xomashyoNarx = (nomi, mMiqdor) => {
-      if (!fifo) return avgOmborNarx(nomi, icRow.sana);
+    // Narx — material birligining 1 birligi uchun (retseptda kg, omborda t).
+    const xomashyoNarx = (nomi, mMiqdor, birlik) => {
+      if (!fifo) return avgOmborNarx(nomi, icRow.sana) * birlikKonvert(1, birlik, omborAsosiyBirlik(nomi));
       const d = fifoLedger(nomi).byDoc.get(`IC-${icId}`);
-      const summa = d ? d.tannarx : fifoHypotheticalCost(nomi, mMiqdor, icRow.sana).tannarx;
+      const summa = d ? d.tannarx : fifoHypotheticalCost(nomi, mMiqdor, icRow.sana, birlik).tannarx;
       return mMiqdor ? summa / mMiqdor : 0;
     };
     const agg = new Map();
     const addAgg = (nomi, birlik, mMiqdor) => {
       const cur = agg.get(nomi) || { nomi, birlik, miqdor: 0 };
-      cur.miqdor += toNum(mMiqdor);
+      cur.miqdor += birlikKonvert(toNum(mMiqdor), birlik, cur.birlik);
       agg.set(nomi, cur);
     };
     if (mahsulot) {
-      computeMahsulotConsumption(mahsulot, icRow.miqdor, icRow.sana).consumptions
+      computeMahsulotConsumption(mahsulot, icRow.miqdor, icRow.sana, { docRef: `IC-${icId}`, retseptBoyicha: true }).consumptions
         .forEach((c) => addAgg(c.nomi, c.birlik, c.miqdor));
     } else {
       STORE.ombor
@@ -6989,7 +7496,7 @@ function printIshlabChiqarishDalolatnoma(icId) {
         .forEach((r) => addAgg(r.nomi, r.birlik, r.miqdor));
     }
     materials = Array.from(agg.values()).map((c) => {
-      const narx = xomashyoNarx(c.nomi, c.miqdor);
+      const narx = xomashyoNarx(c.nomi, c.miqdor, c.birlik);
       return { nomi: c.nomi, birlik: c.birlik, rejaMiqdor: c.miqdor, faktMiqdor: c.miqdor, farq: 0, narx, summa: c.miqdor * narx };
     });
     materialsTotal = materials.reduce((a, c) => a + c.summa, 0);
@@ -7315,6 +7822,7 @@ async function performXomashyoChiqim(nomi, birlik, miqdor, sana, izoh) {
   const { data, error } = await sbClient.from("ombor").insert(toDbRow(OMBOR_DB_MAP, row)).select().single();
   if (error) { reportError(error, "Saqlashda xatolik"); return false; }
   STORE.ombor.push(fromDbRow(OMBOR_DB_MAP, data));
+  invalidateFifo();
   updateNavBadges();
   return true;
 }
@@ -7409,13 +7917,13 @@ function updateOmborChiqimPreview() {
 
   if (target.kind === "xomashyo") {
     const [c] = annotateOmborShortages([{ nomi, birlik: "", miqdor }], { asOfDate: sana });
-    el.innerHTML = `<div class="faint" style="margin-bottom:4px;">Xomashyo sifatida aniqlandi — to'g'ridan-to'g'ri ayiriladi:</div><div style="${c.yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(nomi)}: ${fmt(miqdor, 3)} (${escapeHtml(sana)} holatiga qoldiq: ${fmt(c.qoldiq, 3)})${kamomadIzoh(c)}</div>`;
+    el.innerHTML = `<div class="faint" style="margin-bottom:4px;">Xomashyo sifatida aniqlandi — to'g'ridan-to'g'ri ayiriladi:</div><div style="${c.yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(nomi)}: ${fmt(miqdor, 3)} ${escapeHtml(c.birlik || "")} (${escapeHtml(sana)} holatiga qoldiq: ${fmt(c.qoldiq, 3)})${kamomadIzoh(c)}${c.kirimShart ? " — <b>Kirim qilinishi shart</b>" : ""}</div>`;
   } else if (target.kind === "mahsulot") {
     const m = target.mahsulot;
     const { consumptions, tannarx } = computeMahsulotConsumption(m, miqdor, sana);
     const annotated = annotateOmborShortages(consumptions, { asOfDate: sana });
     const lines = annotated.map((c) =>
-      `<div style="${c.yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(c.nomi)}: ${fmt(c.miqdor, 3)} ${escapeHtml(c.birlik || "")} sarflanadi (${escapeHtml(sana)} holatiga qoldiq: ${fmt(c.qoldiq, 3)})${kamomadIzoh(c)}</div>`);
+      `<div style="${c.yetarli ? "" : "color:var(--danger,#e5484d);font-weight:600;"}">${escapeHtml(c.nomi)}: ${fmt(c.miqdor, 3)} ${escapeHtml(c.birlik || "")} sarflanadi (${escapeHtml(sana)} holatiga qoldiq: ${fmt(c.qoldiq, 3)})${kamomadIzoh(c)}${c.kirimShart ? " — <b>Kirim qilinishi shart</b>" : ""}</div>`);
     el.innerHTML = `<div class="faint" style="margin-bottom:4px;">Mahsulot sifatida aniqlandi — kalkulyatsiya bo'yicha:</div>${lines.join("") || `<span class="faint">Bu mahsulotda tarkib belgilanmagan</span>`}<div style="margin-top:8px;"><b>Taxminiy tannarx: ${fmtSum(tannarx)}</b></div>`;
   } else {
     el.innerHTML = `<span style="color:var(--danger,#e5484d);font-weight:600;">Bu nom na Ombor kirimidagi xomashyo, na Ishlab chiqarishdagi mahsulot sifatida topilmadi.</span>`;
@@ -7434,14 +7942,23 @@ async function saveOmborChiqim() {
   if (target.kind === "none") { toast("Bu nom xomashyo yoki mahsulot sifatida topilmadi", "err"); return; }
 
   const ref = target.kind === "xomashyo" ? omborKirimRows().find((r) => r.nomi === nomi) : null;
+  const sarf = target.kind === "xomashyo"
+    ? [{ nomi, birlik: ref ? ref.birlik : "", miqdor }]
+    : computeMahsulotConsumption(target.mahsulot, miqdor, sana).consumptions;
+  if (!omborSarfRuxsat(omborSarfTekshir(sarf, sana))) return;
+
+  // Mahsulot sotuvi/chiqimi — retsept bo'yicha xomashyo yechiladi; bu yerda
+  // tayyor mahsulot omborga KIRIM qilinmaydi (ilgari standart holatda
+  // qilinardi — sotilgan mahsulot qoldiqda "paydo bo'lib" qolardi).
   const ok = target.kind === "xomashyo"
     ? await performXomashyoChiqim(nomi, ref ? ref.birlik : "", miqdor, sana, izoh)
-    : await performMahsulotConsumption(target.mahsulot, miqdor, sana, izoh);
+    : await performMahsulotConsumption(target.mahsulot, miqdor, sana, izoh, undefined, { omborgaKirim: false });
   if (!ok) return;
 
   closeModal();
   renderOmborChiqim();
   toast("Chiqim qo'shildi, ombor qoldig'i yangilandi");
+  kritikQoldiqOgohlantir(sarf.map((c) => c.nomi));
 }
 
 // Ombor chiqimi — Excel'dan import. Ombor kirimi bilan AYNAN BIR XIL didox.uz
@@ -13216,7 +13733,7 @@ const SETTINGS_FIELD_INPUT_ID = {
   companyName: "sCompany", inn: "sInn",
   qqsStavka: "sQqs", foydaStavka: "sFoyda", davrXarajati: "sDavr", moliyaviyXarajat: "sMoliya", tannarxManual: "sTannarx",
   ijtimoiySoliqStavka: "sIjtimoiy", ndflStavka: "sNdfl", inpsStavka: "sInps", ishHaqiTolovKuni: "sIshHaqiTolovKuni",
-  defaultFoydaNormasi: "sDefaultFoyda"
+  defaultFoydaNormasi: "sDefaultFoyda", minMarjaFoiz: "sMinMarja"
 };
 
 // validateSettings() natijasini sahifadagi maydonlarga bo'yaydi: xato -> qizil
@@ -13333,6 +13850,14 @@ function renderSettings() {
         <div class="field">
           <label>Kalkulyatsiyasiz sotuv uchun taxminiy foyda normasi (0–0.95)</label>
           <input id="sDefaultFoyda" inputmode="decimal" value="${fmt(s.defaultFoydaNormasi != null ? s.defaultFoydaNormasi : 0.2, 2)}">
+        </div>
+        <div class="field">
+          <label>Minimal marja (% sotuv narxidan) — Tannarx ≤ Sotuv narxi × (1 − marja)</label>
+          <input id="sMinMarja" inputmode="decimal" value="${fmt(minMarjaFoiz(), 1)}">
+        </div>
+        <div class="switch-row">
+          <span class="switch"><input type="checkbox" id="sKirimsizBlok" ${kirimsizSarfBloklanadimi() ? "checked" : ""}><span class="track"></span></span>
+          <label for="sKirimsizBlok">Kirim qilinmagan / qoldig'i 0 xomashyoni ishlab chiqarish va ombor chiqimida bloklash</label>
         </div>
         <div class="note">FIFO — har kirim partiyasi alohida hisoblanadi, sotuvda eng eski partiyadan yechiladi (1C standarti). "Kalkulyatsiyasiz sotuv" qatorining tannarxi noma'lum bo'lgani uchun taxminiy = summa × (1 − norma) sifatida olinadi; F2/Foyda solig'i sahifasida "taxminiy" belgisi chiqadi.</div>
       </div>
@@ -13555,6 +14080,8 @@ function renderSettings() {
       ishHaqiTolovKuni: tolovKuniVal === "" ? null : toNum(tolovKuniVal),
       tannarxUsuli: document.getElementById("sTannarxUsuli").value === "ortacha" ? "ortacha" : "fifo",
       defaultFoydaNormasi: toNum(document.getElementById("sDefaultFoyda").value),
+      minMarjaFoiz: toNum(document.getElementById("sMinMarja").value),
+      kirimsizSarfBloklash: document.getElementById("sKirimsizBlok").checked,
       yonalish: document.getElementById("sYonalish").value,
       modulOmbor: document.getElementById("sModulOmbor").checked,
       modulIshlabChiqarish: document.getElementById("sModulIshlabChiqarish").checked,
@@ -14601,6 +15128,48 @@ async function handleReportSettingsImport(file, fieldMap, rerender) {
 
 /* ------------------------------- Didox / E-Faktura API Integratsiyasi ------------------------------- */
 
+function isServiceOmborItem(item) {
+  if (!item || typeof item !== "object") return false;
+
+  const flags = [item.is_service, item.isService, item.xizmat, item.service];
+  if (flags.some((value) => value === true || ["1", "true", "yes", "ha"].includes(String(value || "").trim().toLowerCase()))) return true;
+
+  const typeValues = [item.type, item.kind, item.item_type, item.product_type, item.catalog_type, item.nomenclature_type]
+    .map((value) => String(value || "").trim().toLowerCase());
+  if (typeValues.some((value) => /service|xizmat|услуг|работ/.test(value))) return true;
+
+  const unit = String(item.package_name || item.unit || item.MeasureId || item.birlik || "")
+    .trim().toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ");
+  // Soliq/didox birlikka valyutani qavsda qo'shadi: "услуга (сум)", "xizmat (so'm)".
+  if (/^(service|services|xizmat(?:lar|lari|i)?|хизмат(?:лар|лари|и)?|услуг(?:а|и)?|работ(?:а|ы)?|усл\.?\s*ед\.?)(?:\s*\(.*\))?$/.test(unit)) return true;
+
+  const name = String(item.nomi || item.name || item.product_name || item.catalog_name || "").trim().toLowerCase().replace(/ё/g, "е");
+  return /(?:^|[\s(])(?:xizmat(?:lar|lari|i)?|хизмат(?:лар|лари|и)?|услуг(?:а|и)?|работ(?:а|ы)?|service(?:s)?|комиссионн\S*)(?=$|[\s),.:;/-])/.test(name);
+}
+
+function filterOmborStockRows(rows) {
+  if (!Array.isArray(rows)) return [];
+
+  return rows.filter((row) => {
+    if (!row || typeof row !== "object") return false;
+
+    const nomi = String(row.nomi || row.name || row.product_name || row.catalog_name || "").trim();
+    if (!nomi) return false;
+
+    const item = {
+      ...row,
+      nomi,
+      birlik: row.birlik || row.unit || row.package_name || row.MeasureId || "",
+      type: row.type || row.kind || row.item_type || row.product_type || row.catalog_type || row.nomenclature_type || ""
+    };
+
+    if (isServiceOmborItem(item)) return false;
+    if (row.ombordaHisoblanadi === false) return false;
+    if (Number.isFinite(toNum(row.miqdor)) && toNum(row.miqdor) <= 0) return false;
+    return true;
+  });
+}
+
 /**
  * Didox REST API yoki Soliq.uz (GNK) E-Faktura JSON hujjatini FORGET ichki tuzilishiga o'giradi.
  * @param {Object} rawDoc - Didox yoki Soliq.uz'dan olingan xom hujjat ob'ekti
@@ -14732,6 +15301,7 @@ function parseDidoxDocument(rawDoc, targetType) {
       const itemVat = toNum(it.vat_sum || it.VatSum || 0);
       const itemJami = toNum(it.delivery_sum_with_vat || it.total_sum || it.DeliverySumWithVat || (itemSumma + itemVat));
       const mxik = String(it.catalog_code || it.CatalogCode || it.mxik || "").trim();
+      const ombordaHisoblanadi = !isServiceOmborItem({ ...it, nomi, birlik });
 
       if (nomi) {
         items.push({
@@ -14744,7 +15314,8 @@ function parseDidoxDocument(rawDoc, targetType) {
           qqsStavka: vatRate,
           qqsSumma: itemVat,
           jamiSumma: itemJami,
-          mxik
+          mxik,
+          ombordaHisoblanadi
         });
       }
     }
@@ -15093,7 +15664,7 @@ async function syncDidoxInvoices(opts = {}) {
             const items = kirimLineItemsMap.get(docKey);
             if (!items || !items.length || !isValidStatus(kRow.status)) continue;
 
-            for (const it of items) {
+            for (const it of filterOmborStockRows(items)) {
               const omborDup = STORE.ombor.some((o) =>
                 o.hujjatRaqami === kRow.hujjatRaqami &&
                 o.sana === kRow.sana &&
@@ -17318,6 +17889,7 @@ function detectInvoiceColumns(headerRow) {
     jami: findCol(headerRow, (s) => s.includes("стоимость поставки") && s.includes("учётом")),
     // Ombor (mahsulot darajasidagi) qatorlar uchun qo'shimcha ustunlar
     nomi: findCol(headerRow, (s) => s.includes("примечание") && s.includes("товар")),
+    itemType: findCol(headerRow, (s) => s.includes("тип номенклатур") || s.includes("тип товара") || s.includes("item type") || s.includes("product type") || s === "xizmat turi" || s === "tovar turi"),
     birlik: findCol(headerRow, (s) => s.includes("единица") && s.includes("измерен")),
     miqdor: findCol(headerRow, (s) => s === "количество"),
     narx: findCol(headerRow, (s) => s === "цена")
@@ -17397,7 +17969,7 @@ async function handleInvoiceImport(file, type) {
     // qilingan fayl bu yerdan qayta yuklansa ham takrorlanmaydi (va aksincha).
     let newOmborItems = [];
     if (type === "kirim" && col.nomi !== -1) {
-      const lineItems = parseOmborLineItems(rows, col);
+      const lineItems = filterOmborStockRows(parseOmborLineItems(rows, col));
       newOmborItems = lineItems.filter((it) => !STORE.ombor.some((r) =>
         r.hujjatRaqami === it.hujjatRaqami && r.sana === it.sana && r.nomi === it.nomi && Math.abs(r.miqdor - it.miqdor) < 0.001));
     }
@@ -18061,6 +18633,7 @@ function applyRemoteRowChange(type, payload) {
   const fid = payload.new?.firma_id ?? payload.old?.firma_id;
   if (fid && fid !== ACTIVE_FIRMA_ID) return;
   const map = TABLE_MAPS[type];
+  if (type === "ombor" && payload.new && isServiceOmborItem(fromDbRow(map, payload.new))) return;
   if (payload.eventType === "INSERT") {
     if (RECENTLY_DELETED.has(payload.new.id)) return;
     if (!STORE[type].some((r) => r.id === payload.new.id)) STORE[type].push(fromDbRow(map, payload.new));

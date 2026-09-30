@@ -50,6 +50,13 @@ const code = [
   extractFn("computeIshHaqiRow"),
   extractFn("tolanmaganQoldiqAsOf"),
   extractFn("cmpOmbor"),
+  // O'lchov birliklari (t↔kg) — FIFO daftari miqdorni asosiy birlikka o'giradi.
+  extractConstBlock("const BIRLIK_TURLARI", '["литр", "l"]];'),
+  extractFn("birlikAniqla"),
+  extractFn("birlikKonvert"),
+  "let ASOSIY_BIRLIK_CACHE = null;",
+  extractFn("omborAsosiyBirlik"),
+  extractFn("omborKirimBaza"),
   extractFn("buildFifoLedgerFromRows"),
   extractFn("buildAllFifoLedgers"),
   extractFn("inRange"),
@@ -57,7 +64,7 @@ const code = [
   "let FIFO_LEDGERS = null;",
   extractFn("fifoLedger"),
   "let STORE = { bank: [], kirim: [], chiqim: [], ombor: [], kontragentlar: [], settings: { filterFrom: '', filterTo: '' } };",
-  "module.exports = { normStatus, isValidStatus, computeIshHaqiRow, tolanmaganQoldiqAsOf, buildAllFifoLedgers, fifoLedger, computeKontragentLedger, setStore: (s) => { STORE = Object.assign({ bank: [], kirim: [], chiqim: [], ombor: [], kontragentlar: [], settings: { filterFrom: '', filterTo: '' } }, s); FIFO_LEDGERS = null; } };"
+  "module.exports = { normStatus, isValidStatus, computeIshHaqiRow, tolanmaganQoldiqAsOf, buildAllFifoLedgers, fifoLedger, computeKontragentLedger, setStore: (s) => { STORE = Object.assign({ bank: [], kirim: [], chiqim: [], ombor: [], kontragentlar: [], settings: { filterFrom: '', filterTo: '' } }, s); FIFO_LEDGERS = null; ASOSIY_BIRLIK_CACHE = null; } };"
 ].join("\n\n");
 
 const tmp = require("path").join(require("os").tmpdir(), "forget_extracted_" + process.pid + ".js");

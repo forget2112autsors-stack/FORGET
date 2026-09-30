@@ -51,6 +51,8 @@ const code = [
   extractFn("toNum"),
   extractFn("isValidStatus"),
   extractFn("normalizeDate"),
+  extractFn("isServiceOmborItem"),
+  extractFn("parseOmborLineItems"),
   extractFn("parseDidoxDocument"),
   extractFn("isInvoiceDuplicate")
 ].join("\n\n");
@@ -66,8 +68,8 @@ const sandbox = {
   console
 };
 
-const fn = new Function("ctx", "with(ctx) {\n" + code + "\nreturn { normStatus, toNum, isValidStatus, normalizeDate, parseDidoxDocument, isInvoiceDuplicate };\n}");
-const { normStatus, toNum, isValidStatus, normalizeDate, parseDidoxDocument, isInvoiceDuplicate } = fn(sandbox);
+const fn = new Function("ctx", "with(ctx) {\n" + code + "\nreturn { normStatus, toNum, isValidStatus, normalizeDate, isServiceOmborItem, parseOmborLineItems, parseDidoxDocument, isInvoiceDuplicate };\n}");
+const { normStatus, toNum, isValidStatus, normalizeDate, isServiceOmborItem, parseOmborLineItems, parseDidoxDocument, isInvoiceDuplicate } = fn(sandbox);
 
 let passed = 0;
 function test(name, cb) {
@@ -334,6 +336,44 @@ test("Ombor kirimi uchun har bir mahsulot birlik narxi va summasi to'g'ri shakll
   assert.equal(omborItem.summaQQSsiz, 3000000);
   assert.equal(omborItem.qqsSumma, 360000);
   assert.equal(omborItem.jamiSumma, 3360000);
+  assert.equal(omborItem.ombordaHisoblanadi, true);
+});
+
+test("Xizmat faktura summasida qoladi, lekin ombor hisobiga kirmaydi", () => {
+  const raw = {
+    status: 30,
+    document: {
+      factura_doc: { factura_number: "INV-SERVICE", factura_date: "2026-09-21" },
+      seller: { tin: "777", name: "XIZMAT KO'RSATUVCHI" },
+      buyer: { tin: "123456789", name: "FORGET MCHJ" },
+      items: [
+        { name: "Internet xizmatlari", package_name: "dona", count: 1, price: 500000, summa: 500000, vat_sum: 60000, delivery_sum_with_vat: 560000 }
+      ],
+      total: { summa: 500000, vat_sum: 60000, delivery_sum_with_vat: 560000 }
+    }
+  };
+
+  const parsed = parseDidoxDocument(raw, "kirim");
+  assert.equal(parsed.items.length, 1);
+  assert.equal(parsed.items[0].ombordaHisoblanadi, false);
+  assert.equal(parsed.summaQQSsiz, 500000);
+  assert.equal(parsed.qqsSumma, 60000);
+  assert.equal(parsed.jamiSumma, 560000);
+  assert.equal(isServiceOmborItem({ name: "Support", type: "service" }), true);
+  assert.equal(isServiceOmborItem({ name: "Internet", unit: "услуга" }), true);
+});
+
+test("Excel fakturada xizmat omborga kirmaydi, mahsulot qatori esa qoladi", () => {
+  const col = { id: 0, sana: 1, hujjat: 2, status: 3, sellerInn: 4, sellerNomi: 5, nomi: 6, birlik: 7, base: 8, qqsSumma: 9, jami: 10, miqdor: 11, narx: 12, itemType: 13 };
+  const rows = [
+    [],
+    ["doc-1", "2026-09-21", "F-1", "Подписан", "777", "Yetkazuvchi", "Internet", "oy", 500000, 60000, 560000, 1, 500000, "Услуга"],
+    ["", "", "", "", "", "", "Armatura", "kg", 200000, 24000, 224000, 20, 10000, "Товар"]
+  ];
+  const items = parseOmborLineItems(rows, col);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].nomi, "Armatura");
+  assert.equal(items[0].miqdor, 20);
 });
 
 console.log(`\n✓ Barcha ${passed} ta Didox API testlari muvaffaqiyatli o'tdi!\n`);
