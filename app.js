@@ -18207,6 +18207,13 @@ function tryParseAbsBankStatement(rows, opts) {
         .replace(/\s+/g, " ")
         .trim();
     }
+    // Hamkorbank "История по счету": INN nom oxiriga yopishtirilgan —
+    // "MARDON METALL SAVDO MCHJ(ИНН=306092959)"
+    const innInNomi = kontragentNomi.match(/\s*\(\s*(?:ИНН|INN|STIR)\s*[=:]\s*(\d{9}|\d{14})\s*\)\s*$/i);
+    if (innInNomi) {
+      if (!kontragentInn) kontragentInn = innInNomi[1];
+      kontragentNomi = kontragentNomi.slice(0, innInNomi.index).trim();
+    }
 
     if ((!kontragentInn || !kontragentNomi) && col.schetCombined >= 0) {
       const schetCell = String(row[col.schetCombined] || "");
@@ -18299,6 +18306,22 @@ function findBankDup(r, used) {
   return dup;
 }
 
+// ABS/Klient-Bank "Сведения о работе счета" ko'chirmasi .xls nomi bilan, aslida windows-1251
+// kodirovkali HTML bo'lib keladi: sarlavha bir jadvalda, operatsiyalar boshqasida. SheetJS faqat
+// birinchi jadvalni (va kodirovkani buzib) o'qiydi — shu sabab barcha jadvallarning qatorlarini
+// o'zimiz yig'amiz. HTML bo'lmasa null.
+function htmlBankRows(buf) {
+  const head = new TextDecoder("latin1").decode(buf.slice(0, 2048));
+  if (!/<html|<table/i.test(head)) return null;
+  const charset = (head.match(/charset\s*=\s*["']?([\w-]+)/i) || [])[1] || "windows-1251";
+  let text;
+  try { text = new TextDecoder(charset).decode(buf); } catch (e) { text = new TextDecoder("windows-1251").decode(buf); }
+  const doc = new DOMParser().parseFromString(text, "text/html");
+  return [...doc.querySelectorAll("tr")].map((tr) =>
+    [...tr.querySelectorAll("th,td")].map((c) => c.textContent.replace(/ /g, " ").replace(/\s+/g, " ").trim())
+  ).filter((r) => r.length);
+}
+
 async function handleBankImport(file) {
   try {
     await dataReady;
@@ -18338,9 +18361,12 @@ async function handleBankImport(file) {
         candidates.push(r);
       }
     } else {
-      const wb = XLSX.read(buf, { type: "array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+      let rows = htmlBankRows(buf);
+      if (!rows) {
+        const wb = XLSX.read(buf, { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+      }
       if (!rows.length) { toast("Fayl bo'sh", "err"); return; }
 
       // Firmaning o'z INN'i: sozlamalardan, bo'lmasa fayl nomidan ("TurnoverOperInfo 310068867.xlsx")
