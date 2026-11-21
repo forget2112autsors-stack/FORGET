@@ -54,6 +54,7 @@ const code = [
   extractConstBlock("const BIRLIK_TURLARI", '["литр", "l"]];'),
   extractFn("birlikAniqla"),
   extractFn("birlikKonvert"),
+  extractConstBlock("const GRANULA_GURUH", "// Nomning asosiy (hisob) birligi"),
   "let ASOSIY_BIRLIK_CACHE = null;",
   extractFn("omborAsosiyBirlik"),
   extractFn("omborKirimBaza"),
@@ -64,7 +65,7 @@ const code = [
   "let FIFO_LEDGERS = null;",
   extractFn("fifoLedger"),
   "let STORE = { bank: [], kirim: [], chiqim: [], ombor: [], kontragentlar: [], settings: { filterFrom: '', filterTo: '' } };",
-  "module.exports = { normStatus, isValidStatus, computeIshHaqiRow, tolanmaganQoldiqAsOf, buildAllFifoLedgers, fifoLedger, computeKontragentLedger, setStore: (s) => { STORE = Object.assign({ bank: [], kirim: [], chiqim: [], ombor: [], kontragentlar: [], settings: { filterFrom: '', filterTo: '' } }, s); FIFO_LEDGERS = null; ASOSIY_BIRLIK_CACHE = null; } };"
+  "module.exports = { normStatus, isValidStatus, computeIshHaqiRow, tolanmaganQoldiqAsOf, buildAllFifoLedgers, fifoLedger, computeKontragentLedger, setStore: (s) => { STORE = Object.assign({ bank: [], kirim: [], chiqim: [], ombor: [], kontragentlar: [], settings: { filterFrom: '', filterTo: '' } }, s); FIFO_LEDGERS = null; ASOSIY_BIRLIK_CACHE = null; GURUH_CACHE = null; } };"
 ].join("\n\n");
 
 const tmp = require("path").join(require("os").tmpdir(), "forget_extracted_" + process.pid + ".js");

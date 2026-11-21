@@ -29,11 +29,11 @@ function extractBetween(startMarker, endMarker) {
 const FUNCS = [
   "toNum", "birlikAniqla", "birlikKonvert", "birlikMosmi", "omborAsosiyBirlik", "omborMiqdorAsosiy",
   "omborKirimBaza", "omborKirimRows", "cmpOmbor", "buildFifoLedgerFromRows", "buildAllFifoLedgers",
-  "fifoLedger", "invalidateFifo", "fifoHypotheticalCost", "fifoUsulActive", "avgOmborNarx",
+  "fifoLedger", "invalidateFifo", "omborQoldiqList", "omborQoldiqQiymatiAsOf", "fifoHypotheticalCost", "fifoUsulActive", "avgOmborNarx",
   "getXomashyoBirlikNarx", "annotateOmborShortages", "omborSarfTekshir", "omborQoldiqByNomiAsOf",
   "computeMahsulotConsumption", "mahsulotSarfRejasi", "tayyorMahsulotKirimiBor", "kalkulyatsiyaHisobla",
   "mahsulotXarajatNormalari", "ijtimoiySoliqStavkasi", "minMarjaFoiz", "marjaTekshir",
-  "kritikQoldiqNormasi", "kritikQoldiqRoyxati"
+  "kritikQoldiqNormasi", "kritikQoldiqRoyxati", "summadanHisobmi", "summadanSarf"
 ];
 
 const script = `
@@ -41,10 +41,11 @@ let STORE = null;
 let FIFO_LEDGERS = null, CHIQIM_HOLAT_CACHE = null, ASOSIY_BIRLIK_CACHE = null;
 ${extractBetween("const BIRLIK_TURLARI", "function birlikAniqla(")}
 ${extractBetween("const XARAJAT_NORMA_MAYDONLARI", "function mahsulotXarajatNormalari(")}
+${extractBetween("const GRANULA_GURUH", "// Nomning asosiy (hisob) birligi")}
 ${FUNCS.map(extractFunction).join("\n")}
 return {
   setStore: (s) => { STORE = s; invalidateFifo(); },
-  ${FUNCS.join(", ")}
+  ${FUNCS.join(", ")}, omborGuruh, omborEkvQator
 };
 `;
 const A = new Function(script)();
@@ -76,7 +77,8 @@ assert.strictEqual(A.birlikKonvert(250, "sm", "metr"), 2.5);
 assert.strictEqual(A.birlikKonvert(3, "dona", "kg"), 3, "mos kelmaydigan birlik o'zgarmaydi");
 assert.strictEqual(A.birlikMosmi("dona", "kg"), false);
 assert.strictEqual(A.birlikMosmi("kg", "Тонна"), true);
-assert.strictEqual(A.omborAsosiyBirlik(G), "tonna");
+// "Polietilen granulasi PE 100" — granula guruhi a'zosi, asosiy birlik — тонна.
+assert.strictEqual(A.omborAsosiyBirlik(G), "тонна");
 
 // 2. FIFO: 1 kg narxi — birinchi partiyadan (13 500 000 / 1000)
 assert.strictEqual(Math.round(A.getXomashyoBirlikNarx(G, 5, null, "kg")), 13500);
@@ -143,5 +145,89 @@ const kritik = A.kritikQoldiqRoyxati();
 assert.strictEqual(kritik.length, 1, "10 t qoldiq ≤ 12 t norma");
 store.settings.kritikQoldiqlar = { [G]: 5 };
 assert.strictEqual(A.kritikQoldiqRoyxati().length, 0);
+
+// 8. Granula guruhi, drobilka, summadan sarf, kamomad qoplanishi
+{
+  const PG = "Polietilen granula";
+  const st = {
+    settings: { tannarxUsuli: "fifo", defaultFoydaNormasi: 0.005, kritikQoldiqlar: {} },
+    ombor: [
+      kirim("Гранула полиэтилен ПЭ 100 (faktura A)", "тонна", 10, 10 * 8 * MLN, "2026-07-01"),
+      kirim("HDPE granula 273 (faktura B)", "кг", 10000, 10 * 10 * MLN, "2026-07-10"),
+      kirim("Шпагат", "т", 1, 9 * MLN, "2026-07-12"),
+      kirim("Гранула полипропилен", "тонна", 5, 5 * 12 * MLN, "2026-07-01"),
+      kirim("Пет Отход", "кг", 1000, 3 * MLN, "2026-07-01"),
+      kirim("Пластик стул", "шт.", 100, 18 * MLN, "2026-07-15"),
+      kirim("Қоғоз стакан", "шт", 1000, 1 * MLN, "2026-07-15")
+    ],
+    mahsulotlar: []
+  };
+  A.setStore(st);
+  // Guruh a'zolari
+  assert.strictEqual(A.omborGuruh("Гранула полиэтилен ПЭ 100 (faktura A)"), PG);
+  assert.strictEqual(A.omborGuruh("HDPE granula 273 (faktura B)"), PG);
+  assert.strictEqual(A.omborGuruh("Шпагат"), PG, "shpagat (birligi т) — guruhda");
+  assert.strictEqual(A.omborGuruh("Polietilen granulasi PE 80"), PG, "retsept nomi — guruhga");
+  assert.strictEqual(A.omborGuruh("Пластик стул"), PG, "donalab kirim — drobilka");
+  assert.strictEqual(A.omborGuruh("Гранула полипропилен"), "Гранула полипропилен");
+  assert.strictEqual(A.omborGuruh("Пет Отход"), "Пет Отход");
+  assert.strictEqual(A.omborGuruh("Қоғоз стакан"), "Қоғоз стакан");
+  // Drobilka: 18 mln ÷ shu sanagacha (15-iyul) massa narxi (189 mln / 21 t = 9 mln) = 2 t
+  assert.strictEqual(+A.omborEkvQator(st.ombor[5]).miqdor.toFixed(6), 2);
+  // Guruh qoldig'i: 10 + 10 + 1 + 2 = 23 t, qiymati 207 mln
+  const pg = A.omborQoldiqList().find((q) => q.nomi === PG);
+  assert.strictEqual(pg.birlik, "тонна");
+  assert.strictEqual(+pg.qoldiq.toFixed(6), 23);
+  assert.strictEqual(Math.round(A.fifoLedger("Шпагат").qiymatAsOf(null)), 207 * MLN, "a'zo nomi bo'yicha ham guruh daftari");
+  // Retseptdagi PE 80 (kg) — guruhdan, FIFO bo'yicha (birinchi partiya 8 000/kg)
+  assert.strictEqual(Math.round(A.fifoHypotheticalCost("Polietilen granulasi PE 80", 1000, null, "kg").tannarx), 8 * MLN);
+  // Kamomad yo'q — guruh nomi bo'yicha (yolg'on "kirim_yoq" emas)
+  let tk = A.omborSarfTekshir([{ nomi: "Polietilen granulasi PE 80", birlik: "kg", miqdor: 5000 },
+    { nomi: PG, birlik: "тонна", miqdor: 3 }], "2026-07-20");
+  assert.strictEqual(tk.annotated.length, 1, "guruh a'zolari bitta qatorga jamlanadi");
+  assert.strictEqual(tk.bloklar.length + tk.kamlar.length, 0);
+  assert.strictEqual(+tk.annotated[0].qoldiq.toFixed(6), 23000, "qoldiq birinchi sarf birligida (kg)");
+
+  // Summadan sarf: 125 lik quvur (umumiy "Polietilen granula" normasi)
+  const q125 = { id: "q125", nomi: "Политилен Труба 125 дм", birlik: "метр", tarkib: [{ nomi: PG, birlik: "тонна", norma: 2.9 }] };
+  const pe100 = { id: "pe100", nomi: "Труба ПЭ100 110", birlik: "метр", tarkib: [{ nomi: "Polietilen granulasi PE 100", birlik: "kg", norma: 3 }] };
+  const ozidan = { id: "oz", nomi: "Полиэтилен Труба 63", birlik: "метр", tarkib: [{ nomi: "Полиэтилен Труба 63", birlik: "метр", norma: 1 }] };
+  assert.strictEqual(A.summadanHisobmi(q125, "2026-07-20"), true);
+  assert.strictEqual(A.summadanHisobmi(pe100, "2026-07-20"), false, "PE 100 o'z normasida");
+  assert.strictEqual(A.summadanHisobmi(ozidan, "2026-07-20"), true, "o'zidan 1 birlik, kirimi yo'q");
+  // 20-iyulgacha guruh o'rtacha narxi: (80 + 100 + 9 + 18) mln / 23 t = 9 mln/t
+  // sarf = 90 450 000 × 0,995 ÷ 9 000 000 = 9,99975 t
+  const r125 = A.mahsulotSarfRejasi(q125, 100, "2026-07-20", { summa: 90450000 });
+  assert.strictEqual(r125.length, 1);
+  assert.strictEqual(r125[0].nomi, PG);
+  assert.strictEqual(+r125[0].miqdor.toFixed(6), 9.99975);
+  // PE 100 — normadan (3 kg × 100 m)
+  assert.deepStrictEqual(A.mahsulotSarfRejasi(pe100, 100, "2026-07-20", { summa: 1 }), [{ nomi: "Polietilen granulasi PE 100", birlik: "kg", miqdor: 300 }]);
+  // Ishlab chiqarish (retseptBoyicha) summadan hisoblanmaydi
+  assert.strictEqual(A.mahsulotSarfRejasi(q125, 1, "2026-07-20", { summa: 1000, retseptBoyicha: true })[0].miqdor, 2.9);
+  // Tayyor quvur omborda bo'lsa — avval uning o'zi yechiladi (summadan emas)
+  st.ombor.push(kirim(q125.nomi, "метр", 50, 50 * 100000, "2026-07-18"));
+  A.setStore(st);
+  assert.deepStrictEqual(A.mahsulotSarfRejasi(q125, 10, "2026-07-20", { summa: 1000000 }), [{ nomi: q125.nomi, birlik: "метр", miqdor: 10 }]);
+  st.ombor.pop();
+
+  // Kamomad keyingi kirimdan qoplanadi: 25 t sarf (2 t yetmaydi), keyin 5 t × 11 mln kirim
+  st.ombor.push(chiqim(PG, "тонна", 25, "2026-07-20", "CHT-x"));
+  A.setStore(st);
+  let L = A.fifoLedger(PG);
+  assert.strictEqual(L.byDoc.get("CHT-x").sabab, "kam");
+  assert.strictEqual(+L.qtyAsOf(null).toFixed(6), -2, "manfiy qoldiq ko'rinadi");
+  st.ombor.push(kirim("Гранула полиэтилен ПЭ 100 (faktura C)", "тонна", 5, 5 * 11 * MLN, "2026-08-01"));
+  A.setStore(st);
+  L = A.fifoLedger(PG);
+  // Sarf: 207 mln (23 t) + 2 t × 11 mln (keyingi partiya narxida) = 229 mln
+  assert.strictEqual(Math.round(L.byDoc.get("CHT-x").tannarx), 229 * MLN);
+  assert.strictEqual(+L.qtyAsOf(null).toFixed(6), 3);
+  assert.strictEqual(Math.round(L.qiymatAsOf(null)), 33 * MLN);
+  // Nazorat: sarf + qoldiq = kirim (207 + 55 = 262)
+  assert.strictEqual(Math.round(L.byDoc.get("CHT-x").tannarx + L.qiymatAsOf(null)), 262 * MLN);
+  // O'tgan sana gipotetik sarfi ham qarzni hisobga oladi: 1-avgust holatida 3 t qoldiq
+  assert.strictEqual(Math.round(A.fifoHypotheticalCost(PG, 3, "2026-08-01").tannarx), 33 * MLN);
+}
 
 console.log("OK: tannarx kalkulyatsiyasi (t↔kg, FIFO, to'liq tannarx, marja, qoldiq nazorati) ishlayapti");
